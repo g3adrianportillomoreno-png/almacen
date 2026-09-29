@@ -16,7 +16,7 @@ function App() {
       id: 1,
       name: 'Checklist Mañana',
       date: new Date().toLocaleDateString('es-MX'),
-      expectedSeries: ['TRL-101', 'TRL-102', 'TRL-103'],
+      expectedSeries: ['TRL-101', 'TRL-102', 'TRL-103', '65078126'],
       completed: []
     },
     {
