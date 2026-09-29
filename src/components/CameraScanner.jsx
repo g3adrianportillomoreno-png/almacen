@@ -7,6 +7,7 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
   const [status, setStatus] = useState('Iniciando cámara...');
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastDetected, setLastDetected] = useState('');
+  const [isMirrored, setIsMirrored] = useState(false); // Nuevo: para webcams de PC
   const workerRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -16,14 +17,13 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
 
     const setupCameraAndOCR = async () => {
       try {
-        // Inicializar Tesseract Worker para que sea más rápido
         setStatus('Cargando motor de lectura (OCR)...');
         const worker = await createWorker('eng');
         if (!isActive) return;
         workerRef.current = worker;
 
-        // Iniciar Cámara trasera (environment)
         setStatus('Solicitando permisos de cámara...');
+        // En PC, facingMode environment puede dar la cámara frontal.
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { facingMode: 'environment' } 
         });
@@ -36,44 +36,49 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.setAttribute('playsinline', 'true'); // importante para iOS
+          videoRef.current.setAttribute('playsinline', 'true');
           
           try {
             await videoRef.current.play();
           } catch (playError) {
             console.error("Error al reproducir el video:", playError);
-            // Intentar un play manual en caso de que el autoplay falle
           }
         }
         
         setStatus('Apuntando... (Analizando texto)');
 
-        // Bucle de lectura cada 1.5 segundos para no trabar el celular
         intervalId = setInterval(async () => {
           if (isProcessing || !videoRef.current || !canvasRef.current || !workerRef.current) return;
+          if (videoRef.current.videoWidth === 0) return; // Evitar error si el video no ha cargado dimensiones
           
           setIsProcessing(true);
           const video = videoRef.current;
           const canvas = canvasRef.current;
           const context = canvas.getContext('2d');
           
-          // Dibujar el fotograma actual en el canvas oculto
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
+
+          // Si está en modo espejo (Webcam PC), tenemos que voltear el canvas para que Tesseract pueda leerlo
+          if (isMirrored) {
+            context.translate(canvas.width, 0);
+            context.scale(-1, 1);
+          }
+          
           context.drawImage(video, 0, 0, canvas.width, canvas.height);
           
           try {
-            // Analizar la imagen con Tesseract
             const { data: { text } } = await workerRef.current.recognize(canvas);
             
-            // Limpiar el texto: quitar espacios múltiples y pasarlo a mayúsculas
             const cleanText = text.replace(/\s+/g, ' ').trim().toUpperCase();
             
-            if (cleanText.length > 2) {
-              setLastDetected(cleanText.length > 40 ? cleanText.substring(0, 40) + '...' : cleanText);
+            // Mostrar SIEMPRE lo que detecta, para saber que está trabajando
+            if (cleanText.length > 0) {
+              setLastDetected(cleanText.length > 50 ? cleanText.substring(0, 50) + '...' : cleanText);
+            } else {
+              setLastDetected('(Sin texto visible)');
             }
 
-            // Comprobar si ALGUNO de los números de serie esperados está dentro del texto detectado
             const foundSerie = expectedSeries.find(serie => cleanText.includes(serie.toUpperCase()));
             
             if (foundSerie && isActive) {
@@ -81,15 +86,17 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
               setLastDetected('');
               clearInterval(intervalId);
               
-              // Pequeño delay para que el usuario vea que lo encontró
               setTimeout(() => {
                 if (isActive) onScan(foundSerie);
               }, 1000);
             } else if (cleanText.length > 3 && isActive) {
               setStatus('No coincide. Sigue apuntando...');
+            } else if (isActive) {
+              setStatus('Buscando texto...');
             }
           } catch (err) {
             console.error("Error OCR:", err);
+            setStatus('Error al leer imagen.');
           } finally {
             if (isActive) setIsProcessing(false);
           }
@@ -97,13 +104,12 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
 
       } catch (err) {
         console.error("Error iniciando cámara/OCR:", err);
-        setStatus('Error: No se pudo acceder a la cámara o cargar el lector.');
+        setStatus('Error: No se pudo acceder a la cámara.');
       }
     };
 
     setupCameraAndOCR();
 
-    // Cleanup: detener cámara y destruir worker cuando se cierra el componente
     return () => {
       isActive = false;
       if (intervalId) clearInterval(intervalId);
@@ -114,38 +120,49 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
         workerRef.current.terminate();
       }
     };
-  }, [expectedSeries, onScan, isProcessing]);
+  }, [expectedSeries, onScan, isMirrored]); // Reinicia si cambiamos el modo espejo
 
   return (
     <div className="w-full flex flex-col items-center gap-4 bg-gray-900 rounded-2xl overflow-hidden p-4">
+      
+      {/* Botón para alternar Espejo (muy útil en PC) */}
+      <button 
+        onClick={() => setIsMirrored(!isMirrored)}
+        className="bg-gray-800 text-gray-300 px-4 py-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700 transition"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
+        {isMirrored ? 'Modo Normal' : 'Modo Espejo (PC)'}
+      </button>
+
       <div className="w-full max-w-sm relative rounded-xl overflow-hidden border-2 border-red-600 shadow-xl bg-black aspect-video flex items-center justify-center">
-        {/* Video feed */}
         <video 
           ref={videoRef} 
           playsInline 
           autoPlay 
           muted 
           className="w-full h-full object-cover"
+          style={{ transform: isMirrored ? 'scaleX(-1)' : 'none' }}
         />
         
-        {/* Overlay de marco (para ayudar al usuario a apuntar) */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
           <div className="w-3/4 h-24 border-2 border-red-500/50 rounded-lg shadow-[0_0_0_4000px_rgba(0,0,0,0.5)]"></div>
         </div>
       </div>
       
-      {/* Canvas oculto para procesar la imagen */}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
 
       <div className="text-center w-full">
         <p className="text-white font-bold mb-1">{status}</p>
-        {lastDetected ? (
-          <p className="text-yellow-400 text-xs mb-4 font-mono min-h-[1.5rem]">
-            Viendo: "{lastDetected}"
-          </p>
-        ) : (
-          <p className="text-gray-400 text-sm mb-4 min-h-[1.5rem]">Apunta la cámara al número de serie impreso.</p>
-        )}
+        
+        <div className="min-h-[2.5rem] flex items-center justify-center mb-4">
+          {lastDetected ? (
+            <p className="text-yellow-400 text-xs font-mono break-all px-2">
+              Viendo: "{lastDetected}"
+            </p>
+          ) : (
+            <p className="text-gray-400 text-sm">Apunta la cámara al número de serie impreso.</p>
+          )}
+        </div>
         
         <button 
           onClick={onCancel}
