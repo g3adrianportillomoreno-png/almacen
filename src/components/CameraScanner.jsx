@@ -6,6 +6,7 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
   const canvasRef = useRef(null);
   const [status, setStatus] = useState('Iniciando cámara...');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [lastDetected, setLastDetected] = useState('');
   const workerRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -65,21 +66,27 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
             // Analizar la imagen con Tesseract
             const { data: { text } } = await workerRef.current.recognize(canvas);
             
-            // Limpiar el texto: quitar espacios, saltos de línea innecesarios y pasarlo a mayúsculas
-            const cleanText = text.replace(/\s+/g, ' ').toUpperCase();
+            // Limpiar el texto: quitar espacios múltiples y pasarlo a mayúsculas
+            const cleanText = text.replace(/\s+/g, ' ').trim().toUpperCase();
             
+            if (cleanText.length > 2) {
+              setLastDetected(cleanText.length > 40 ? cleanText.substring(0, 40) + '...' : cleanText);
+            }
+
             // Comprobar si ALGUNO de los números de serie esperados está dentro del texto detectado
-            // Esto lo hace mucho más robusto que exigir una lectura 100% perfecta
             const foundSerie = expectedSeries.find(serie => cleanText.includes(serie.toUpperCase()));
             
             if (foundSerie && isActive) {
               setStatus(`¡Encontrado: ${foundSerie}!`);
+              setLastDetected('');
               clearInterval(intervalId);
               
               // Pequeño delay para que el usuario vea que lo encontró
               setTimeout(() => {
                 if (isActive) onScan(foundSerie);
               }, 1000);
+            } else if (cleanText.length > 3 && isActive) {
+              setStatus('No coincide. Sigue apuntando...');
             }
           } catch (err) {
             console.error("Error OCR:", err);
@@ -132,7 +139,13 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
 
       <div className="text-center w-full">
         <p className="text-white font-bold mb-1">{status}</p>
-        <p className="text-gray-400 text-sm mb-4">Apunta la cámara al número de serie impreso.</p>
+        {lastDetected ? (
+          <p className="text-yellow-400 text-xs mb-4 font-mono min-h-[1.5rem]">
+            Viendo: "{lastDetected}"
+          </p>
+        ) : (
+          <p className="text-gray-400 text-sm mb-4 min-h-[1.5rem]">Apunta la cámara al número de serie impreso.</p>
+        )}
         
         <button 
           onClick={onCancel}
