@@ -54,28 +54,18 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
           setIsProcessing(true);
           const video = videoRef.current;
           const canvas = canvasRef.current;
-          // Calculamos el área central para "recortar" la imagen (solo lo que está dentro del cuadro rojo)
-          // Esto hace que la lectura sea ultra rápida y evite leer basura alrededor
-          const cropWidth = video.videoWidth * 0.75; // 75% del ancho
-          const cropHeight = Math.min(video.videoHeight * 0.4, 150); // área central
-          const startX = (video.videoWidth - cropWidth) / 2;
-          const startY = (video.videoHeight - cropHeight) / 2;
+          const context = canvas.getContext('2d');
           
-          canvas.width = cropWidth;
-          canvas.height = cropHeight;
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
 
-          // Si está en modo espejo (Webcam PC)
+          // Si está en modo espejo (Webcam PC), tenemos que voltear el canvas para que Tesseract pueda leerlo
           if (isMirrored) {
             context.translate(canvas.width, 0);
             context.scale(-1, 1);
           }
           
-          // Dibujar SOLAMENTE el recorte central en el canvas
-          context.drawImage(
-            video, 
-            startX, startY, cropWidth, cropHeight, // Coordenadas fuente (video original)
-            0, 0, cropWidth, cropHeight            // Coordenadas destino (canvas)
-          );
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
           
           try {
             const { data: { text } } = await workerRef.current.recognize(canvas);

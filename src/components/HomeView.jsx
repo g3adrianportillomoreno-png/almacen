@@ -21,11 +21,11 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
 
     for (const batch of batches) {
       const isExpected = batch.expectedSeries.includes(code);
-      const completedInfo = batch.completed.find(t => t.serie === code);
+      const isCompleted = batch.completed.includes(code);
       
-      if (isExpected || completedInfo) {
+      if (isExpected || isCompleted) {
         foundBatch = batch;
-        foundTrailer = completedInfo || { serie: code, pending: true };
+        foundTrailer = { serie: code, pending: !isCompleted };
         break;
       }
     }
@@ -39,15 +39,11 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
           batchName: foundBatch.name,
           isPending: true
         });
-      } else {
         setSearchResult({
           serie: foundTrailer.serie,
           date: foundBatch.date,
           status: 'Completado',
-          batchName: foundBatch.name,
-          llantas: foundTrailer.llantas,
-          luces: foundTrailer.luces,
-          estadoCaja: foundTrailer.estadoCaja
+          batchName: foundBatch.name
         });
       }
     } else {
@@ -209,20 +205,6 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
                     {searchResult.status}
                   </span>
                 </div>
-                
-                {!searchResult.isPending && (
-                  <div className="grid grid-cols-2 gap-4 text-sm bg-white p-4 rounded-lg border border-gray-100">
-                    <div>
-                      <span className="text-gray-500 block">Llantas</span>
-                      <span className="font-semibold text-gray-800">{searchResult.llantas}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500 block">Luces</span>
-                      <span className="font-semibold text-gray-800">{searchResult.luces}</span>
-                    </div>
-                  </div>
-                )}
-              </div>
             )}
           </div>
         )}

@@ -17,17 +17,16 @@ function App() {
       name: 'Checklist Mañana',
       date: new Date().toLocaleDateString('es-MX'),
       expectedSeries: ['TRL-101', 'TRL-102', 'TRL-103', '65078126'],
-      completed: []
+      completed: [],
+      unexpectedLogs: []
     },
     {
       id: 2,
       name: 'Checklist Tarde',
       date: new Date().toLocaleDateString('es-MX'),
       expectedSeries: ['TRL-201', 'TRL-202'],
-      completed: [
-        { serie: 'TRL-201', llantas: 'Buenas', luces: 'Ok' },
-        { serie: 'TRL-202', llantas: 'Malas', luces: 'Falla' }
-      ]
+      completed: ['TRL-201'],
+      unexpectedLogs: []
     }
   ]);
 
@@ -37,10 +36,11 @@ function App() {
     const newId = batches.length > 0 ? Math.max(...batches.map(b => b.id)) + 1 : 1;
     const newBatch = {
       id: newId,
-      name: `Lote: ${fileName.replace('.pdf', '')}`,
+      name: `Lote: ${fileName.replace('.xlsx', '')}`,
       date: new Date().toLocaleDateString('es-MX'),
       expectedSeries: series,
-      completed: []
+      completed: [],
+      unexpectedLogs: []
     };
     
     setBatches([newBatch, ...batches]);
@@ -53,14 +53,33 @@ function App() {
     setView('scan');
   };
 
-  const handleCompleteTrailer = (serie, checklistData) => {
+  const handleCompleteTrailer = (serie) => {
     setBatches(prevBatches => 
       prevBatches.map(batch => {
         if (batch.id === activeBatchId) {
-          return {
-            ...batch,
-            completed: [...batch.completed, { serie, ...checklistData }]
-          };
+          if (!batch.completed.includes(serie)) {
+            return {
+              ...batch,
+              completed: [...batch.completed, serie]
+            };
+          }
+        }
+        return batch;
+      })
+    );
+  };
+
+  const handleLogUnexpected = (serie) => {
+    setBatches(prevBatches => 
+      prevBatches.map(batch => {
+        if (batch.id === activeBatchId) {
+          const logs = batch.unexpectedLogs || [];
+          if (!logs.includes(serie)) {
+            return {
+              ...batch,
+              unexpectedLogs: [serie, ...logs]
+            };
+          }
         }
         return batch;
       })
@@ -89,6 +108,7 @@ function App() {
           <ScanSessionView 
             batchDetails={activeBatch}
             onCompleteTrailer={handleCompleteTrailer}
+            onLogUnexpected={handleLogUnexpected}
             onFinishSession={handleFinishSession}
           />
         )}

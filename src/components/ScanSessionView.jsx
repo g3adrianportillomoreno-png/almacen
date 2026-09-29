@@ -1,15 +1,12 @@
 import { useState } from 'react';
-import ChecklistForm from './ChecklistForm';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 
-export default function ScanSessionView({ batchDetails, onCompleteTrailer, onFinishSession }) {
+export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLogUnexpected, onFinishSession }) {
   const [isSearching, setIsSearching] = useState(false);
-  const [currentTrailer, setCurrentTrailer] = useState(null);
   const [searchSuccess, setSearchSuccess] = useState(false);
   const [lastScanned, setLastScanned] = useState('');
   
-  // Nuevo estado para controlar si estamos usando la cámara
   const [useCamera, setUseCamera] = useState(false);
 
   const total = batchDetails.expectedSeries.length;
@@ -18,12 +15,10 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onFin
 
   const processScan = (scannedCode) => {
     if (scannedCode.trim() === '') return;
-    if (currentTrailer) return; // Si ya hay un checklist abierto, ignorar escaneos
 
     setLastScanned(scannedCode.trim().toUpperCase());
     setIsSearching(true);
     setSearchSuccess(false);
-    // Si usó la cámara, la cerramos al detectar algo
     setUseCamera(false);
     
     setTimeout(() => {
@@ -31,10 +26,10 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onFin
       const code = scannedCode.trim().toUpperCase();
       
       const isExpected = batchDetails.expectedSeries.includes(code);
-      const isAlreadyDone = batchDetails.completed.some(c => c.serie === code);
+      const isAlreadyDone = batchDetails.completed.includes(code);
 
       if (isAlreadyDone) {
-        alert(`El tráiler ${code} ya fue procesado en este lote.`);
+        // alert(`El número de serie ${code} ya fue procesado en este lote.`);
         setLastScanned('');
         return;
       }
@@ -42,24 +37,19 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onFin
       if (isExpected) {
         setSearchSuccess(true);
         setTimeout(() => {
-          setCurrentTrailer({ serie: code });
+          onCompleteTrailer(code); // Completado directo, sin formulario
           setSearchSuccess(false);
           setLastScanned('');
-        }, 1000);
+        }, 1200);
       } else {
-        alert(`El código ${code} no se encuentra en la lista de esperados para este lote.`);
+        // No esperado: Agregar al log de lecturas no esperadas en vez de solo tirar un error
+        onLogUnexpected(code);
         setLastScanned('');
       }
     }, 1200); 
   };
 
-  // Escucha el escáner globalmente (la pistola de código de barras)
   useBarcodeScanner(processScan);
-
-  const handleSaveChecklist = (checklistData) => {
-    onCompleteTrailer(currentTrailer.serie, checklistData);
-    setCurrentTrailer(null);
-  };
 
   return (
     <div className="flex flex-col gap-6 w-full animate-fade-in">
@@ -88,19 +78,19 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onFin
         <div className="bg-red-600 h-2.5 rounded-full transition-all duration-500" style={{ width: `${(escaneados / total) * 100}%` }}></div>
       </div>
 
-      {!currentTrailer && escaneados < total && (
+      {escaneados < total && (
         <section className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-center min-h-[300px]">
           {isSearching ? (
             <div className="flex flex-col items-center gap-4 animate-pulse">
               <div className="w-16 h-16 border-4 border-red-200 border-t-red-600 rounded-full animate-spin"></div>
-              <p className="text-xl font-bold text-gray-600">Buscando serie: <span className="text-red-600">{lastScanned}</span>...</p>
+              <p className="text-xl font-bold text-gray-600">Procesando serie: <span className="text-red-600">{lastScanned}</span>...</p>
             </div>
           ) : searchSuccess ? (
             <div className="flex flex-col items-center gap-4 animate-bounce">
               <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center shadow-lg">
                 <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
               </div>
-              <p className="text-2xl font-bold text-green-700">¡Encontrado!</p>
+              <p className="text-2xl font-bold text-green-700">¡Registrado Correctamente!</p>
             </div>
           ) : useCamera ? (
             <CameraScanner 
@@ -147,22 +137,32 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onFin
         </section>
       )}
 
-      {currentTrailer && (
-        <ChecklistForm 
-          trailer={currentTrailer} 
-          onSave={handleSaveChecklist} 
-          onCancel={() => setCurrentTrailer(null)} 
-        />
-      )}
-
+      {/* Lista de Completados */}
       {batchDetails.completed.length > 0 && (
-        <div className="mt-8">
-          <h3 className="text-gray-500 font-bold mb-3 uppercase text-sm tracking-wider">Equipos procesados en este lote</h3>
+        <div className="mt-4">
+          <h3 className="text-gray-500 font-bold mb-3 uppercase text-sm tracking-wider">Equipos procesados ({batchDetails.completed.length})</h3>
           <div className="flex flex-wrap gap-2">
             {batchDetails.completed.map((item, idx) => (
               <span key={idx} className="bg-green-100 text-green-800 px-3 py-1.5 rounded-lg text-sm font-bold font-mono border border-green-200 flex items-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                {item.serie}
+                {item}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Log de Lecturas Inesperadas */}
+      {batchDetails.unexpectedLogs && batchDetails.unexpectedLogs.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-red-500 font-bold mb-3 uppercase text-sm tracking-wider">
+            Lecturas fuera de lista (Log de Errores: {batchDetails.unexpectedLogs.length})
+          </h3>
+          <div className="flex flex-wrap gap-2 p-4 bg-red-50 border-2 border-red-100 rounded-xl">
+            {batchDetails.unexpectedLogs.map((item, idx) => (
+              <span key={idx} className="bg-white text-red-700 px-3 py-1.5 rounded-lg text-sm font-bold font-mono border border-red-200 shadow-sm flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                {item}
               </span>
             ))}
           </div>
