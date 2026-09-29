@@ -24,7 +24,7 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
         // Iniciar Cámara trasera (environment)
         setStatus('Solicitando permisos de cámara...');
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } 
+          video: { facingMode: 'environment' } 
         });
         
         if (!isActive) {
@@ -35,12 +35,14 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          // Esperar a que el video empiece a reproducirse
-          await new Promise(resolve => {
-            videoRef.current.onloadedmetadata = () => {
-              videoRef.current.play().then(resolve);
-            };
-          });
+          videoRef.current.setAttribute('playsinline', 'true'); // importante para iOS
+          
+          try {
+            await videoRef.current.play();
+          } catch (playError) {
+            console.error("Error al reproducir el video:", playError);
+            // Intentar un play manual en caso de que el autoplay falle
+          }
         }
         
         setStatus('Apuntando... (Analizando texto)');
