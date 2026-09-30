@@ -205,6 +205,7 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
                     {searchResult.status}
                   </span>
                 </div>
+              </div>
             )}
           </div>
         )}
