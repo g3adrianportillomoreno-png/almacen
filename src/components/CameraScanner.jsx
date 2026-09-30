@@ -1,29 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
-import { createWorker } from 'tesseract.js';
+import jsQR from 'jsqr';
 
 export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [status, setStatus] = useState('Iniciando cámara...');
-  const [isProcessing, setIsProcessing] = useState(false);
   const [lastDetected, setLastDetected] = useState('');
-  const [isMirrored, setIsMirrored] = useState(false); // Nuevo: para webcams de PC
-  const workerRef = useRef(null);
   const streamRef = useRef(null);
 
   useEffect(() => {
     let isActive = true;
-    let intervalId = null;
+    let requestAnimId = null;
 
-    const setupCameraAndOCR = async () => {
+    const setupCamera = async () => {
       try {
-        setStatus('Cargando motor de lectura (OCR)...');
-        const worker = await createWorker('eng');
-        if (!isActive) return;
-        workerRef.current = worker;
-
         setStatus('Solicitando permisos de cámara...');
-        // En PC, facingMode environment puede dar la cámara frontal.
+        
         const stream = await navigator.mediaDevices.getUserMedia({ 
           video: { facingMode: 'environment' } 
         });
@@ -45,95 +37,80 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
           }
         }
         
-        setStatus('Apuntando... (Analizando texto)');
+        setStatus('Apuntando al Código QR...');
 
-        intervalId = setInterval(async () => {
-          if (isProcessing || !videoRef.current || !canvasRef.current || !workerRef.current) return;
-          if (videoRef.current.videoWidth === 0) return; // Evitar error si el video no ha cargado dimensiones
+        const tick = () => {
+          if (!isActive || !videoRef.current || !canvasRef.current) return;
           
-          setIsProcessing(true);
           const video = videoRef.current;
-          const canvas = canvasRef.current;
-          const context = canvas.getContext('2d');
           
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+          // Esperar a que el video tenga dimensiones
+          if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+            const canvas = canvasRef.current;
+            const context = canvas.getContext('2d', { willReadFrequently: true });
+            
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            
+            // Dibujar el fotograma
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            // Extraer la información de píxeles
+            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+            
+            // Procesar con jsQR
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+              inversionAttempts: "dontInvert",
+            });
+            
+            if (code) {
+              const qrText = code.data.trim().toUpperCase();
+              setLastDetected(qrText);
 
-          // Si está en modo espejo (Webcam PC), tenemos que voltear el canvas para que Tesseract pueda leerlo
-          if (isMirrored) {
-            context.translate(canvas.width, 0);
-            context.scale(-1, 1);
-          }
-          
-          context.drawImage(video, 0, 0, canvas.width, canvas.height);
-          
-          try {
-            const { data: { text } } = await workerRef.current.recognize(canvas);
-            
-            const cleanText = text.replace(/\s+/g, ' ').trim().toUpperCase();
-            
-            // Mostrar SIEMPRE lo que detecta, para saber que está trabajando
-            if (cleanText.length > 0) {
-              setLastDetected(cleanText.length > 50 ? cleanText.substring(0, 50) + '...' : cleanText);
-            } else {
-              setLastDetected('(Sin texto visible)');
-            }
-
-            const foundSerie = expectedSeries.find(serie => cleanText.includes(serie.toUpperCase()));
-            
-            if (foundSerie && isActive) {
-              setStatus(`¡Encontrado: ${foundSerie}!`);
-              setLastDetected('');
-              clearInterval(intervalId);
+              // Comprobar si el QR contiene alguno de los números de serie
+              // Como el QR trae más info (modelo, etc), usamos includes
+              const foundSerie = expectedSeries.find(serie => qrText.includes(serie.toUpperCase()));
               
-              setTimeout(() => {
-                if (isActive) onScan(foundSerie);
-              }, 1000);
-            } else if (cleanText.length > 3 && isActive) {
-              setStatus('No coincide. Sigue apuntando...');
-            } else if (isActive) {
-              setStatus('Buscando texto...');
+              if (foundSerie) {
+                setStatus(`¡Encontrado: ${foundSerie}!`);
+                isActive = false; // Detener el bucle
+                
+                setTimeout(() => {
+                  onScan(foundSerie);
+                }, 800);
+                return; // Salir de la función tick
+              } else {
+                setStatus('QR Detectado, pero no coincide con la lista.');
+              }
             }
-          } catch (err) {
-            console.error("Error OCR:", err);
-            setStatus('Error al leer imagen.');
-          } finally {
-            if (isActive) setIsProcessing(false);
           }
-        }, 1500);
+          
+          if (isActive) {
+            requestAnimId = requestAnimationFrame(tick);
+          }
+        };
+
+        requestAnimId = requestAnimationFrame(tick);
 
       } catch (err) {
-        console.error("Error iniciando cámara/OCR:", err);
+        console.error("Error iniciando cámara:", err);
         setStatus('Error: No se pudo acceder a la cámara.');
       }
     };
 
-    setupCameraAndOCR();
+    setupCamera();
 
     return () => {
       isActive = false;
-      if (intervalId) clearInterval(intervalId);
+      if (requestAnimId) cancelAnimationFrame(requestAnimId);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
-      if (workerRef.current) {
-        workerRef.current.terminate();
-      }
     };
-  }, [expectedSeries, onScan, isMirrored]); // Reinicia si cambiamos el modo espejo
+  }, [expectedSeries, onScan]);
 
   return (
     <div className="w-full flex flex-col items-center gap-4 bg-gray-900 rounded-2xl overflow-hidden p-4">
-      
-      {/* Botón para alternar Espejo (muy útil en PC) */}
-      <button 
-        onClick={() => setIsMirrored(!isMirrored)}
-        className="bg-gray-800 text-gray-300 px-4 py-2 rounded-lg text-sm flex items-center gap-2 hover:bg-gray-700 transition"
-      >
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path></svg>
-        {isMirrored ? 'Modo Normal' : 'Modo Espejo (PC)'}
-      </button>
-
       <div className="w-full max-w-sm relative rounded-xl overflow-hidden border-2 border-red-600 shadow-xl bg-black aspect-video flex items-center justify-center">
         <video 
           ref={videoRef} 
@@ -141,11 +118,16 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
           autoPlay 
           muted 
           className="w-full h-full object-cover"
-          style={{ transform: isMirrored ? 'scaleX(-1)' : 'none' }}
         />
         
+        {/* Guía visual para el QR */}
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-          <div className="w-3/4 h-24 border-2 border-red-500/50 rounded-lg shadow-[0_0_0_4000px_rgba(0,0,0,0.5)]"></div>
+          <div className="w-48 h-48 border-4 border-red-500/80 rounded-3xl shadow-[0_0_0_4000px_rgba(0,0,0,0.6)] flex items-center justify-center relative">
+             <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-white rounded-tl-xl -m-1"></div>
+             <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-white rounded-tr-xl -m-1"></div>
+             <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-white rounded-bl-xl -m-1"></div>
+             <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-white rounded-br-xl -m-1"></div>
+          </div>
         </div>
       </div>
       
@@ -154,13 +136,16 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
       <div className="text-center w-full">
         <p className="text-white font-bold mb-1">{status}</p>
         
-        <div className="min-h-[2.5rem] flex items-center justify-center mb-4">
+        <div className="min-h-[2.5rem] flex flex-col items-center justify-center mb-4">
           {lastDetected ? (
-            <p className="text-yellow-400 text-xs font-mono break-all px-2">
-              Viendo: "{lastDetected}"
-            </p>
+            <>
+              <p className="text-gray-400 text-xs">Información del QR:</p>
+              <p className="text-yellow-400 text-[10px] font-mono break-all px-2 leading-tight">
+                {lastDetected}
+              </p>
+            </>
           ) : (
-            <p className="text-gray-400 text-sm">Apunta la cámara al número de serie impreso.</p>
+            <p className="text-gray-400 text-sm">Apunta la cámara al Código QR.</p>
           )}
         </div>
         
