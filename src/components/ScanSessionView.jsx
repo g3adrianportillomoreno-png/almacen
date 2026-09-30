@@ -5,6 +5,7 @@ import CameraScanner from './CameraScanner';
 export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLogUnexpected, onFinishSession }) {
   const [isSearching, setIsSearching] = useState(false);
   const [searchSuccess, setSearchSuccess] = useState(false);
+  const [searchError, setSearchError] = useState(false);
   const [lastScanned, setLastScanned] = useState('');
   
   const [useCamera, setUseCamera] = useState(false);
@@ -19,6 +20,7 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLog
     setLastScanned(scannedCode.trim().toUpperCase());
     setIsSearching(true);
     setSearchSuccess(false);
+    setSearchError(false);
     setUseCamera(false);
     
     setTimeout(() => {
@@ -29,7 +31,6 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLog
       const isAlreadyDone = batchDetails.completed.includes(code);
 
       if (isAlreadyDone) {
-        // alert(`El número de serie ${code} ya fue procesado en este lote.`);
         setLastScanned('');
         return;
       }
@@ -37,16 +38,19 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLog
       if (isExpected) {
         setSearchSuccess(true);
         setTimeout(() => {
-          onCompleteTrailer(code); // Completado directo, sin formulario
+          onCompleteTrailer(code); 
           setSearchSuccess(false);
           setLastScanned('');
         }, 1200);
       } else {
-        // No esperado: Agregar al log de lecturas no esperadas en vez de solo tirar un error
+        setSearchError(true);
         onLogUnexpected(code);
-        setLastScanned('');
+        setTimeout(() => {
+          setSearchError(false);
+          setLastScanned('');
+        }, 2000); // Darle 2 segundos al usuario para que vea que falló
       }
-    }, 1200); 
+    }, 800); // Un poco más rápido
   };
 
   useBarcodeScanner(processScan);
@@ -91,6 +95,14 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLog
                 <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
               </div>
               <p className="text-2xl font-bold text-green-700">¡Registrado Correctamente!</p>
+            </div>
+          ) : searchError ? (
+            <div className="flex flex-col items-center gap-4 animate-pulse">
+              <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center shadow-lg border-4 border-red-500">
+                <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12"></path></svg>
+              </div>
+              <p className="text-2xl font-bold text-red-700">¡Fuera de Lista!</p>
+              <p className="text-red-500 font-mono">{lastScanned}</p>
             </div>
           ) : useCamera ? (
             <CameraScanner 

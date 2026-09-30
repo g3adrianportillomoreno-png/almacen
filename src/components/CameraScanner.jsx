@@ -67,21 +67,24 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
               const qrText = code.data.trim().toUpperCase();
               setLastDetected(qrText);
 
-              // Comprobar si el QR contiene alguno de los números de serie
-              // Como el QR trae más info (modelo, etc), usamos includes
-              const foundSerie = expectedSeries.find(serie => qrText.includes(serie.toUpperCase()));
-              
-              if (foundSerie) {
-                setStatus(`¡Encontrado: ${foundSerie}!`);
-                isActive = false; // Detener el bucle
-                
-                setTimeout(() => {
-                  onScan(foundSerie);
-                }, 800);
-                return; // Salir de la función tick
-              } else {
-                setStatus('QR Detectado, pero no coincide con la lista.');
+              // Extraer el número de serie. Por el formato que enviaste (MX-M4071,95030569,CSPC...),
+              // el número de serie está después de la primera coma.
+              const parts = qrText.split(',');
+              let extractedSerie = qrText;
+              if (parts.length >= 2) {
+                extractedSerie = parts[1].trim(); // Tomamos el elemento del medio
               }
+
+              // Detener la cámara inmediatamente al leer un código
+              setStatus('Código procesado...');
+              isActive = false; 
+              
+              // Enviamos la serie leída a la vista principal. 
+              // La vista principal decidirá si es un acierto (verde) o un error/inesperado (rojo)
+              setTimeout(() => {
+                onScan(extractedSerie);
+              }, 500);
+              return; // Salir del loop
             }
           }
           
