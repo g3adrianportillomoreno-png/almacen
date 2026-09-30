@@ -4,9 +4,16 @@ import jsQR from 'jsqr';
 export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  
   const [status, setStatus] = useState('Iniciando cámara...');
   const [lastDetected, setLastDetected] = useState('');
-  const streamRef = useRef(null);
+  
+  // Controles de hardware
+  const [hasTorch, setHasTorch] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [hasZoom, setHasZoom] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
 
   useEffect(() => {
     let isActive = true;
@@ -16,8 +23,14 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
       try {
         setStatus('Solicitando permisos de cámara...');
         
+        // Pedimos resolución alta (1080p ideal) para que jsQR pueda leer a distancia,
+        // pero sin obligarlo (exact) para que no falle en iOS.
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: 'environment' } 
+          video: { 
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+          } 
         });
         
         if (!isActive) {
@@ -26,6 +39,20 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
         }
 
         streamRef.current = stream;
+        
+        // Verificar capacidades de la cámara (Linterna y Zoom)
+        const track = stream.getVideoTracks()[0];
+        if (track.getCapabilities) {
+          const capabilities = track.getCapabilities();
+          if (capabilities.torch) setHasTorch(true);
+          if (capabilities.zoom) setHasZoom(true);
+          
+          // Intentar auto-enfocar si está disponible
+          if (capabilities.focusMode && capabilities.focusMode.includes('continuous')) {
+             track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+          }
+        }
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.setAttribute('playsinline', 'true');
@@ -44,7 +71,6 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
           
           const video = videoRef.current;
           
-          // Esperar a que el video tenga dimensiones
           if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
             const canvas = canvasRef.current;
             const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -52,13 +78,10 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
             
-            // Dibujar el fotograma
             context.drawImage(video, 0, 0, canvas.width, canvas.height);
             
-            // Extraer la información de píxeles
             const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
             
-            // Procesar con jsQR
             const code = jsQR(imageData.data, imageData.width, imageData.height, {
               inversionAttempts: "dontInvert",
             });
@@ -67,24 +90,19 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
               const qrText = code.data.trim().toUpperCase();
               setLastDetected(qrText);
 
-              // Extraer el número de serie. Por el formato que enviaste (MX-M4071,95030569,CSPC...),
-              // el número de serie está después de la primera coma.
               const parts = qrText.split(',');
               let extractedSerie = qrText;
               if (parts.length >= 2) {
-                extractedSerie = parts[1].trim(); // Tomamos el elemento del medio
+                extractedSerie = parts[1].trim(); 
               }
 
-              // Detener la cámara inmediatamente al leer un código
               setStatus('Código procesado...');
               isActive = false; 
               
-              // Enviamos la serie leída a la vista principal. 
-              // La vista principal decidirá si es un acierto (verde) o un error/inesperado (rojo)
               setTimeout(() => {
                 onScan(extractedSerie);
               }, 500);
-              return; // Salir del loop
+              return; 
             }
           }
           
@@ -112,8 +130,62 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
     };
   }, [expectedSeries, onScan]);
 
+  const toggleTorch = async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    try {
+      await track.applyConstraints({ advanced: [{ torch: !torchOn }] });
+      setTorchOn(!torchOn);
+    } catch (e) {
+      console.error("Error con linterna", e);
+    }
+  };
+
+  const toggleZoom = async () => {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    const capabilities = track.getCapabilities();
+    
+    // Cambiar zoom cíclicamente: 1x -> 2x -> 3x -> 1x
+    let nextZoom = zoomLevel + 1;
+    if (nextZoom > 3 || (capabilities.zoom && nextZoom > capabilities.zoom.max)) {
+      nextZoom = 1;
+    }
+
+    try {
+      await track.applyConstraints({ advanced: [{ zoom: nextZoom }] });
+      setZoomLevel(nextZoom);
+    } catch (e) {
+      console.error("Error aplicando zoom", e);
+    }
+  };
+
   return (
     <div className="w-full flex flex-col items-center gap-4 bg-gray-900 rounded-2xl overflow-hidden p-4">
+      
+      {/* Botones de Control de Cámara */}
+      <div className="flex gap-4 w-full max-w-sm justify-center mb-2">
+        {hasTorch && (
+          <button 
+            onClick={toggleTorch}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold text-sm transition-colors ${torchOn ? 'bg-yellow-400 text-yellow-900' : 'bg-gray-800 text-white'}`}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            Linterna
+          </button>
+        )}
+        
+        {hasZoom && (
+          <button 
+            onClick={toggleZoom}
+            className="flex items-center gap-2 px-4 py-2 bg-gray-800 text-white rounded-lg font-bold text-sm transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7"></path></svg>
+            Zoom {zoomLevel}x
+          </button>
+        )}
+      </div>
+
       <div className="w-full max-w-sm relative rounded-xl overflow-hidden border-2 border-red-600 shadow-xl bg-black aspect-video flex items-center justify-center">
         <video 
           ref={videoRef} 
@@ -148,7 +220,7 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
               </p>
             </>
           ) : (
-            <p className="text-gray-400 text-sm">Apunta la cámara al Código QR.</p>
+            <p className="text-gray-400 text-sm px-4">Apunta la cámara al Código QR. Si te cuesta enfocar, usa el botón de Zoom.</p>
           )}
         </div>
         
