@@ -27,7 +27,7 @@ export default function ScanSessionView({ batchDetails, onCompleteTrailer, onLog
       setIsSearching(false);
       const code = scannedCode.trim().toUpperCase();
       
-      const isExpected = batchDetails.expectedSeries.includes(code);
+      const isExpected = batchDetails.expectedSeries.some(item => item.serial === code);
       const isAlreadyDone = batchDetails.completed.includes(code);
 
       if (isAlreadyDone) {

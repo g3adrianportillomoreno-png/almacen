@@ -15,16 +15,23 @@ export async function extractSeriesFromExcel(file) {
         const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
         
         let serialIndex = -1;
+        let materialIndex = -1;
         let headerRowIndex = -1;
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
           if (Array.isArray(row)) {
-            serialIndex = row.findIndex(cell => 
+            const tempSerialIndex = row.findIndex(cell => 
               typeof cell === 'string' && cell.trim().toLowerCase() === 'serial number'
             );
             
-            if (serialIndex !== -1) {
+            const tempMaterialIndex = row.findIndex(cell => 
+              typeof cell === 'string' && cell.trim().toLowerCase() === 'material'
+            );
+            
+            if (tempSerialIndex !== -1) {
+              serialIndex = tempSerialIndex;
+              materialIndex = tempMaterialIndex !== -1 ? tempMaterialIndex : -1;
               headerRowIndex = i;
               break;
             }
@@ -35,20 +42,28 @@ export async function extractSeriesFromExcel(file) {
           throw new Error('No se encontró la columna llamada "Serial Number" en el documento Excel.');
         }
 
-        const series = [];
+        const items = [];
+        const seenSerials = new Set();
         
         for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i];
-          const serie = row[serialIndex];
+          const serieRaw = row[serialIndex];
+          const materialRaw = materialIndex !== -1 ? row[materialIndex] : 'DESCONOCIDO';
           
-          if (serie !== undefined && serie !== null && String(serie).trim() !== '') {
-            series.push(String(serie).trim().toUpperCase());
+          if (serieRaw !== undefined && serieRaw !== null && String(serieRaw).trim() !== '') {
+            const serialString = String(serieRaw).trim().toUpperCase();
+            
+            if (!seenSerials.has(serialString)) {
+              seenSerials.add(serialString);
+              items.push({
+                serial: serialString,
+                material: String(materialRaw).trim().toUpperCase()
+              });
+            }
           }
         }
 
-        const uniqueSeries = [...new Set(series)];
-        
-        resolve(uniqueSeries);
+        resolve(items);
       } catch (error) {
         console.error("Error procesando Excel:", error);
         reject(error);

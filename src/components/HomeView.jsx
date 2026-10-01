@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef } from 'react';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import { extractSeriesFromExcel } from '../utils/excelParser';
+import { extractSeriesFromPDF } from '../utils/pdfParser';
 
-export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
+export default function HomeView({ batches, onCreateBatch, onSelectBatch, onDeleteBatch }) {
   const [searchCode, setSearchCode] = useState('');
   const [searchResult, setSearchResult] = useState(null);
   const [showPending, setShowPending] = useState(false);
@@ -10,7 +11,7 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
   
   const fileInputRef = useRef(null);
 
-  const pendingBatches = batches.filter(b => b.completed.length < b.expectedSeries.length);
+  const pendingBatches = batches.filter(b => b.status !== 'completed' && b.completed.length < b.expectedSeries.length);
 
   const searchInHistory = useCallback((codeToSearch) => {
     if (!codeToSearch) return;
@@ -20,7 +21,7 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
     let foundBatch = null;
 
     for (const batch of batches) {
-      const isExpected = batch.expectedSeries.includes(code);
+      const isExpected = batch.expectedSeries.some(item => item.serial === code);
       const isCompleted = batch.completed.includes(code);
       
       if (isExpected || isCompleted) {
@@ -61,7 +62,7 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
     searchInHistory(searchCode.trim());
   };
 
-  // Manejador de la subida de Excel
+  // Manejador de la subida de Excel o PDF
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -69,18 +70,24 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
     setIsProcessingFile(true);
 
     try {
-      const extractedSeries = await extractSeriesFromExcel(file);
+      let extractedSeries = [];
+      
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        extractedSeries = await extractSeriesFromPDF(file);
+      } else {
+        extractedSeries = await extractSeriesFromExcel(file);
+      }
       
       if (extractedSeries.length === 0) {
-        alert("La columna 'Serial Number' se encontró pero no tiene datos, o el formato es incorrecto.");
+        alert("No se encontraron números de serie. Verifica el formato del documento.");
         setIsProcessingFile(false);
         return;
       }
 
-      alert(`¡Éxito! Se encontraron ${extractedSeries.length} números de serie en el documento Excel.`);
+      alert(`¡Éxito! Se encontraron ${extractedSeries.length} números de serie en el documento.`);
       onCreateBatch(file.name, extractedSeries);
     } catch (error) {
-      alert("Error al procesar el Excel: " + error.message);
+      alert("Error al procesar el documento: " + error.message);
       setIsProcessingFile(false);
     }
     
@@ -97,10 +104,10 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
       </h2>
       
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-2xl">
-        {/* Input invisible para el archivo de Excel */}
+        {/* Input invisible para el archivo */}
         <input 
           type="file" 
-          accept=".xlsx, .xls, .csv" 
+          accept=".pdf, .xlsx, .xls, .csv" 
           ref={fileInputRef} 
           style={{ display: 'none' }} 
           onChange={handleFileUpload} 
@@ -118,8 +125,8 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
             </div>
           )}
-          <span className="text-lg font-bold text-gray-700 group-hover:text-red-700">
-            {isProcessingFile ? 'Procesando Excel...' : 'Subir Documento (Excel)'}
+          <span className="text-lg font-bold text-gray-700 group-hover:text-red-700 text-center">
+            {isProcessingFile ? 'Leyendo documento...\n(Si es escaneo tomará 15-20 seg)' : 'Subir Documento (Excel/PDF)'}
           </span>
         </button>
 
@@ -147,21 +154,29 @@ export default function HomeView({ batches, onCreateBatch, onSelectBatch }) {
           ) : (
             <div className="flex flex-col gap-3">
               {pendingBatches.map(batch => (
-                <button 
-                  key={batch.id} 
-                  onClick={() => onSelectBatch(batch.id)}
-                  className="flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-200 hover:border-red-400 hover:bg-red-50 transition-colors"
-                >
-                  <div className="text-left">
-                    <p className="font-bold text-gray-800">{batch.name}</p>
-                    <p className="text-sm text-gray-500">{batch.date}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-red-600">
-                      Faltan: {batch.expectedSeries.length - batch.completed.length}
-                    </p>
-                  </div>
-                </button>
+                <div key={batch.id} className="flex gap-2">
+                  <button 
+                    onClick={() => onSelectBatch(batch.id)}
+                    className="flex-1 flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-200 hover:border-red-400 hover:bg-red-50 transition-colors text-left"
+                  >
+                    <div>
+                      <p className="font-bold text-gray-800">{batch.name}</p>
+                      <p className="text-sm text-gray-500">{batch.date}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-red-600">
+                        Faltan: {batch.expectedSeries.length - batch.completed.length}
+                      </p>
+                    </div>
+                  </button>
+                  <button 
+                    onClick={() => onDeleteBatch(batch.id)}
+                    className="flex items-center justify-center p-4 bg-gray-50 rounded-xl border border-gray-200 hover:bg-red-100 hover:border-red-400 hover:text-red-700 text-gray-400 transition-colors"
+                    title="Eliminar Checklist"
+                  >
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                  </button>
+                </div>
               ))}
             </div>
           )}
