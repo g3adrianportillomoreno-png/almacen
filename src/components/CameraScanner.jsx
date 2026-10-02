@@ -66,43 +66,65 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
         
         setStatus('Apuntando al Código QR...');
 
-        const tick = () => {
+        const tick = async () => {
           if (!isActive || !videoRef.current || !canvasRef.current) return;
           
           const video = videoRef.current;
           
           if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-            const canvas = canvasRef.current;
-            const context = canvas.getContext('2d', { willReadFrequently: true });
-            
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            
-            context.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-            
-            const code = jsQR(imageData.data, imageData.width, imageData.height, {
-              inversionAttempts: "dontInvert",
-            });
-            
-            if (code) {
-              const qrText = code.data.trim().toUpperCase();
-              setLastDetected(qrText);
+            try {
+              let qrText = null;
 
-              const parts = qrText.split(',');
-              let extractedSerie = qrText;
-              if (parts.length >= 2) {
-                extractedSerie = parts[1].trim(); 
+              // Intentar usar la API Nativa (súper rápida y precisa en móviles)
+              if ('BarcodeDetector' in window) {
+                const barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code', 'data_matrix'] });
+                const barcodes = await barcodeDetector.detect(video);
+                if (barcodes.length > 0) {
+                  qrText = barcodes[0].rawValue;
+                }
               }
 
-              setStatus('Código procesado...');
-              isActive = false; 
+              // Si la API nativa no está o no detectó nada, usar jsQR como fallback
+              if (!qrText) {
+                const canvas = canvasRef.current;
+                const context = canvas.getContext('2d', { willReadFrequently: true });
+                
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                context.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                
+                const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                  inversionAttempts: "dontInvert",
+                });
+
+                if (code) {
+                  qrText = code.data;
+                }
+              }
               
-              setTimeout(() => {
-                onScan(extractedSerie);
-              }, 500);
-              return; 
+              if (qrText) {
+                qrText = qrText.trim().toUpperCase();
+                setLastDetected(qrText);
+
+                const parts = qrText.split(',');
+                let extractedSerie = qrText;
+                if (parts.length >= 2) {
+                  extractedSerie = parts[1].trim(); 
+                }
+
+                setStatus('Código procesado...');
+                isActive = false; 
+                
+                setTimeout(() => {
+                  onScan(extractedSerie);
+                }, 500);
+                return; 
+              }
+            } catch (err) {
+              console.warn("Error leyendo frame:", err);
             }
           }
           

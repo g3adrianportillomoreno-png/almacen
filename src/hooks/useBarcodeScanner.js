@@ -34,15 +34,15 @@ export default function useBarcodeScanner(onScan) {
       }
 
       // Si es un caracter imprimible (letras, números, guiones)
-      if (e.key.length === 1) {
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         bufferRef.current += e.key;
 
-        // Limpiar el buffer si pasan más de 100ms sin teclas (el escáner es muy rápido, el humano es lento)
-        // Esto evita que pulsaciones sueltas se acumulen
+        // Limpiar el buffer si pasan más de 300ms sin teclas
+        // Se aumenta a 300ms porque algunos escáneres bluetooth en Android son un poco más lentos entre tecla y tecla.
         clearTimeout(timeoutRef.current);
         timeoutRef.current = setTimeout(() => {
           bufferRef.current = '';
-        }, 150); 
+        }, 300); 
       }
     };
 

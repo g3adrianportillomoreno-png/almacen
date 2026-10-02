@@ -175,6 +175,17 @@ function App() {
     }
   };
 
+  const handleForceFinishBatch = async () => {
+    const confirm = window.confirm("¿Seguro que deseas finalizar el lote? Faltan equipos por escanear.");
+    if (!confirm) return;
+
+    // Actualizar local
+    setBatches(prev => prev.map(b => b.id === activeBatchId ? { ...b, status: 'completed' } : b));
+    
+    // Actualizar Supabase
+    await supabase.from('checklists').update({ status: 'completed' }).eq('id', activeBatchId);
+  };
+
   const handleFinishSession = () => {
     setActiveBatchId(null);
     setView('home');
@@ -206,6 +217,7 @@ function App() {
             onCompleteTrailer={handleCompleteTrailer}
             onLogUnexpected={handleLogUnexpected}
             onFinishSession={handleFinishSession}
+            onForceFinish={handleForceFinishBatch}
           />
         )}
       </main>
