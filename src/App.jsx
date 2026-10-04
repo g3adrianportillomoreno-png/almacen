@@ -1,93 +1,74 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import './App.css';
-import { supabase } from './utils/supabaseClient';
 
-// Componentes
+// Capa de Controladores (Patrón MVC)
+import { ChecklistController } from './controllers/ChecklistController';
+import { WarehouseMapController } from './controllers/WarehouseMapController';
+import { InventoryController } from './controllers/InventoryController';
+
+// Componentes y Vistas
 import Header from './components/Header';
 import HomeView from './components/HomeView';
 import ScanSessionView from './components/ScanSessionView';
+import ModelSearchView from './components/ModelSearchView';
+import WarehouseMapView from './components/WarehouseMapView';
 
 function App() {
-  const [view, setView] = useState('home'); // 'home', 'scan'
+  const [view, setView] = useState('home'); // 'home', 'scan', 'modelSearch', 'warehouseMap'
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState(null);
 
-  // Cargar datos de Supabase
-  const fetchBatches = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('checklists')
-      .select(`
-        id, name, created_at, status,
-        expected_series (id, serial_number, material_model, is_scanned),
-        unexpected_logs (id, scanned_value)
-      `)
-      .order('created_at', { ascending: false });
+  // Obtener nombres de filas disponibles desde el layout del mapa
+  const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
 
-    if (error) {
-      console.error("Error cargando lotes:", error);
+  const availableRows = useMemo(() => {
+    return mapModel.getRowNames();
+  }, [mapModel]);
+
+  // Carga centralizada de checklists usando el controlador
+  const fetchBatches = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMessage(null);
+      const loadedBatches = await ChecklistController.getChecklists();
+      setBatches(loadedBatches);
+    } catch (error) {
+      console.error("Error al cargar lotes:", error);
+      setErrorMessage("No se pudieron cargar los datos de Supabase. Revisa tu conexión.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const loadedBatches = data.map(dbBatch => ({
-      id: dbBatch.id,
-      name: dbBatch.name,
-      date: new Date(dbBatch.created_at).toLocaleDateString('es-MX'),
-      status: dbBatch.status,
-      expectedSeries: dbBatch.expected_series.map(s => ({
-        serial: s.serial_number,
-        material: s.material_model,
-        is_scanned: s.is_scanned
-      })),
-      completed: dbBatch.expected_series
-        .filter(s => s.is_scanned)
-        .map(s => s.serial_number),
-      unexpectedLogs: dbBatch.unexpected_logs.map(log => log.scanned_value)
-    }));
-
-    setBatches(loadedBatches);
-    setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     fetchBatches();
-  }, []);
+  }, [fetchBatches]);
 
-  const activeBatch = batches.find(b => b.id === activeBatchId);
+  // Lote activo en escaneo
+  const activeBatch = useMemo(() => {
+    return batches.find(b => b.id === activeBatchId);
+  }, [batches, activeBatchId]);
 
-  const handleCreateBatch = async (fileName, series) => {
-    const { data: batchData, error: batchError } = await supabase
-      .from('checklists')
-      .insert({ name: `Lote: ${fileName.replace('.xlsx', '')}`, status: 'pending' })
-      .select()
-      .single();
+  // Conteo total de impresoras en estado de CONSULTA para alerta global
+  const totalConsultas = useMemo(() => {
+    const all = InventoryController.extractAllPrinters(batches);
+    return all.filter(p => p.isConsulta).length;
+  }, [batches]);
 
-    if (batchError || !batchData) {
-      alert("Error al crear lote en la BD: " + batchError.message);
-      return;
+  // Crear nuevo lote con número consecutivo
+  const handleCreateBatch = async (fileName, series, consecutiveNumber) => {
+    try {
+      setLoading(true);
+      const batchData = await ChecklistController.createChecklist(fileName, series, consecutiveNumber);
+      await fetchBatches();
+      setActiveBatchId(batchData.id);
+      setView('scan'); // Ir directamente a la sesión de escaneo
+    } catch (err) {
+      alert("Error al crear el lote: " + err.message);
+      setLoading(false);
     }
-
-    const seriesToInsert = series.map(s => ({
-      checklist_id: batchData.id,
-      serial_number: s.serial,
-      material_model: s.material,
-      is_scanned: false
-    }));
-
-    const { error: seriesError } = await supabase
-      .from('expected_series')
-      .insert(seriesToInsert);
-
-    if (seriesError) {
-      alert("Error al insertar series: " + seriesError.message);
-      return;
-    }
-
-    await fetchBatches();
-    setActiveBatchId(batchData.id);
-    setView('scan'); // Ir directamente a escanear
   };
 
   const handleSelectBatch = (batchId) => {
@@ -95,51 +76,35 @@ function App() {
     setView('scan');
   };
 
-  const handleCompleteTrailer = async (serie) => {
-    let shouldUpdateStatus = false;
+  // Registrar escaneo de impresora asignando su Fila y su Número de inventario (1-80...)
+  const handleCompleteTrailer = async (serie, warehouseRow, internalNumber) => {
+    if (!activeBatchId || !activeBatch) return;
 
-    // Actualización optimista local
+    // Actualización optimista local en memoria
     setBatches(prevBatches => 
       prevBatches.map(batch => {
         if (batch.id === activeBatchId) {
-          if (!batch.completed.includes(serie)) {
-            const newCompleted = [...batch.completed, serie];
-            if (newCompleted.length === batch.expectedSeries.length) {
-              shouldUpdateStatus = true;
-              return { ...batch, completed: newCompleted, status: 'completed' };
-            }
-            return { ...batch, completed: newCompleted };
-          }
-        }
-        return batch;
-      })
-    );
+          const serial = serie.toUpperCase();
+          if (!batch.completed.includes(serial)) {
+            const newCompleted = [...batch.completed, serial];
+            const updatedExpected = batch.expectedSeries.map(item => {
+              if (item.serial === serial) {
+                return {
+                  ...item,
+                  isScanned: true,
+                  warehouseRow: warehouseRow || item.warehouseRow,
+                  internalNumber: internalNumber !== undefined ? internalNumber : item.internalNumber
+                };
+              }
+              return item;
+            });
 
-    // Actualización en Supabase
-    await supabase
-      .from('expected_series')
-      .update({ is_scanned: true, scanned_at: new Date().toISOString() })
-      .eq('checklist_id', activeBatchId)
-      .eq('serial_number', serie);
-
-    if (shouldUpdateStatus) {
-      await supabase
-        .from('checklists')
-        .update({ status: 'completed' })
-        .eq('id', activeBatchId);
-    }
-  };
-
-  const handleLogUnexpected = async (serie) => {
-    // Actualización optimista local
-    setBatches(prevBatches => 
-      prevBatches.map(batch => {
-        if (batch.id === activeBatchId) {
-          const logs = batch.unexpectedLogs || [];
-          if (!logs.includes(serie)) {
+            const isDone = newCompleted.length >= batch.expectedSeries.length;
             return {
               ...batch,
-              unexpectedLogs: [serie, ...logs]
+              completed: newCompleted,
+              expectedSeries: updatedExpected,
+              status: isDone ? 'completed' : batch.status
             };
           }
         }
@@ -147,78 +112,152 @@ function App() {
       })
     );
 
-    // Guardar en Supabase
-    await supabase
-      .from('unexpected_logs')
-      .insert({
-        checklist_id: activeBatchId,
-        scanned_value: serie
-      });
+    // Persistencia asíncrona a través del controlador
+    try {
+      await ChecklistController.recordSuccessfulScan(activeBatchId, serie, warehouseRow, activeBatch, internalNumber);
+    } catch (error) {
+      console.error("Error persistiendo escaneo:", error);
+    }
   };
 
+  // Registrar serie fuera de lista
+  const handleLogUnexpected = async (serie) => {
+    if (!activeBatchId) return;
+
+    const serial = serie.toUpperCase();
+
+    // Optimista local
+    setBatches(prevBatches => 
+      prevBatches.map(batch => {
+        if (batch.id === activeBatchId) {
+          const logs = batch.unexpectedLogs || [];
+          if (!logs.includes(serial)) {
+            return {
+              ...batch,
+              unexpectedLogs: [serial, ...logs]
+            };
+          }
+        }
+        return batch;
+      })
+    );
+
+    await ChecklistController.recordUnexpectedScan(activeBatchId, serial);
+  };
+
+  // Eliminar checklist
   const handleDeleteBatch = async (batchId) => {
     const confirmDelete = window.confirm("¿Estás seguro de que deseas eliminar este checklist? Esta acción no se puede deshacer.");
     if (!confirmDelete) return;
 
-    // Eliminar localmente para respuesta inmediata
+    // Optimista local
     setBatches(prevBatches => prevBatches.filter(b => b.id !== batchId));
 
-    // Eliminar en Supabase
-    const { error } = await supabase
-      .from('checklists')
-      .delete()
-      .eq('id', batchId);
-
-    if (error) {
-      alert("Error al eliminar en la BD: " + error.message);
-      fetchBatches(); // Recargar para revertir si hubo error
+    try {
+      await ChecklistController.removeChecklist(batchId);
+    } catch (err) {
+      alert("Error al eliminar en la BD: " + err.message);
+      fetchBatches();
     }
   };
 
+  // Finalizar lote incompleto
   const handleForceFinishBatch = async () => {
     const confirm = window.confirm("¿Seguro que deseas finalizar el lote? Faltan equipos por escanear.");
     if (!confirm) return;
 
-    // Actualizar local
     setBatches(prev => prev.map(b => b.id === activeBatchId ? { ...b, status: 'completed' } : b));
-    
-    // Actualizar Supabase
-    await supabase.from('checklists').update({ status: 'completed' }).eq('id', activeBatchId);
+    await ChecklistController.forceFinishChecklist(activeBatchId);
   };
 
   const handleFinishSession = () => {
     setActiveBatchId(null);
     setView('home');
-    fetchBatches(); // Refrescar por si hubo cambios de red
+    fetchBatches();
+  };
+
+  const handleLayoutChange = () => {
+    setMapModel(WarehouseMapController.loadMap());
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col font-sans text-gray-800">
-      <Header view={view} setView={() => { setView('home'); setActiveBatchId(null); }} />
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-gray-800">
+      {/* Barra de Navegación Superior */}
+      <Header 
+        currentView={view} 
+        setView={(v) => {
+          setView(v);
+          if (v !== 'scan') setActiveBatchId(null);
+        }}
+        activeBatchId={activeBatchId}
+        consultaCount={totalConsultas}
+      />
 
-      <main className="flex-1 flex flex-col w-full max-w-4xl mx-auto p-4 md:p-8">
-        {loading && view === 'home' ? (
+      {/* Contenido Principal a Pantalla Completa */}
+      <main className="flex-1 flex flex-col w-full max-w-[1920px] mx-auto px-3 sm:px-6 lg:px-8 py-4">
+        {errorMessage && (
+          <div className="mb-4 bg-rose-50 border border-rose-200 text-rose-700 p-3.5 rounded-xl flex justify-between items-center text-xs font-medium">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-rose-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>{errorMessage}</span>
+            </div>
+            <button onClick={fetchBatches} className="underline hover:text-rose-900 ml-4 font-semibold">Reintentar</button>
+          </div>
+        )}
+
+        {loading && view === 'home' && batches.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64">
             <div className="w-16 h-16 border-4 border-gray-200 border-t-red-600 rounded-full animate-spin"></div>
-            <p className="mt-4 text-gray-500 font-semibold">Conectando a Supabase...</p>
+            <p className="mt-4 text-gray-500 font-semibold">Cargando inventario y lotes de Supabase...</p>
           </div>
-        ) : view === 'home' ? (
-          <HomeView 
-            batches={batches}
-            onCreateBatch={handleCreateBatch} 
-            onSelectBatch={handleSelectBatch}
-            onDeleteBatch={handleDeleteBatch}
-          />
-        ) : null}
+        ) : (
+          <>
+            {/* Vista 1: Pantalla Principal / Recepción */}
+            {view === 'home' && (
+              <HomeView 
+                batches={batches}
+                onCreateBatch={handleCreateBatch} 
+                onSelectBatch={handleSelectBatch}
+                onDeleteBatch={handleDeleteBatch}
+                onNavigateToModelSearch={() => setView('modelSearch')}
+                onStatusChange={fetchBatches}
+                onLayoutChange={handleLayoutChange}
+              />
+            )}
 
-        {view === 'scan' && activeBatch && (
-          <ScanSessionView 
-            batchDetails={activeBatch}
-            onCompleteTrailer={handleCompleteTrailer}
-            onLogUnexpected={handleLogUnexpected}
-            onFinishSession={handleFinishSession}
-            onForceFinish={handleForceFinishBatch}
-          />
+            {/* Vista 2: Sesión de Escaneo */}
+            {view === 'scan' && activeBatch && (
+              <ScanSessionView 
+                batchDetails={activeBatch}
+                onCompleteTrailer={handleCompleteTrailer}
+                onLogUnexpected={handleLogUnexpected}
+                onFinishSession={handleFinishSession}
+                onForceFinish={handleForceFinishBatch}
+                availableRows={availableRows}
+              />
+            )}
+
+            {/* Vista 3: Buscador por Modelo (CONSULTA y BAJA) */}
+            {view === 'modelSearch' && (
+              <ModelSearchView 
+                checklists={batches}
+                onStatusChange={fetchBatches}
+                onRowChange={fetchBatches}
+                availableRows={availableRows}
+              />
+            )}
+
+            {/* Vista 4: Mapa de Almacén con Rectángulos y Rangos de Serie */}
+            {view === 'warehouseMap' && (
+              <WarehouseMapView 
+                checklists={batches}
+                onLayoutChange={handleLayoutChange}
+                onPrinterChange={fetchBatches}
+              />
+            )}
+          </>
         )}
       </main>
     </div>
