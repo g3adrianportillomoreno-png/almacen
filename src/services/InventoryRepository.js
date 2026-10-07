@@ -127,6 +127,17 @@ export class InventoryRepository {
           ...(cache.serials[s.serial] || {}),
           internalNumber: s.internalNumber
         };
+
+        // Reconciliación automática: actualizar el número de equipo en registros previos si ya existían
+        const numVal = !isNaN(Number(s.internalNumber)) ? Number(s.internalNumber) : null;
+        if (numVal !== null) {
+          supabase
+            .from('expected_series')
+            .update({ internal_number: numVal })
+            .eq('serial_number', s.serial)
+            .then(() => {})
+            .catch(() => {});
+        }
       }
     }
     this.saveMetadataCache(cache);

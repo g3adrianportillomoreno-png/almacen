@@ -10,6 +10,11 @@ export default function WarehouseMapView({
   const [draggingId, setDraggingId] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
+  // Sincronizar el modelo del mapa cuando cambien los checklists (nuevas filas creadas al capturar)
+  useEffect(() => {
+    setMapModel(WarehouseMapController.loadMap());
+  }, [checklists]);
+
   // Edición del nombre de la fila
   const [editingRowId, setEditingRowId] = useState(null);
   const [editNameValue, setEditNameValue] = useState('');

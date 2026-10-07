@@ -183,5 +183,138 @@ export class InventoryController {
     const fileName = `Inventario_Almacen_CDM_${dateStr}.xlsx`;
     XLSX.writeFile(wb, fileName);
   }
+
+  /**
+   * Genera y descarga el reporte en Excel de un checklist específico:
+   * Incluye hojas para Resumen, Equipos Presentes/Escaneados, Faltantes y Errores/Inesperadas.
+   * @param {Object} batch Instancia de ChecklistModel o datos del lote
+   */
+  static exportChecklistReportToExcel(batch) {
+    if (!batch) {
+      alert("No se encontró información del checklist para exportar.");
+      return;
+    }
+
+    const expected = batch.expectedSeries || [];
+    const completedList = batch.completed || [];
+    const completedSet = new Set(completedList.map(s => String(s).trim().toUpperCase()));
+
+    // Impresoras Presentes / Escaneadas
+    const presentes = expected.filter(p => completedSet.has(String(p.serial).trim().toUpperCase()));
+    // Impresoras Faltantes
+    const faltantes = expected.filter(p => !completedSet.has(String(p.serial).trim().toUpperCase()));
+    // Lecturas fuera de lista / Errores
+    const inesperadas = batch.unexpectedLogs || [];
+
+    const isFullDone = expected.length > 0 && presentes.length >= expected.length;
+    const isClosedWithPending = (batch.status === 'completed' || batch.status === 'closed') && faltantes.length > 0;
+    const estadoTexto = isFullDone 
+      ? 'COMPLETADO (100% Recibido)' 
+      : (isClosedWithPending ? `CERRADO CON FALTANTES (${faltantes.length} faltantes)` : 'EN PROCESO / PENDIENTE');
+
+    const wb = XLSX.utils.book_new();
+
+    // 1. Hoja RESUMEN
+    const resumenData = [
+      { 'CONCEPTO': 'FOLIO', 'DETALLE': batch.folio || 'Sin Folio' },
+      { 'CONCEPTO': 'DOCUMENTO / LOTE', 'DETALLE': batch.cleanName || batch.name || 'Sin Nombre' },
+      { 'CONCEPTO': 'FECHA DE REGISTRO', 'DETALLE': batch.date || new Date().toLocaleDateString('es-MX') },
+      { 'CONCEPTO': 'ESTADO DEL CHECKLIST', 'DETALLE': estadoTexto },
+      { 'CONCEPTO': 'TOTAL ESPERADAS', 'DETALLE': expected.length },
+      { 'CONCEPTO': 'PRESENTES / ESCANEADAS', 'DETALLE': presentes.length },
+      { 'CONCEPTO': 'FALTANTES', 'DETALLE': faltantes.length },
+      { 'CONCEPTO': 'ERRORES / FUERA DE LISTA', 'DETALLE': inesperadas.length }
+    ];
+    const wsResumen = XLSX.utils.json_to_sheet(resumenData);
+    wsResumen['!cols'] = [{ wch: 28 }, { wch: 45 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
+
+    // 2. Hoja PRESENTES (Equipos escaneados correctamente)
+    const dataPresentes = presentes.map((p, idx) => ({
+      'NO.': idx + 1,
+      'CLAVE': p.material || '',
+      'NUMERO DE SERIE': p.serial || '',
+      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+      'ALMACEN': p.warehouseName || 'Almacén 1',
+      'FILA': p.warehouseRow || '',
+      'ESPACIO': p.warehouseSpace || '',
+      'ESTADO': p.status || 'DISPONIBLE'
+    }));
+    const wsPresentes = XLSX.utils.json_to_sheet(
+      dataPresentes.length > 0 ? dataPresentes : [{
+        'NO.': '',
+        'CLAVE': '',
+        'NUMERO DE SERIE': 'SIN EQUIPOS ESCANEADOS',
+        'NUMERO DE EQUIPO': '',
+        'ALMACEN': '',
+        'FILA': '',
+        'ESPACIO': '',
+        'ESTADO': ''
+      }]
+    );
+    wsPresentes['!cols'] = [
+      { wch: 6 },
+      { wch: 25 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsPresentes, "PRESENTES");
+
+    // 3. Hoja FALTANTES (Equipos no encontrados físicamente)
+    const dataFaltantes = faltantes.map((p, idx) => ({
+      'NO.': idx + 1,
+      'CLAVE': p.material || '',
+      'NUMERO DE SERIE': p.serial || '',
+      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+      'ESTADO': 'FALTANTE / NO ESCANEADA'
+    }));
+    const wsFaltantes = XLSX.utils.json_to_sheet(
+      dataFaltantes.length > 0 ? dataFaltantes : [{
+        'NO.': '',
+        'CLAVE': '',
+        'NUMERO DE SERIE': 'NINGUNA FALTANTE (COMPLETADO AL 100%)',
+        'NUMERO DE EQUIPO': '',
+        'ESTADO': 'COMPLETO'
+      }]
+    );
+    wsFaltantes['!cols'] = [
+      { wch: 6 },
+      { wch: 25 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 30 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES");
+
+    // 4. Hoja ERRORES E INCIDENCIAS (Lecturas fuera de lista o no esperadas)
+    const dataErrores = inesperadas.map((serial, idx) => ({
+      'NO.': idx + 1,
+      'VALOR ESCANEADO': serial,
+      'INCIDENCIA': 'SERIE FUERA DE LISTA (NO REGISTRADA EN ESTE CHECKLIST)'
+    }));
+    const wsErrores = XLSX.utils.json_to_sheet(
+      dataErrores.length > 0 ? dataErrores : [{
+        'NO.': '',
+        'VALOR ESCANEADO': 'SIN ERRORES REGISTRADOS',
+        'INCIDENCIA': 'NINGUNA'
+      }]
+    );
+    wsErrores['!cols'] = [
+      { wch: 6 },
+      { wch: 26 },
+      { wch: 45 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsErrores, "INCIDENCIAS_ERRORES");
+
+    // Descargar libro Excel
+    const safeFolio = (batch.folio || 'Checklist').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const fileName = `Reporte_Checklist_${safeFolio}_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  }
 }
 

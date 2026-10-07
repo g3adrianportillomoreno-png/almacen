@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { InventoryController } from '../controllers/InventoryController.js';
+import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { extractSeriesFromExcel } from '../utils/excelParser.js';
 import CameraScanner from './CameraScanner.jsx';
 
@@ -133,6 +134,11 @@ export default function WarehouseAssignmentView({
         warehouseSpace: spaceVal,
         internalNumber: numEquipo
       });
+
+      // Asegurar que la fila se cree en el plano del mapa si es nueva
+      if (selectedRow) {
+        WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
+      }
 
       setSuccessMessage(`¡Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} → ${spaceVal}!`);
       

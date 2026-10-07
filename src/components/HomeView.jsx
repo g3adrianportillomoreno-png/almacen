@@ -421,8 +421,12 @@ export default function HomeView({
             ) : (
               <div className="flex flex-col gap-2">
                 {batches.map((batch) => {
-                  const isFinished = batch.isCompleted;
+                  const total = batch.totalCount || batch.expectedSeries.length;
+                  const completedCount = batch.completed.length;
                   const pendingCount = batch.pendingCount;
+
+                  const isFullCompleted = total > 0 && completedCount >= total;
+                  const isClosedWithPending = (batch.status === 'completed' || batch.status === 'closed') && completedCount < total;
 
                   const modelsInBatch = Array.from(
                     new Set(batch.expectedSeries.map(s => s.material).filter(Boolean))
@@ -433,13 +437,17 @@ export default function HomeView({
                       <button 
                         onClick={() => onSelectBatch(batch.id)}
                         className={`flex-1 flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 rounded-xl border transition-all text-left gap-2 ${
-                          isFinished 
-                            ? 'bg-emerald-50/30 border-emerald-200 hover:border-emerald-300' 
+                          isFullCompleted
+                            ? 'bg-emerald-50/40 border-emerald-200 hover:border-emerald-300' 
+                            : isClosedWithPending
+                            ? 'bg-amber-50/40 border-amber-200 hover:border-amber-300'
                             : 'bg-white border-slate-200 hover:border-red-400 hover:shadow-xs'
                         }`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="bg-red-600 text-white font-bold text-xs px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0">
+                          <div className={`font-bold text-xs px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0 ${
+                            isFullCompleted ? 'bg-emerald-600 text-white' : isClosedWithPending ? 'bg-amber-600 text-white' : 'bg-red-600 text-white'
+                          }`}>
                             {batch.folio}
                           </div>
                           <div className="min-w-0">
@@ -455,13 +463,24 @@ export default function HomeView({
 
                         <div className="flex items-center gap-3 shrink-0">
                           <div className="text-right">
-                            {isFinished ? (
-                              <span className="text-[11px] font-medium text-emerald-800 bg-emerald-100/70 border border-emerald-200 px-2 py-0.5 rounded-md">
-                                Completado ({batch.totalCount})
+                            {isFullCompleted ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2.5 py-1 rounded-md shadow-2xs">
+                                <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+                                </svg>
+                                Completado ({total})
+                              </span>
+                            ) : isClosedWithPending ? (
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 bg-amber-100/90 border border-amber-300 px-2.5 py-1 rounded-md shadow-2xs">
+                                <svg className="w-3.5 h-3.5 text-amber-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                                Cerrado con faltantes ({pendingCount} de {total})
                               </span>
                             ) : (
-                              <span className="text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
-                                Faltan: {pendingCount} de {batch.totalCount}
+                              <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-700 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                                Faltan: {pendingCount} de {total}
                               </span>
                             )}
                           </div>
@@ -469,9 +488,26 @@ export default function HomeView({
                         </div>
                       </button>
 
+                      {/* Botón para descargar reporte de este checklist en Excel */}
                       <button 
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          InventoryController.exportChecklistReportToExcel(batch);
+                        }}
+                        className="p-2.5 bg-white rounded-xl border border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 text-slate-500 transition-colors shadow-2xs shrink-0"
+                        title="Descargar Reporte del Checklist (Excel)"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                      </button>
+
+                      {/* Botón para eliminar checklist (con clave QWERTY) */}
+                      <button 
+                        type="button"
                         onClick={() => handleRequestDelete(batch)}
-                        className="p-2.5 bg-white rounded-xl border border-slate-200 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 text-slate-400 transition-colors"
+                        className="p-2.5 bg-white rounded-xl border border-slate-200 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 text-slate-400 transition-colors shrink-0"
                         title="Eliminar Checklist (Requiere autorización)"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>

@@ -270,7 +270,7 @@ export default function ModelSearchView({
                       <div>
                         <span className="text-[10px] text-slate-400 font-medium uppercase block">Lote / Folio</span>
                         <span className="font-normal text-slate-600 truncate block">
-                          {printer.checklistFolio ? `${printer.checklistFolio} ` : ''}{printer.checklistName}
+                          <span className="font-semibold text-slate-700">{printer.checklistFolio || 'SIN FOLIO'}</span> {printer.checklistName ? `| ${printer.checklistName}` : ''}
                         </span>
                       </div>
                     </div>

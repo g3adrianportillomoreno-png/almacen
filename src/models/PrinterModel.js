@@ -34,8 +34,10 @@ export class PrinterModel {
     this.warehouseRow = warehouseRow || 'Fila 1';
     this.warehouseSpace = (warehouseSpace || '').trim();
     this.status = status || PrinterModel.STATUS_DISPONIBLE;
-    this.checklistName = checklistName;
-    this.checklistFolio = checklistFolio;
+    this.checklistName = checklistName || 'Inventario General';
+    this.checklistFolio = (checklistFolio && String(checklistFolio).trim() !== '' && String(checklistFolio).toLowerCase() !== 'sin folio')
+      ? String(checklistFolio).trim()
+      : 'SIN FOLIO';
     this.internalNumber = internalNumber !== null && internalNumber !== undefined && internalNumber !== ''
       ? (isNaN(Number(internalNumber)) ? String(internalNumber) : Number(internalNumber))
       : null;
@@ -95,20 +97,23 @@ export class PrinterModel {
     const warehouseName = dbItem.warehouse_name || meta.warehouseName || 'Almacén 1';
     const warehouseSpace = dbItem.warehouse_space || meta.warehouseSpace || '';
     const assignedAt = dbItem.assigned_at || meta.assignedAt || null;
+    const internalNum = dbItem.internal_number !== undefined && dbItem.internal_number !== null
+      ? dbItem.internal_number
+      : (meta.internalNumber ?? null);
 
     return new PrinterModel({
       id: dbItem.id,
       serial: serial,
       material: dbItem.material_model || dbItem.material || 'Sin Modelo',
-      checklistId: dbItem.checklist_id || checklistInfo.id,
+      checklistId: dbItem.checklist_id || checklistInfo?.id || null,
       isScanned: dbItem.is_scanned ?? meta.isScanned ?? false,
       scannedAt: dbItem.scanned_at || null,
       warehouseName: warehouseName,
       warehouseRow: dbItem.warehouse_row || meta.warehouseRow || 'Fila 1',
       warehouseSpace: warehouseSpace,
       status: dbItem.printer_status || meta.status || PrinterModel.STATUS_DISPONIBLE,
-      checklistName: checklistInfo.name || '',
-      checklistFolio: checklistInfo.folio || '',
+      checklistName: checklistInfo?.name || meta.checklistName || 'Inventario General',
+      checklistFolio: checklistInfo?.folio || meta.checklistFolio || 'SIN FOLIO',
       internalNumber: internalNum,
       assignedAt: assignedAt
     });

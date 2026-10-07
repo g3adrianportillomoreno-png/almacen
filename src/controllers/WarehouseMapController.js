@@ -99,4 +99,19 @@ export class WarehouseMapController {
     }
     return statsMap;
   }
+
+  /**
+   * Asegura que una fila exista en el mapa del almacén correspondiente.
+   * Si no existe, crea automáticamente el cuadro gráfico y lo guarda.
+   */
+  static ensureRowExists(rowName, warehouseName = null) {
+    if (!rowName || !rowName.trim()) return null;
+    const currentModel = WarehouseMapController.loadMap();
+    const updated = currentModel.ensureRowExists(rowName, warehouseName);
+    if (updated !== currentModel) {
+      WarehouseMapController.saveMap(updated);
+      return updated;
+    }
+    return currentModel;
+  }
 }

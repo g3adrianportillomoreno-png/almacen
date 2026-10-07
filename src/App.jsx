@@ -81,6 +81,12 @@ function App() {
   const handleCompleteTrailer = async (serie, warehouseRow, internalNumber) => {
     if (!activeBatchId || !activeBatch) return;
 
+    // Asegurar que la fila exista en el mapa del almacén activo para que aparezca dibujada al instante con su rango numérico
+    if (warehouseRow) {
+      WarehouseMapController.ensureRowExists(warehouseRow);
+      handleLayoutChange();
+    }
+
     // Actualización optimista local en memoria
     setBatches(prevBatches => 
       prevBatches.map(batch => {
@@ -167,7 +173,7 @@ function App() {
     const confirm = window.confirm("¿Seguro que deseas finalizar el lote? Faltan equipos por escanear.");
     if (!confirm) return;
 
-    setBatches(prev => prev.map(b => b.id === activeBatchId ? { ...b, status: 'completed' } : b));
+    setBatches(prev => prev.map(b => b.id === activeBatchId ? { ...b, status: 'closed' } : b));
     await ChecklistController.forceFinishChecklist(activeBatchId);
   };
 

@@ -166,6 +166,68 @@ export class WarehouseMapModel {
   }
 
   /**
+   * Asegura que una fila exista en el almacén especificado (o en el activo).
+   * Si no existe, crea un nuevo cuadro gráfico y lo añade al plano.
+   */
+  ensureRowExists(rowName, warehouseNameOrId = null) {
+    const cleanRowName = (rowName || '').trim();
+    if (!cleanRowName) return this;
+
+    // Buscar almacén objetivo
+    let targetWh = null;
+    if (warehouseNameOrId) {
+      targetWh = this.warehouses.find(w => 
+        w.id === warehouseNameOrId || 
+        w.name.trim().toLowerCase() === String(warehouseNameOrId).trim().toLowerCase()
+      );
+    }
+    if (!targetWh) {
+      targetWh = this.getActiveWarehouse() || this.warehouses[0];
+    }
+    if (!targetWh) return this;
+
+    const rowNameLower = cleanRowName.toLowerCase();
+    const alreadyExists = (targetWh.rows || []).some(r => 
+      (r.name || '').trim().toLowerCase() === rowNameLower
+    );
+
+    if (alreadyExists) {
+      return this;
+    }
+
+    const currentRows = targetWh.rows || [];
+    const id = `fila-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const cols = 2;
+    const index = currentRows.length;
+    const rowIdx = Math.floor(index / cols);
+    const colIdx = index % cols;
+
+    const newRect = {
+      id,
+      name: cleanRowName,
+      x: 20 + colIdx * 210,
+      y: 20 + rowIdx * 140,
+      width: 190,
+      height: 120
+    };
+
+    const updatedWarehouses = this.warehouses.map(w => {
+      if (w.id === targetWh.id) {
+        return {
+          ...w,
+          rows: [...w.rows, newRect]
+        };
+      }
+      return w;
+    });
+
+    return new WarehouseMapModel({
+      warehouses: updatedWarehouses,
+      activeWarehouseId: this.activeWarehouseId
+    });
+  }
+
+  /**
    * Actualiza la posición de un rectángulo en el almacén activo
    */
   updateRowPosition(id, { x, y, width, height }) {
