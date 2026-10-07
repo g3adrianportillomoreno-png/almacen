@@ -48,7 +48,7 @@ export class InventoryRepository {
       .from('checklists')
       .select(`
         id, name, created_at, status,
-        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_row, internal_number, printer_status),
+        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at),
         unexpected_logs (id, scanned_value, created_at)
       `)
       .order('created_at', { ascending: false })
