@@ -48,10 +48,11 @@ export class InventoryRepository {
       .from('checklists')
       .select(`
         id, name, created_at, status,
-        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at),
+        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_row, internal_number, printer_status),
         unexpected_logs (id, scanned_value, created_at)
       `)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(10000, { foreignTable: 'expected_series' });
 
     if (error) {
       console.error('Error al obtener checklists desde Supabase:', error);

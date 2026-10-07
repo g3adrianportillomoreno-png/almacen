@@ -12,6 +12,9 @@ export default function ScanSessionView({
   availableRows = ['Fila 1', 'Fila 2', 'Fila 3', 'Fila 4', 'Fila 5', 'Fila 6']
 }) {
   const [selectedRow, setSelectedRow] = useState('Fila 1');
+  const [selectedWarehouse, setSelectedWarehouse] = useState('Almacén 1');
+  const [spaceInput, setSpaceInput] = useState('');
+  const [pendingAssignmentItem, setPendingAssignmentItem] = useState(null);
   const [customRowInput, setCustomRowInput] = useState('');
   const [showCustomRow, setShowCustomRow] = useState(false);
 
@@ -75,21 +78,8 @@ export default function ScanSessionView({
       }
 
       if (expectedItem) {
-        const numToAssign = Number(assignedNumber) || 1;
-        setLastScannedMaterial(expectedItem.material);
-        setLastAssignedRow(selectedRow);
-        setLastAssignedNum(numToAssign);
-        setSearchSuccess(true);
-
-        setTimeout(() => {
-          // Envía serie, Fila y Número de inventario asignado a la impresora
-          onCompleteTrailer(code, selectedRow, numToAssign); 
-          if (autoIncrementNumber) {
-            setAssignedNumber(prev => (Number(prev) || 0) + 1);
-          }
-          setSearchSuccess(false);
-          setLastScanned('');
-        }, 1200);
+        setPendingAssignmentItem({ item: expectedItem, rawCode: code });
+        setIsSearching(false);
       } else {
         setSearchError(true);
         onLogUnexpected(code);
@@ -430,6 +420,127 @@ export default function ScanSessionView({
           )}
         </div>
       </div>
+
+      {/* Modal de Asignación Física */}
+      {pendingAssignmentItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-xl relative overflow-y-auto max-h-[90vh]">
+            <button 
+              onClick={() => {
+                setPendingAssignmentItem(null);
+                setSearchSuccess(false);
+                setLastScanned('');
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition"
+            >
+              ✕
+            </button>
+            <h3 className="text-xl font-bold text-emerald-800 mb-1">¡Equipo Encontrado!</h3>
+            <p className="text-sm font-medium text-slate-500 mb-4">Confirma su ubicación física para acomodarlo:</p>
+            
+            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 mb-5">
+              <div className="flex justify-between mb-2">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Modelo:</span>
+                <span className="font-bold text-slate-800 text-sm truncate max-w-[200px] text-right">{pendingAssignmentItem.item.material}</span>
+              </div>
+              <div className="flex justify-between border-t border-slate-100 pt-2">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Serie:</span>
+                <span className="font-mono font-bold text-slate-900 text-sm">{pendingAssignmentItem.item.serial}</span>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1 uppercase tracking-wide">
+                  Almacén:
+                </label>
+                <select
+                  value={selectedWarehouse}
+                  onChange={(e) => setSelectedWarehouse(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                >
+                  {['Almacén 1', 'Almacén 2'].map((w, idx) => (
+                    <option key={idx} value={w}>{w}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1 uppercase tracking-wide">
+                  Fila:
+                </label>
+                <select
+                  value={selectedRow}
+                  onChange={(e) => setSelectedRow(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                >
+                  {availableRows.map((r, idx) => (
+                    <option key={idx} value={r}>{r}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1 uppercase tracking-wide">
+                  Espacio (Opcional):
+                </label>
+                <input
+                  type="text"
+                  placeholder="EJ: POS 1, ESP 5..."
+                  value={spaceInput}
+                  onChange={(e) => setSpaceInput(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 uppercase focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 mb-1 uppercase tracking-wide">
+                  Número de Equipo Interno:
+                </label>
+                <input
+                  type="text"
+                  value={assignedNumber}
+                  onChange={(e) => setAssignedNumber(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 outline-none transition"
+                />
+              </div>
+            </div>
+
+            <button 
+              onClick={() => {
+                const numToAssign = assignedNumber;
+                setLastScannedMaterial(pendingAssignmentItem.item.material);
+                setLastAssignedRow(selectedRow);
+                setLastAssignedNum(numToAssign);
+                setSearchSuccess(true);
+                
+                onCompleteTrailer(pendingAssignmentItem.rawCode, {
+                  warehouseName: selectedWarehouse,
+                  warehouseRow: selectedRow,
+                  warehouseSpace: spaceInput || 'General',
+                  internalNumber: numToAssign
+                });
+                
+                if (autoIncrementNumber && !isNaN(Number(assignedNumber))) {
+                  setAssignedNumber(prev => (Number(prev) || 0) + 1);
+                }
+                
+                // Limpiar espacio sugerido si queremos
+                setSpaceInput('');
+                setPendingAssignmentItem(null);
+                setSearchSuccess(false);
+                setLastScanned('');
+              }}
+              className="w-full mt-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3.5 rounded-xl transition shadow-xs flex items-center justify-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+              </svg>
+              Guardar Asignación
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

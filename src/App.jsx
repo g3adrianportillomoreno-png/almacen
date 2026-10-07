@@ -77,13 +77,13 @@ function App() {
     setView('scan');
   };
 
-  // Registrar escaneo de impresora asignando su Fila y su Número de inventario (1-80...)
-  const handleCompleteTrailer = async (serie, warehouseRow, internalNumber) => {
+  // Registrar escaneo de impresora asignando su Almacén, Fila, Espacio y Número de inventario
+  const handleCompleteTrailer = async (serie, assignmentData) => {
     if (!activeBatchId || !activeBatch) return;
 
     // Asegurar que la fila exista en el mapa del almacén activo para que aparezca dibujada al instante con su rango numérico
-    if (warehouseRow) {
-      WarehouseMapController.ensureRowExists(warehouseRow);
+    if (assignmentData?.warehouseRow) {
+      WarehouseMapController.ensureRowExists(assignmentData.warehouseRow, assignmentData.warehouseName);
       handleLayoutChange();
     }
 
@@ -99,8 +99,8 @@ function App() {
                 return {
                   ...item,
                   isScanned: true,
-                  warehouseRow: warehouseRow || item.warehouseRow,
-                  internalNumber: internalNumber !== undefined ? internalNumber : item.internalNumber
+                  warehouseRow: assignmentData?.warehouseRow || item.warehouseRow,
+                  internalNumber: assignmentData?.internalNumber !== undefined ? assignmentData.internalNumber : item.internalNumber
                 };
               }
               return item;
@@ -121,7 +121,10 @@ function App() {
 
     // Persistencia asíncrona a través del controlador
     try {
-      await ChecklistController.recordSuccessfulScan(activeBatchId, serie, warehouseRow, activeBatch, internalNumber);
+      await ChecklistController.recordSuccessfulScan(activeBatchId, serie, assignmentData?.warehouseRow, activeBatch, assignmentData?.internalNumber);
+      if (assignmentData) {
+        await InventoryController.assignPrinter(serie, assignmentData);
+      }
     } catch (error) {
       console.error("Error persistiendo escaneo:", error);
     }

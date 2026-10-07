@@ -1,0 +1,30 @@
+diff --git a/src/components/WarehouseAssignmentView.jsx b/src/components/WarehouseAssignmentView.jsx
+index e8bc672..49e9b32 100644
+--- a/src/components/WarehouseAssignmentView.jsx
++++ b/src/components/WarehouseAssignmentView.jsx
+@@ -115,6 +115,7 @@ export default function WarehouseAssignmentView({
+   };
+ 
+   const handleCameraScan = (scannedCode) => {
++    setIsCameraActive(false);
+     handleSearchSerial(scannedCode);
+   };
+ 
+diff --git a/src/services/InventoryRepository.js b/src/services/InventoryRepository.js
+index 793c73d..4060f5e 100644
+--- a/src/services/InventoryRepository.js
++++ b/src/services/InventoryRepository.js
+@@ -48,10 +48,11 @@ export class InventoryRepository {
+       .from('checklists')
+       .select(`
+         id, name, created_at, status,
+-        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at),
++        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_row, internal_number, printer_status),
+         unexpected_logs (id, scanned_value, created_at)
+       `)
+-      .order('created_at', { ascending: false });
++      .order('created_at', { ascending: false })
++      .limit(10000, { foreignTable: 'expected_series' });
+ 
+     if (error) {
+       console.error('Error al obtener checklists desde Supabase:', error);
