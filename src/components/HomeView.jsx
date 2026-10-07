@@ -120,6 +120,10 @@ export default function HomeView({
     setManualConsecutiveInput('');
     setUploadPasswordInput('');
   };
+  const handleRequestDelete = (batch) => {
+    setDeleteModalBatch(batch);
+    setDeletePasswordInput('');
+  };
 
   const handleConfirmDeleteBatch = (e) => {
     e.preventDefault();
