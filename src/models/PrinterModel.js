@@ -15,11 +15,14 @@ export class PrinterModel {
     checklistId = null,
     isScanned = false,
     scannedAt = null,
+    warehouseName = 'Almacén 1',
     warehouseRow = 'Fila 1',
+    warehouseSpace = '',
     status = PrinterModel.STATUS_DISPONIBLE,
     checklistName = '',
     checklistFolio = '',
-    internalNumber = null
+    internalNumber = null,
+    assignedAt = null
   }) {
     this.id = id;
     this.serial = (serial || '').trim().toUpperCase();
@@ -27,13 +30,20 @@ export class PrinterModel {
     this.checklistId = checklistId;
     this.isScanned = Boolean(isScanned);
     this.scannedAt = scannedAt;
+    this.warehouseName = warehouseName || 'Almacén 1';
     this.warehouseRow = warehouseRow || 'Fila 1';
+    this.warehouseSpace = (warehouseSpace || '').trim();
     this.status = status || PrinterModel.STATUS_DISPONIBLE;
     this.checklistName = checklistName;
     this.checklistFolio = checklistFolio;
     this.internalNumber = internalNumber !== null && internalNumber !== undefined && internalNumber !== ''
       ? (isNaN(Number(internalNumber)) ? String(internalNumber) : Number(internalNumber))
       : null;
+    this.assignedAt = assignedAt;
+  }
+
+  get isAssigned() {
+    return Boolean(this.warehouseSpace) || this.isScanned;
   }
 
   get isConsulta() {
@@ -82,20 +92,25 @@ export class PrinterModel {
   static fromDb(dbItem, checklistInfo = {}, metadataCache = {}) {
     const serial = (dbItem.serial_number || dbItem.serial || '').toUpperCase();
     const meta = metadataCache[serial] || {};
-    const internalNum = dbItem.internal_number ?? meta.internalNumber ?? null;
+    const warehouseName = dbItem.warehouse_name || meta.warehouseName || 'Almacén 1';
+    const warehouseSpace = dbItem.warehouse_space || meta.warehouseSpace || '';
+    const assignedAt = dbItem.assigned_at || meta.assignedAt || null;
 
     return new PrinterModel({
       id: dbItem.id,
       serial: serial,
       material: dbItem.material_model || dbItem.material || 'Sin Modelo',
       checklistId: dbItem.checklist_id || checklistInfo.id,
-      isScanned: dbItem.is_scanned ?? false,
+      isScanned: dbItem.is_scanned ?? meta.isScanned ?? false,
       scannedAt: dbItem.scanned_at || null,
+      warehouseName: warehouseName,
       warehouseRow: dbItem.warehouse_row || meta.warehouseRow || 'Fila 1',
+      warehouseSpace: warehouseSpace,
       status: dbItem.printer_status || meta.status || PrinterModel.STATUS_DISPONIBLE,
       checklistName: checklistInfo.name || '',
       checklistFolio: checklistInfo.folio || '',
-      internalNumber: internalNum
+      internalNumber: internalNum,
+      assignedAt: assignedAt
     });
   }
 }

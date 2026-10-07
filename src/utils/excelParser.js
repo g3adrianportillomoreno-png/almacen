@@ -1,5 +1,16 @@
 import * as XLSX from 'xlsx';
 
+function normalizeHeader(str) {
+  if (typeof str !== 'string') return '';
+  return str
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
+    .replace(/[^a-z0-9]/g, ' ')      // símbolos a espacios
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 export async function extractSeriesFromExcel(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -16,22 +27,68 @@ export async function extractSeriesFromExcel(file) {
         
         let serialIndex = -1;
         let materialIndex = -1;
+        let internalNumberIndex = -1;
         let headerRowIndex = -1;
 
-        for (let i = 0; i < rows.length; i++) {
+        // Buscar encabezados reconociendo múltiples variaciones (CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, etc.)
+        for (let i = 0; i < Math.min(rows.length, 15); i++) {
           const row = rows[i];
           if (Array.isArray(row)) {
-            const tempSerialIndex = row.findIndex(cell => 
-              typeof cell === 'string' && cell.trim().toLowerCase() === 'serial number'
-            );
-            
-            const tempMaterialIndex = row.findIndex(cell => 
-              typeof cell === 'string' && cell.trim().toLowerCase() === 'material'
-            );
-            
-            if (tempSerialIndex !== -1) {
-              serialIndex = tempSerialIndex;
-              materialIndex = tempMaterialIndex !== -1 ? tempMaterialIndex : -1;
+            let foundSerial = -1;
+            let foundMaterial = -1;
+            let foundInternal = -1;
+
+            row.forEach((cell, colIdx) => {
+              const norm = normalizeHeader(cell);
+              if (!norm) return;
+
+              // 1. NÚMERO DE SERIE
+              if (
+                norm === 'numero de serie' || 
+                norm === 'no de serie' || 
+                norm === 'num de serie' ||
+                norm === 'serial number' || 
+                norm === 'serie' || 
+                norm === 'serial' ||
+                norm === 'sn' ||
+                norm.includes('serie') ||
+                norm.includes('serial')
+              ) {
+                foundSerial = colIdx;
+              }
+
+              // 2. CLAVE / MODELO
+              else if (
+                norm === 'clave' ||
+                norm === 'modelo' ||
+                norm === 'material' ||
+                norm === 'clave modelo' ||
+                norm.includes('clave') ||
+                norm.includes('modelo') ||
+                norm.includes('material')
+              ) {
+                foundMaterial = colIdx;
+              }
+
+              // 3. NÚMERO DE EQUIPO
+              else if (
+                norm === 'numero de equipo' ||
+                norm === 'no de equipo' ||
+                norm === 'no equipo' ||
+                norm === 'num de equipo' ||
+                norm === 'numero equipo' ||
+                norm === 'equipo' ||
+                norm.includes('equipo') ||
+                norm.includes('internal number')
+              ) {
+                foundInternal = colIdx;
+              }
+            });
+
+            if (foundSerial !== -1) {
+              serialIndex = foundSerial;
+              materialIndex = foundMaterial;
+              internalNumberIndex = foundInternal;
               headerRowIndex = i;
               break;
             }
@@ -39,7 +96,7 @@ export async function extractSeriesFromExcel(file) {
         }
 
         if (serialIndex === -1) {
-          throw new Error('No se encontró la columna llamada "Serial Number" en el documento Excel.');
+          throw new Error('No se encontró la columna de serie en el Excel. Debe llamarse "NUMERO DE SERIE", "SERIE" o "SERIAL NUMBER".');
         }
 
         const items = [];
@@ -47,17 +104,26 @@ export async function extractSeriesFromExcel(file) {
         
         for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i];
+          if (!row || !Array.isArray(row)) continue;
+
           const serieRaw = row[serialIndex];
-          const materialRaw = materialIndex !== -1 ? row[materialIndex] : 'DESCONOCIDO';
+          const materialRaw = materialIndex !== -1 ? row[materialIndex] : 'MODELO GENÉRICO';
+          const internalNumRaw = internalNumberIndex !== -1 ? row[internalNumberIndex] : null;
           
           if (serieRaw !== undefined && serieRaw !== null && String(serieRaw).trim() !== '') {
             const serialString = String(serieRaw).trim().toUpperCase();
             
             if (!seenSerials.has(serialString)) {
               seenSerials.add(serialString);
+
+              const internalNumberFormatted = internalNumRaw !== undefined && internalNumRaw !== null && String(internalNumRaw).trim() !== ''
+                ? String(internalNumRaw).trim()
+                : null;
+
               items.push({
                 serial: serialString,
-                material: String(materialRaw).trim().toUpperCase()
+                material: String(materialRaw || 'MODELO GENÉRICO').trim().toUpperCase(),
+                internalNumber: internalNumberFormatted
               });
             }
           }

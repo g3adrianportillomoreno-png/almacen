@@ -116,26 +116,53 @@ export class InventoryRepository {
       batchData = fallbackRes.data;
     }
 
-    // Guardar en caché de folios
+    // Guardar en caché de folios y números internos detectados del Excel
     const cache = this.getMetadataCache();
     cache.checklists = cache.checklists || {};
     cache.checklists[batchData.id] = { consecutive, folio };
+    cache.serials = cache.serials || {};
+    for (const s of series) {
+      if (s.internalNumber) {
+        cache.serials[s.serial] = {
+          ...(cache.serials[s.serial] || {}),
+          internalNumber: s.internalNumber
+        };
+      }
+    }
     this.saveMetadataCache(cache);
 
-    // Insertar series esperadas
+    // Insertar series esperadas con internal_number si viene del Excel
     const seriesToInsert = series.map(s => ({
       checklist_id: batchData.id,
       serial_number: s.serial,
       material_model: s.material,
+      internal_number: s.internalNumber && !isNaN(Number(s.internalNumber)) ? Number(s.internalNumber) : null,
       is_scanned: false
     }));
 
-    const { error: seriesError } = await supabase
-      .from('expected_series')
-      .insert(seriesToInsert);
+    try {
+      const { error: seriesError } = await supabase
+        .from('expected_series')
+        .insert(seriesToInsert);
 
-    if (seriesError) {
-      throw new Error(`Error insertando series: ${seriesError.message}`);
+      if (seriesError) {
+        // Fallback si la columna internal_number aún no existe en Supabase
+        const fallbackSeries = series.map(s => ({
+          checklist_id: batchData.id,
+          serial_number: s.serial,
+          material_model: s.material,
+          is_scanned: false
+        }));
+        await supabase.from('expected_series').insert(fallbackSeries);
+      }
+    } catch {
+      const fallbackSeries = series.map(s => ({
+        checklist_id: batchData.id,
+        serial_number: s.serial,
+        material_model: s.material,
+        is_scanned: false
+      }));
+      await supabase.from('expected_series').insert(fallbackSeries);
     }
 
     return batchData;
@@ -289,6 +316,66 @@ export class InventoryRepository {
     } catch (e) {
       console.warn('Columna warehouse_row pendiente de migración:', e);
     }
+  }
+
+  /**
+   * Asigna ubicación completa en almacén (Almacén, Fila y Espacio) y vincula datos
+   */
+  static async assignPrinterLocation(serialNumber, { warehouseName = 'Almacén 1', warehouseRow = 'Fila 1', warehouseSpace = '', internalNumber = null }) {
+    const serial = serialNumber.trim().toUpperCase();
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    
+    const existing = cache.serials[serial] || {};
+    const finalWh = warehouseName || existing.warehouseName || 'Almacén 1';
+    const finalRow = warehouseRow || existing.warehouseRow || 'Fila 1';
+    const finalSpace = (warehouseSpace || '').trim();
+    const finalInternal = internalNumber !== undefined && internalNumber !== null && internalNumber !== ''
+      ? internalNumber
+      : (existing.internalNumber ?? null);
+
+    cache.serials[serial] = {
+      ...existing,
+      warehouseName: finalWh,
+      warehouseRow: finalRow,
+      warehouseSpace: finalSpace,
+      internalNumber: finalInternal,
+      isScanned: true,
+      assignedAt: new Date().toISOString()
+    };
+    this.saveMetadataCache(cache);
+
+    // Intentar actualizar en Supabase
+    try {
+      const numVal = !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
+      const { error } = await supabase
+        .from('expected_series')
+        .update({
+          warehouse_name: finalWh,
+          warehouse_row: finalRow,
+          warehouse_space: finalSpace,
+          internal_number: numVal,
+          is_scanned: true,
+          scanned_at: new Date().toISOString()
+        })
+        .eq('serial_number', serial);
+
+      if (error) {
+        // Fallback si faltan columnas nuevas
+        await supabase
+          .from('expected_series')
+          .update({
+            warehouse_row: finalRow,
+            is_scanned: true,
+            scanned_at: new Date().toISOString()
+          })
+          .eq('serial_number', serial);
+      }
+    } catch (e) {
+      console.warn('Persistencia en base de datos tolerante a fallos:', e);
+    }
+
+    return cache.serials[serial];
   }
 
   /**

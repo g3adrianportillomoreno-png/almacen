@@ -1,10 +1,11 @@
 import { InventoryRepository } from '../services/InventoryRepository.js';
 import { PrinterModel } from '../models/PrinterModel.js';
+import * as XLSX from 'xlsx';
 
 /**
  * Controlador: InventoryController
  * Gestiona el inventario global de impresoras: búsqueda por MODELO,
- * y cambio de estado a CONSULTA (amarillo) y BAJA (confirmación de salida).
+ * asignación de Almacén/Fila/Espacio, cambio de estado y exportación a Excel.
  */
 export class InventoryController {
   /**
@@ -93,4 +94,94 @@ export class InventoryController {
   static async changeRow(serial, newRow) {
     await InventoryRepository.updatePrinterRow(serial, newRow);
   }
+
+  /**
+   * Asigna Almacén, Fila y Espacio a una impresora
+   */
+  static async assignPrinter(serial, locationData) {
+    return await InventoryRepository.assignPrinterLocation(serial, locationData);
+  }
+
+  /**
+   * Genera y descarga un archivo Excel completo con los equipos asignados y los faltantes
+   * @param {Array<PrinterModel>} allPrinters
+   */
+  static exportInventoryReportToExcel(allPrinters = []) {
+    if (!allPrinters || allPrinters.length === 0) {
+      alert("No hay equipos registrados en el inventario para exportar.");
+      return;
+    }
+
+    // Dividir entre equipos que ya tienen espacio asignado (o escaneados con ubicación) y faltantes
+    const asignados = allPrinters.filter(p => p.warehouseSpace || p.isScanned);
+    const faltantes = allPrinters.filter(p => !p.warehouseSpace && !p.isScanned);
+
+    // Mapear datos para Hoja 1: Asignados
+    // Columnas exactas: CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, ALMACEN, FILA, ESPACIO
+    const dataAsignados = asignados.map((p) => ({
+      'CLAVE': p.material || '',
+      'NUMERO DE SERIE': p.serial || '',
+      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+      'ALMACEN': p.warehouseName || 'Almacén 1',
+      'FILA': p.warehouseRow || 'Fila 1',
+      'ESPACIO': p.warehouseSpace || ''
+    }));
+
+    // Mapear datos para Hoja 2: Faltantes
+    const dataFaltantes = faltantes.map((p) => ({
+      'CLAVE': p.material || '',
+      'NUMERO DE SERIE': p.serial || '',
+      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+      'ALMACEN': '',
+      'FILA': '',
+      'ESPACIO': ''
+    }));
+
+    // Crear libro de trabajo
+    const wb = XLSX.utils.book_new();
+
+    // Crear hojas
+    const wsAsignados = XLSX.utils.json_to_sheet(
+      dataAsignados.length > 0 ? dataAsignados : [{
+        'CLAVE': '',
+        'NUMERO DE SERIE': '',
+        'NUMERO DE EQUIPO': '',
+        'ALMACEN': '',
+        'FILA': '',
+        'ESPACIO': ''
+      }]
+    );
+    const wsFaltantes = XLSX.utils.json_to_sheet(
+      dataFaltantes.length > 0 ? dataFaltantes : [{
+        'CLAVE': '',
+        'NUMERO DE SERIE': '',
+        'NUMERO DE EQUIPO': '',
+        'ALMACEN': '',
+        'FILA': '',
+        'ESPACIO': ''
+      }]
+    );
+
+    // Configurar anchos de columna recomendados
+    const colWidths = [
+      { wch: 25 }, // CLAVE
+      { wch: 22 }, // NUMERO DE SERIE
+      { wch: 20 }, // NUMERO DE EQUIPO
+      { wch: 18 }, // ALMACEN
+      { wch: 15 }, // FILA
+      { wch: 18 }  // ESPACIO
+    ];
+    wsAsignados['!cols'] = colWidths;
+    wsFaltantes['!cols'] = colWidths;
+
+    // Agregar hojas al libro
+    XLSX.utils.book_append_sheet(wb, wsAsignados, "ASIGNADOS");
+    XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES");
+
+    // Descargar archivo
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const fileName = `Inventario_Almacen_CDM_${dateStr}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  }
 }
+

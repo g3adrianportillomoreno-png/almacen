@@ -12,9 +12,10 @@ import HomeView from './components/HomeView';
 import ScanSessionView from './components/ScanSessionView';
 import ModelSearchView from './components/ModelSearchView';
 import WarehouseMapView from './components/WarehouseMapView';
+import WarehouseAssignmentView from './components/WarehouseAssignmentView';
 
 function App() {
-  const [view, setView] = useState('home'); // 'home', 'scan', 'modelSearch', 'warehouseMap'
+  const [view, setView] = useState('home'); // 'home', 'scan', 'modelSearch', 'warehouseMap', 'assignment'
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -222,6 +223,7 @@ function App() {
                 onSelectBatch={handleSelectBatch}
                 onDeleteBatch={handleDeleteBatch}
                 onNavigateToModelSearch={() => setView('modelSearch')}
+                onNavigateToAssignment={() => setView('assignment')}
                 onStatusChange={fetchBatches}
                 onLayoutChange={handleLayoutChange}
               />
@@ -255,6 +257,19 @@ function App() {
                 checklists={batches}
                 onLayoutChange={handleLayoutChange}
                 onPrinterChange={fetchBatches}
+              />
+            )}
+
+            {/* Vista 5: Pantalla Dedicada de Asignación y Acomodo con Cámara (Zoom y Linterna) o Pistola */}
+            {view === 'assignment' && (
+              <WarehouseAssignmentView 
+                checklists={batches}
+                onCreateBatch={handleCreateBatch}
+                onAssignmentSaved={fetchBatches}
+                availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                availableRows={availableRows}
+                onBackToHome={() => setView('home')}
+                fullScreenMode={true}
               />
             )}
           </>

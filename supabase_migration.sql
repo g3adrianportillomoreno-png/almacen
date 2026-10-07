@@ -17,10 +17,19 @@ ALTER TABLE public.expected_series
 ADD COLUMN IF NOT EXISTS warehouse_row TEXT DEFAULT 'Sin Asignar';
 
 ALTER TABLE public.expected_series 
+ADD COLUMN IF NOT EXISTS warehouse_name TEXT DEFAULT 'Almacén 1';
+
+ALTER TABLE public.expected_series 
+ADD COLUMN IF NOT EXISTS warehouse_space TEXT;
+
+ALTER TABLE public.expected_series 
 ADD COLUMN IF NOT EXISTS internal_number INTEGER;
 
 ALTER TABLE public.expected_series 
 ADD COLUMN IF NOT EXISTS printer_status TEXT DEFAULT 'DISPONIBLE';
+
+ALTER TABLE public.expected_series 
+ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ;
 
 -- 3. Tabla para almacenar la configuración y coordenadas del mapa del almacén
 CREATE TABLE IF NOT EXISTS public.warehouse_map_config (

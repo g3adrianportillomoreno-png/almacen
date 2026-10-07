@@ -2,7 +2,9 @@ import { useState, useRef, useMemo } from 'react';
 import { extractSeriesFromExcel } from '../utils/excelParser';
 import { extractSeriesFromPDF } from '../utils/pdfParser';
 import { InventoryController } from '../controllers/InventoryController.js';
+import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import WarehouseMapView from './WarehouseMapView.jsx';
+import WarehouseAssignmentView from './WarehouseAssignmentView.jsx';
 
 export default function HomeView({ 
   batches = [], 
@@ -10,19 +12,30 @@ export default function HomeView({
   onSelectBatch, 
   onDeleteBatch,
   onNavigateToModelSearch,
+  onNavigateToAssignment,
   onStatusChange,
   onLayoutChange
 }) {
   const [isProcessingFile, setIsProcessingFile] = useState(false);
 
-  // Modal para que el operador coloque obligatoriamente el consecutivo manual
+  // Modal para que el operador coloque obligatoriamente el consecutivo manual y contraseña de autorización
   const [pendingUploadData, setPendingUploadData] = useState(null);
   const [manualConsecutiveInput, setManualConsecutiveInput] = useState('');
+  const [uploadPasswordInput, setUploadPasswordInput] = useState('');
+
+  // Modal de seguridad para borrar lote con contraseña
+  const [deleteModalBatch, setDeleteModalBatch] = useState(null);
+  const [deletePasswordInput, setDeletePasswordInput] = useState('');
 
   // Buscador por modelo en la pantalla principal
   const [quickModelQuery, setQuickModelQuery] = useState('');
 
   const fileInputRef = useRef(null);
+
+  // Layout de almacenes y filas activas
+  const mapLayout = useMemo(() => WarehouseMapController.loadMap(), []);
+  const availableWarehouses = useMemo(() => mapLayout.warehouses.map(w => w.name), [mapLayout]);
+  const availableRows = useMemo(() => mapLayout.rows.map(r => r.name), [mapLayout]);
 
   // Extraer todas las impresoras para el buscador por modelo y estadísticas
   const allPrinters = useMemo(() => {
@@ -72,6 +85,7 @@ export default function HomeView({
       }
 
       setManualConsecutiveInput('');
+      setUploadPasswordInput('');
       setPendingUploadData({
         fileName: file.name,
         series: extractedSeries
@@ -89,14 +103,36 @@ export default function HomeView({
   const handleConfirmCreateBatch = (e) => {
     e.preventDefault();
     if (!pendingUploadData) return;
-    const trimmed = manualConsecutiveInput.trim();
-    if (!trimmed) {
+
+    if (uploadPasswordInput.trim() !== 'QWERTY') {
+      alert("Contraseña incorrecta. Se requiere autorización para subir documentos.");
+      return;
+    }
+
+    const trimmedConsecutive = manualConsecutiveInput.trim();
+    if (!trimmedConsecutive) {
       alert("Por favor ingresa el número consecutivo de inventario para este checklist.");
       return;
     }
 
-    onCreateBatch(pendingUploadData.fileName, pendingUploadData.series, trimmed);
+    onCreateBatch(pendingUploadData.fileName, pendingUploadData.series, trimmedConsecutive);
     setPendingUploadData(null);
+    setManualConsecutiveInput('');
+    setUploadPasswordInput('');
+  };
+
+  const handleConfirmDeleteBatch = (e) => {
+    e.preventDefault();
+    if (!deleteModalBatch) return;
+
+    if (deletePasswordInput.trim() !== 'QWERTY') {
+      alert("Contraseña incorrecta. No se puede eliminar el documento.");
+      return;
+    }
+
+    onDeleteBatch(deleteModalBatch.id);
+    setDeleteModalBatch(null);
+    setDeletePasswordInput('');
   };
 
   return (
@@ -209,13 +245,13 @@ export default function HomeView({
         </div>
       </div>
 
-      {/* CONTENEDOR PRINCIPAL: 2 COLUMNAS EN PANTALLA COMPLETA (IZQUIERDA: OPERACIÓN / DERECHA: MAPA) */}
+      {/* CONTENEDOR PRINCIPAL: 2 COLUMNAS EN PANTALLA COMPLETA */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 w-full items-start">
         
-        {/* COLUMNA IZQUIERDA: BUSCADOR POR MODELO Y LISTA DE CHECKLISTS */}
+        {/* COLUMNA IZQUIERDA: BUSCADOR POR MODELO, ASIGNACIÓN EN ALMACÉN Y LISTA DE CHECKLISTS */}
         <div className="lg:col-span-6 flex flex-col gap-6 w-full">
           
-          {/* BUSCADOR POR MODELO (CONSULTA / BAJA) */}
+          {/* 1. BUSCADOR POR MODELO (CONSULTA / BAJA) */}
           <div className="w-full bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
               <div className="flex items-center gap-2.5">
@@ -279,7 +315,7 @@ export default function HomeView({
                               {badge.label}
                             </span>
                             <span className="text-[11px] text-blue-700 font-medium bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                              {printer.warehouseRow}
+                              {printer.warehouseRow} {printer.warehouseSpace ? `(${printer.warehouseSpace})` : ''}
                             </span>
                           </div>
                           <p className="text-xs text-slate-600 mt-1 truncate">
@@ -328,7 +364,33 @@ export default function HomeView({
             )}
           </div>
 
-          {/* LISTA DE CHECKLISTS REGISTRADOS (CONTROL DE INVENTARIO) */}
+          {/* 2. BOTÓN DEDICADO: ASIGNACIÓN Y ACOMODO EN ALMACÉN */}
+          <div className="w-full bg-white p-4 rounded-2xl shadow-xs border border-slate-200">
+            <button
+              type="button"
+              onClick={onNavigateToAssignment}
+              className="w-full bg-slate-800 hover:bg-slate-900 text-white font-medium p-4 rounded-xl transition flex items-center justify-between shadow-xs group cursor-pointer"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-slate-700 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  </svg>
+                </div>
+                <div className="text-left">
+                  <span className="text-sm font-bold block text-white">
+                    Asignación y Acomodo en Almacén
+                  </span>
+                  <span className="text-xs text-slate-300 block font-normal">
+                    Subir Excel, capturar con cámara (zoom/linterna) o pistola y descargar Excel
+                  </span>
+                </div>
+              </div>
+              <span className="text-slate-300 group-hover:text-white group-hover:translate-x-1 transition-transform text-sm">&rarr;</span>
+            </button>
+          </div>
+
+          {/* 3. LISTA DE CHECKLISTS REGISTRADOS (CONTROL DE INVENTARIO) */}
           <div className="w-full bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
             <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2.5">
               <div className="flex items-center gap-2.5">
@@ -408,9 +470,9 @@ export default function HomeView({
                       </button>
 
                       <button 
-                        onClick={() => onDeleteBatch(batch.id)}
+                        onClick={() => handleRequestDelete(batch)}
                         className="p-2.5 bg-white rounded-xl border border-slate-200 hover:bg-rose-50 hover:border-rose-300 hover:text-rose-600 text-slate-400 transition-colors"
-                        title="Eliminar Checklist"
+                        title="Eliminar Checklist (Requiere autorización)"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                       </button>
@@ -432,41 +494,67 @@ export default function HomeView({
 
       </div>
 
-      {/* MODAL OBLIGATORIO: EL OPERADOR REGISTRA MANUALMENTE EL NÚMERO CONSECUTIVO */}
+      {/* MODAL OBLIGATORIO: CONSECUTIVO MANUAL Y CONTRASEÑA QWERTY AL SUBIR DOCUMENTO */}
       {pendingUploadData && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <form 
             onSubmit={handleConfirmCreateBatch}
-            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 animate-fade-in-up"
+            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 animate-fade-in-up flex flex-col gap-4"
           >
-            <div className="w-12 h-12 bg-red-50 text-red-600 rounded-xl flex items-center justify-center mx-auto mb-3">
+            <div className="w-12 h-12 bg-red-50 text-red-600 rounded-xl flex items-center justify-center mx-auto">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
               </svg>
             </div>
-            <h3 className="text-base font-bold text-slate-800 text-center">
-              Registrar Consecutivo de Inventario
-            </h3>
-            <p className="text-xs text-slate-500 text-center mt-1">
-              Documento: <span className="font-semibold text-slate-700">{pendingUploadData.fileName}</span> ({pendingUploadData.series.length} series detectadas).
-            </p>
-
-            <div className="my-5 bg-slate-50 border border-slate-200 p-4 rounded-xl">
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
-                Número Consecutivo de Checklist (Ingreso Manual):
-              </label>
-              <input
-                type="text"
-                required
-                autoFocus
-                placeholder="EJ: 001, 105, 2026-A..."
-                value={manualConsecutiveInput}
-                onChange={(e) => setManualConsecutiveInput(e.target.value)}
-                className="w-full border border-slate-300 focus:border-red-600 focus:ring-2 focus:ring-red-100 rounded-xl px-3 py-2 text-center text-base font-bold text-slate-800 uppercase"
-              />
-              <p className="text-[11px] text-slate-400 mt-2 text-center">
-                El operador ingresa la numeración de manejo de inventario.
+            
+            <div className="text-center">
+              <h3 className="text-base font-bold text-slate-800">
+                Registrar Consecutivo de Inventario
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Documento: <span className="font-semibold text-slate-700">{pendingUploadData.fileName}</span>
               </p>
+            </div>
+
+            {/* AVISO DESTACADO DE IMPRESORAS DETECTADAS */}
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3 rounded-xl text-center flex items-center justify-center gap-2">
+              <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span className="text-xs font-semibold">
+                Se detectaron <strong className="text-sm font-bold text-emerald-700">{pendingUploadData.series.length} impresoras</strong> en el documento.
+              </span>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Número Consecutivo de Checklist (Ingreso Manual):
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="EJ: 001, 105, 2026-A..."
+                  value={manualConsecutiveInput}
+                  onChange={(e) => setManualConsecutiveInput(e.target.value)}
+                  className="w-full border border-slate-300 focus:border-red-600 focus:ring-2 focus:ring-red-100 rounded-xl px-3 py-2 text-center text-sm font-bold text-slate-800 uppercase"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Contraseña de Autorización:
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Ingresa contraseña requerida"
+                  value={uploadPasswordInput}
+                  onChange={(e) => setUploadPasswordInput(e.target.value)}
+                  className="w-full border border-slate-300 focus:border-red-600 focus:ring-2 focus:ring-red-100 rounded-xl px-3 py-2 text-center text-sm font-bold text-slate-800"
+                />
+              </div>
             </div>
 
             <div className="flex gap-2.5">
@@ -487,6 +575,63 @@ export default function HomeView({
           </form>
         </div>
       )}
+
+      {/* MODAL DE SEGURIDAD: CONTRASEÑA QWERTY PARA ELIMINAR LOTE */}
+      {deleteModalBatch && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <form 
+            onSubmit={handleConfirmDeleteBatch}
+            className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-xl border border-slate-200 animate-fade-in-up flex flex-col gap-3"
+          >
+            <div className="w-12 h-12 bg-rose-50 text-rose-600 rounded-xl flex items-center justify-center mx-auto">
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+            </div>
+            
+            <div className="text-center">
+              <h3 className="text-base font-bold text-slate-800">
+                Eliminar Checklist / Folio
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                ¿Deseas eliminar <span className="font-semibold text-slate-700">{deleteModalBatch.folio}</span> ({deleteModalBatch.cleanName || deleteModalBatch.name})?
+              </p>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl">
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Contraseña de Confirmación:
+              </label>
+              <input
+                type="password"
+                required
+                autoFocus
+                placeholder="INGRESA CONTRASEÑA PARA BORRAR"
+                value={deletePasswordInput}
+                onChange={(e) => setDeletePasswordInput(e.target.value)}
+                className="w-full border border-slate-300 focus:border-rose-600 focus:ring-2 focus:ring-rose-100 rounded-xl px-3 py-2 text-center text-sm font-bold text-slate-800"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteModalBatch(null)}
+                className="flex-1 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs transition shadow-xs"
+              >
+                Confirmar Borrado
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
     </div>
   );
 }
