@@ -106,6 +106,36 @@ export class WarehouseMapModel {
   }
 
   /**
+   * Obtiene todos los nombres únicos de filas registrados en todos los almacenes
+   */
+  getAllRowNames() {
+    const set = new Set();
+    this.warehouses.forEach(w => {
+      (w.rows || []).forEach(r => {
+        if (r.name && r.name.trim()) set.add(r.name.trim());
+      });
+    });
+    return Array.from(set).sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
+      return numA - numB;
+    });
+  }
+
+  /**
+   * Elimina un almacén del mapa (solo si hay más de 1 almacén registrado)
+   */
+  removeWarehouse(warehouseId) {
+    if (this.warehouses.length <= 1) return this;
+    const updatedWarehouses = this.warehouses.filter(w => w.id !== warehouseId);
+    const newActiveId = this.activeWarehouseId === warehouseId ? updatedWarehouses[0].id : this.activeWarehouseId;
+    return new WarehouseMapModel({
+      warehouses: updatedWarehouses,
+      activeWarehouseId: newActiveId
+    });
+  }
+
+  /**
    * Modifica el nombre de una Fila en el almacén activo
    */
   renameRow(id, newName) {
@@ -167,22 +197,43 @@ export class WarehouseMapModel {
 
   /**
    * Asegura que una fila exista en el almacén especificado (o en el activo).
-   * Si no existe, crea un nuevo cuadro gráfico y lo añade al plano.
+   * Si el almacén no existe, lo crea automáticamente como una nueva pestaña en el plano del mapa.
+   * Si la fila no existe en el almacén, crea automáticamente el cuadro gráfico y lo añade al plano.
    */
   ensureRowExists(rowName, warehouseNameOrId = null) {
     const cleanRowName = (rowName || '').trim();
     if (!cleanRowName) return this;
 
-    // Buscar almacén objetivo
+    const cleanWhName = (warehouseNameOrId || '').trim();
+    let currentWarehouses = this.warehouses.map(w => ({
+      ...w,
+      rows: [...(w.rows || [])]
+    }));
+
     let targetWh = null;
-    if (warehouseNameOrId) {
-      targetWh = this.warehouses.find(w => 
-        w.id === warehouseNameOrId || 
-        w.name.trim().toLowerCase() === String(warehouseNameOrId).trim().toLowerCase()
+    let whCreated = false;
+
+    if (cleanWhName) {
+      targetWh = currentWarehouses.find(w => 
+        w.id === cleanWhName || 
+        w.name.trim().toLowerCase() === cleanWhName.toLowerCase()
       );
     }
+
+    // Si se especificó un almacén y no existe en la lista de almacenes, crearlo dinámicamente como nueva pestaña
+    if (!targetWh && cleanWhName) {
+      const newWhId = `alm-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      targetWh = {
+        id: newWhId,
+        name: cleanWhName,
+        rows: []
+      };
+      currentWarehouses.push(targetWh);
+      whCreated = true;
+    }
+
     if (!targetWh) {
-      targetWh = this.getActiveWarehouse() || this.warehouses[0];
+      targetWh = currentWarehouses.find(w => w.id === this.activeWarehouseId) || currentWarehouses[0];
     }
     if (!targetWh) return this;
 
@@ -191,38 +242,32 @@ export class WarehouseMapModel {
       (r.name || '').trim().toLowerCase() === rowNameLower
     );
 
-    if (alreadyExists) {
+    if (alreadyExists && !whCreated) {
       return this;
     }
 
-    const currentRows = targetWh.rows || [];
-    const id = `fila-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const cols = 2;
-    const index = currentRows.length;
-    const rowIdx = Math.floor(index / cols);
-    const colIdx = index % cols;
+    if (!alreadyExists) {
+      const currentRows = targetWh.rows || [];
+      const id = `fila-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const cols = 2;
+      const index = currentRows.length;
+      const rowIdx = Math.floor(index / cols);
+      const colIdx = index % cols;
 
-    const newRect = {
-      id,
-      name: cleanRowName,
-      x: 20 + colIdx * 210,
-      y: 20 + rowIdx * 140,
-      width: 190,
-      height: 120
-    };
+      const newRect = {
+        id,
+        name: cleanRowName,
+        x: 20 + colIdx * 210,
+        y: 20 + rowIdx * 140,
+        width: 190,
+        height: 120
+      };
 
-    const updatedWarehouses = this.warehouses.map(w => {
-      if (w.id === targetWh.id) {
-        return {
-          ...w,
-          rows: [...w.rows, newRect]
-        };
-      }
-      return w;
-    });
+      targetWh.rows.push(newRect);
+    }
 
     return new WarehouseMapModel({
-      warehouses: updatedWarehouses,
+      warehouses: currentWarehouses,
       activeWarehouseId: this.activeWarehouseId
     });
   }
@@ -279,14 +324,25 @@ export class WarehouseMapModel {
   }
 
   /**
-   * Calcula las métricas para una fila dada: Rango Numérico (1 - 80), conteo y modelos
+   * Calcula las métricas para una fila dada: Rango de Espacios asignados (ej: 1 D - 19 D o 1 - 20),
+   * conteo de equipos y modelos presentes.
    */
-  static calculateRowStats(rowName, allPrinters = []) {
+  static calculateRowStats(rowName, allPrinters = [], warehouseName = null) {
     const normalize = str => (str || '').trim().toLowerCase();
-    const target = normalize(rowName);
+    const targetRow = normalize(rowName);
+    const targetWh = warehouseName ? normalize(warehouseName) : null;
 
     // Filtrar impresoras de esta fila (excluyendo las dadas de BAJA)
-    const inRow = allPrinters.filter(p => normalize(p.warehouseRow) === target);
+    const inRow = allPrinters.filter(p => {
+      const rowMatches = normalize(p.warehouseRow) === targetRow;
+      if (!rowMatches) return false;
+      if (targetWh) {
+        const pWh = normalize(p.warehouseName);
+        return !pWh || pWh === targetWh;
+      }
+      return true;
+    });
+
     const activeInRow = inRow.filter(p => !p.isBaja);
     const bajasInRow = inRow.filter(p => p.isBaja);
     const consultasInRow = inRow.filter(p => p.isConsulta);
@@ -295,13 +351,46 @@ export class WarehouseMapModel {
     const modelsSet = new Set(activeInRow.map(p => p.material).filter(Boolean));
     const modelsList = Array.from(modelsSet);
 
-    // Extraer números internos asignados por el operador a las impresoras en esta fila
+    // Extraer espacios físicos asignados (ej: '19 D', '3 I', '14 D', '12', '11'...)
+    const rawSpaces = activeInRow
+      .map(p => (p.warehouseSpace || '').trim())
+      .filter(s => s && s.toLowerCase() !== 'general' && s.toLowerCase() !== 'sin asignar');
+
+    // Extraer números internos de equipo
     const rawNumbers = activeInRow
       .map(p => p.internalNumber)
-      .filter(n => n !== null && n !== undefined && n !== '');
+      .filter(n => n !== null && n !== undefined && String(n).trim() !== '');
 
-    let numberRangeText = 'Sin numerar';
-    if (rawNumbers.length > 0) {
+    let numberRangeText = 'Sin espacios';
+    let spacesList = [];
+
+    if (rawSpaces.length > 0) {
+      // Ordenamiento natural de espacios asignados:
+      // Agrupa numéricamente por el número presente en el texto (ej: "3 I" -> 3, "14 D" -> 14)
+      const uniqueSpaces = Array.from(new Set(rawSpaces));
+      spacesList = uniqueSpaces.sort((a, b) => {
+        const numA = parseInt(a.replace(/\D/g, ''), 10);
+        const numB = parseInt(b.replace(/\D/g, ''), 10);
+        if (!isNaN(numA) && !isNaN(numB)) {
+          if (numA !== numB) return numA - numB;
+          return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+        }
+        if (!isNaN(numA)) return -1;
+        if (!isNaN(numB)) return 1;
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+      if (spacesList.length === 1) {
+        numberRangeText = `${spacesList[0]}`;
+      } else if (spacesList.length === 2) {
+        numberRangeText = `${spacesList[0]} - ${spacesList[1]}`;
+      } else {
+        const minSpace = spacesList[0];
+        const maxSpace = spacesList[spacesList.length - 1];
+        numberRangeText = `${minSpace} - ${maxSpace}`;
+      }
+    } else if (rawNumbers.length > 0) {
+      // Si aún no tienen espacio físico pero tienen número de equipo asignado
       const numericList = rawNumbers
         .map(n => Number(n))
         .filter(n => !isNaN(n))
@@ -310,7 +399,7 @@ export class WarehouseMapModel {
       if (numericList.length > 0) {
         const min = numericList[0];
         const max = numericList[numericList.length - 1];
-        numberRangeText = min === max ? `${min}` : `${min} - ${max}`;
+        numberRangeText = min === max ? `#${min}` : `#${min} - #${max}`;
       } else {
         numberRangeText = rawNumbers.join(', ');
       }
@@ -322,7 +411,8 @@ export class WarehouseMapModel {
       bajasCount: bajasInRow.length,
       consultasCount: consultasInRow.length,
       models: modelsList,
-      numberRangeText, // Rango numérico asignado (ej. 1 - 80)
+      numberRangeText, // Rango de espacios asignados (ej. 1 D - 19 D o 1 - 20)
+      spacesList,
       printers: inRow
     };
   }

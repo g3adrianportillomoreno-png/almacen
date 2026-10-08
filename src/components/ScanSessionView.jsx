@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 import { InventoryController } from '../controllers/InventoryController';
+import { WarehouseMapController } from '../controllers/WarehouseMapController';
 
 export default function ScanSessionView({ 
   batchDetails, 
@@ -146,6 +147,11 @@ export default function ScanSessionView({
     setLastAssignedLocation(`${selectedWarehouse} → ${selectedRow} [${spaceFinal}]`);
     setSearchSuccess(true);
     
+    // Asegurar que el almacén y la fila existan en el plano del mapa gráfico
+    if (selectedRow) {
+      WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
+    }
+
     onCompleteTrailer(pendingAssignmentItem.rawCode, {
       warehouseName: selectedWarehouse,
       warehouseRow: selectedRow,

@@ -27,7 +27,7 @@ function App() {
   const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
 
   const availableRows = useMemo(() => {
-    return mapModel.getRowNames();
+    return mapModel.getAllRowNames ? mapModel.getAllRowNames() : mapModel.getRowNames();
   }, [mapModel]);
 
   // Carga centralizada de checklists usando el controlador
@@ -234,7 +234,10 @@ function App() {
             {view === 'masterInventory' && (
               <MasterInventoryView 
                 allPrinters={allPrinters}
-                onInventoryChange={fetchBatches}
+                onInventoryChange={() => {
+                  fetchBatches();
+                  handleLayoutChange();
+                }}
                 availableWarehouses={mapModel.warehouses.map(w => w.name)}
                 availableRows={availableRows}
                 onNavigateToChecklists={() => setView('home')}
@@ -275,7 +278,10 @@ function App() {
             {(view === 'equipmentReading' || view === 'assignment') && (
               <EquipmentReadingView 
                 checklists={batches}
-                onAssignmentSaved={fetchBatches}
+                onAssignmentSaved={() => {
+                  fetchBatches();
+                  handleLayoutChange();
+                }}
                 availableWarehouses={mapModel.warehouses.map(w => w.name)}
                 availableRows={availableRows}
                 onBackToHome={() => setView('home')}

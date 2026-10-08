@@ -6,14 +6,24 @@ export default function WarehouseMapView({
   checklists = [], 
   onLayoutChange 
 }) {
-  const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
+  // Extraer todas las impresoras de todos los lotes
+  const allPrinters = useMemo(() => {
+    return InventoryController.extractAllPrinters(checklists);
+  }, [checklists]);
+
+  const [mapModel, setMapModel] = useState(() => {
+    const loaded = WarehouseMapController.loadMap();
+    return WarehouseMapController.syncWarehousesFromPrinters(loaded, allPrinters);
+  });
   const [draggingId, setDraggingId] = useState(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  // Sincronizar el modelo del mapa cuando cambien los checklists (nuevas filas creadas al capturar)
+  // Sincronizar el modelo del mapa cuando cambien los checklists (nuevos almacenes y filas creados al capturar)
   useEffect(() => {
-    setMapModel(WarehouseMapController.loadMap());
-  }, [checklists]);
+    const loaded = WarehouseMapController.loadMap();
+    const synced = WarehouseMapController.syncWarehousesFromPrinters(loaded, allPrinters);
+    setMapModel(synced);
+  }, [checklists, allPrinters]);
 
   // Edición del nombre de la fila
   const [editingRowId, setEditingRowId] = useState(null);
@@ -35,11 +45,6 @@ export default function WarehouseMapView({
   const activeWarehouse = useMemo(() => {
     return mapModel.getActiveWarehouse();
   }, [mapModel]);
-
-  // Extraer todas las impresoras de todos los lotes
-  const allPrinters = useMemo(() => {
-    return InventoryController.extractAllPrinters(checklists);
-  }, [checklists]);
 
   // Calcular estadísticas y rangos numéricos para cada fila del almacén activo
   const statsMap = useMemo(() => {
@@ -153,6 +158,15 @@ export default function WarehouseMapView({
     }
   };
 
+  const handleDeleteActiveWarehouse = () => {
+    if (mapModel.warehouses.length <= 1) return;
+    if (window.confirm(`¿Deseas eliminar la pestaña del almacén "${activeWarehouse.name}" y su plano del mapa?`)) {
+      const updated = WarehouseMapController.deleteWarehouse(mapModel, activeWarehouse.id);
+      setMapModel(updated);
+      if (onLayoutChange) onLayoutChange();
+    }
+  };
+
   const handleManualSave = () => {
     WarehouseMapController.saveMap(mapModel);
     setSavedAlert(true);
@@ -190,8 +204,8 @@ export default function WarehouseMapView({
           </button>
         </div>
 
-        {/* Renombrar el nombre del Almacén / Mapa activo */}
-        <div className="flex items-center gap-2">
+        {/* Renombrar o Eliminar el Almacén / Mapa activo */}
+        <div className="flex items-center gap-1.5">
           {isEditingWarehouseName ? (
             <form onSubmit={handleSaveRenameWarehouse} className="flex items-center gap-1">
               <input
@@ -213,16 +227,31 @@ export default function WarehouseMapView({
               </button>
             </form>
           ) : (
-            <button
-              onClick={handleStartRenameWarehouse}
-              className="text-xs font-medium text-slate-600 hover:text-slate-900 flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 transition"
-              title="Cambiar nombre del almacén o mapa"
-            >
-              <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-              </svg>
-              <span>{activeWarehouse.name}</span>
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleStartRenameWarehouse}
+                className="text-xs font-medium text-slate-600 hover:text-slate-900 flex items-center gap-1.5 bg-white px-2.5 py-1 rounded-lg border border-slate-200 transition"
+                title="Cambiar nombre del almacén o mapa"
+              >
+                <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                </svg>
+                <span>{activeWarehouse.name}</span>
+              </button>
+
+              {mapModel.warehouses.length > 1 && (
+                <button
+                  type="button"
+                  onClick={handleDeleteActiveWarehouse}
+                  className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 border border-slate-200 transition"
+                  title={`Eliminar almacén "${activeWarehouse.name}" del mapa`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              )}
+            </div>
           )}
         </div>
       </div>
@@ -365,12 +394,15 @@ export default function WarehouseMapView({
                     )}
                   </div>
 
-                  {/* RANGO NUMÉRICO EN ESTA FILA (EJ: 1 - 80) */}
+                  {/* RANGO DE ESPACIOS ASIGNADOS EN ESTA FILA (EJ: 1 D - 19 D o 1 - 20) */}
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-2 mt-1">
                     <span className="block text-[9px] text-slate-500 font-medium uppercase tracking-wider">
-                      Rango en Fila:
+                      Rango de Espacios:
                     </span>
-                    <p className="font-bold text-sm text-slate-800 truncate" title={stats.numberRangeText}>
+                    <p 
+                      className="font-bold text-sm text-slate-800 truncate" 
+                      title={stats.numberRangeText + (stats.spacesList?.length > 1 ? ` (Espacios: ${stats.spacesList.join(', ')})` : '')}
+                    >
                       {stats.numberRangeText}
                     </p>
                   </div>

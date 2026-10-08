@@ -1,4 +1,5 @@
 import { InventoryRepository } from '../services/InventoryRepository.js';
+import { WarehouseMapController } from './WarehouseMapController.js';
 import { PrinterModel } from '../models/PrinterModel.js';
 import * as XLSX from 'xlsx';
 
@@ -211,6 +212,10 @@ export class InventoryController {
         warehouseRow: item.warehouseRow,
         warehouseSpace: item.warehouseSpace
       });
+
+      if (item.warehouseRow) {
+        WarehouseMapController.ensureRowExists(item.warehouseRow, item.warehouseName);
+      }
 
       if (result.isUpdate) {
         updated++;

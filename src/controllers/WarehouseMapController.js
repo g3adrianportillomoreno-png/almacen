@@ -90,19 +90,34 @@ export class WarehouseMapController {
   }
 
   /**
+   * Elimina un almacén y actualiza la persistencia
+   */
+  static deleteWarehouse(mapModel, warehouseId) {
+    const updated = mapModel.removeWarehouse(warehouseId);
+    InventoryRepository.saveMapLayout(updated);
+    return updated;
+  }
+
+  /**
    * Obtiene las estadísticas para todas las filas del almacén activo
    */
   static getStatsForAllRows(mapModel, allPrinters = []) {
     const statsMap = {};
+    const activeWh = mapModel.getActiveWarehouse();
     for (const row of mapModel.rows) {
-      statsMap[row.name] = WarehouseMapModel.calculateRowStats(row.name, allPrinters);
+      statsMap[row.name] = WarehouseMapModel.calculateRowStats(
+        row.name, 
+        allPrinters, 
+        activeWh?.name || activeWh?.id
+      );
     }
     return statsMap;
   }
 
   /**
    * Asegura que una fila exista en el mapa del almacén correspondiente.
-   * Si no existe, crea automáticamente el cuadro gráfico y lo guarda.
+   * Si el almacén no existe, crea automáticamente la pestaña en el plano gráfico.
+   * Si la fila no existe, crea automáticamente el cuadro gráfico y lo guarda.
    */
   static ensureRowExists(rowName, warehouseName = null) {
     if (!rowName || !rowName.trim()) return null;
@@ -111,6 +126,25 @@ export class WarehouseMapController {
     if (updated !== currentModel) {
       WarehouseMapController.saveMap(updated);
       return updated;
+    }
+    return currentModel;
+  }
+
+  /**
+   * Sincroniza dinámicamente cualquier almacén o fila que exista en las impresoras registradas,
+   * garantizando que cada almacén tenga su pestaña y cada fila su rectángulo en el plano.
+   */
+  static syncWarehousesFromPrinters(mapModel, allPrinters = []) {
+    if (!mapModel || !Array.isArray(allPrinters)) return mapModel;
+    let currentModel = mapModel;
+    for (const p of allPrinters) {
+      if (p.warehouseRow && p.warehouseRow.trim() && p.warehouseRow !== 'Sin Asignar') {
+        const wh = p.warehouseName && p.warehouseName.trim() ? p.warehouseName.trim() : null;
+        currentModel = currentModel.ensureRowExists(p.warehouseRow, wh);
+      }
+    }
+    if (currentModel !== mapModel) {
+      WarehouseMapController.saveMap(currentModel);
     }
     return currentModel;
   }
