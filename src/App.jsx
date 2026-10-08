@@ -14,9 +14,10 @@ import ModelSearchView from './components/ModelSearchView';
 import WarehouseMapView from './components/WarehouseMapView';
 import WarehouseAssignmentView from './components/WarehouseAssignmentView';
 import MasterInventoryView from './components/MasterInventoryView';
+import EquipmentReadingView from './components/EquipmentReadingView';
 
 function App() {
-  const [view, setView] = useState('masterInventory'); // 'masterInventory', 'home', 'scan', 'modelSearch', 'warehouseMap'
+  const [view, setView] = useState('masterInventory'); // 'masterInventory', 'home', 'scan', 'equipmentReading', 'modelSearch', 'warehouseMap'
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -248,7 +249,8 @@ function App() {
                 onSelectBatch={handleSelectBatch}
                 onDeleteBatch={handleDeleteBatch}
                 onNavigateToModelSearch={() => setView('modelSearch')}
-                onNavigateToAssignment={() => setView('masterInventory')}
+                onNavigateToAssignment={() => setView('equipmentReading')}
+                onNavigateToReading={() => setView('equipmentReading')}
                 onNavigateToMasterInventory={() => setView('masterInventory')}
                 onStatusChange={fetchBatches}
                 onLayoutChange={handleLayoutChange}
@@ -269,7 +271,18 @@ function App() {
               />
             )}
 
-            {/* Vista 4: Buscador por Modelo (CONSULTA y BAJA) */}
+            {/* Vista 4: Lectura y Acomodo de Equipos (Asignar ubicación a equipos sin ubicación) */}
+            {(view === 'equipmentReading' || view === 'assignment') && (
+              <EquipmentReadingView 
+                checklists={batches}
+                onAssignmentSaved={fetchBatches}
+                availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                availableRows={availableRows}
+                onBackToHome={() => setView('home')}
+              />
+            )}
+
+            {/* Vista 5: Buscador por Modelo (CONSULTA y BAJA) */}
             {view === 'modelSearch' && (
               <ModelSearchView 
                 checklists={batches}
@@ -279,23 +292,12 @@ function App() {
               />
             )}
 
-            {/* Vista 5: Mapa de Almacén con Rectángulos y Rangos de Serie */}
+            {/* Vista 6: Mapa de Almacén con Rectángulos y Rangos de Serie */}
             {view === 'warehouseMap' && (
               <WarehouseMapView 
                 checklists={batches}
                 onLayoutChange={handleLayoutChange}
                 onPrinterChange={fetchBatches}
-              />
-            )}
-
-            {/* Vista 6: Asignación Rápida alternativa */}
-            {view === 'assignment' && (
-              <MasterInventoryView 
-                allPrinters={allPrinters}
-                onInventoryChange={fetchBatches}
-                availableWarehouses={mapModel.warehouses.map(w => w.name)}
-                availableRows={availableRows}
-                onNavigateToChecklists={() => setView('home')}
               />
             )}
           </>

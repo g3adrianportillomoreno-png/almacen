@@ -47,6 +47,34 @@ export class InventoryController {
   }
 
   /**
+   * Extrae absolutamente todas las impresoras esperadas/registradas en el sistema
+   * (tanto de almacén maestro como de checklists pendientes de lectura física).
+   * Útil para la pantalla de Lectura de Equipos para buscar o listar las que faltan por ubicar.
+   */
+  static extractAllExpectedPrinters(checklists = []) {
+    const list = [];
+    const seenSerials = new Set();
+
+    for (const batch of checklists) {
+      for (const printer of (batch.expectedSeries || [])) {
+        if (!printer.serial) continue;
+        const serialUpper = String(printer.serial).trim().toUpperCase();
+
+        if (!seenSerials.has(serialUpper)) {
+          seenSerials.add(serialUpper);
+          list.push({
+            ...printer,
+            batchId: batch.id,
+            batchFolio: batch.folio,
+            batchName: batch.cleanName || batch.name
+          });
+        }
+      }
+    }
+    return list;
+  }
+
+  /**
    * Obtiene la lista ordenada de modelos únicos para sugerencias y filtros rápidos
    */
   static getUniqueModels(printers = []) {
