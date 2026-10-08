@@ -12,16 +12,34 @@ export class InventoryController {
    * Extrae todas las impresoras registradas a lo largo de todos los lotes
    * @param {Array} checklists Lista de instancias ChecklistModel
    * @returns {Array<PrinterModel>}
+  /**
+   * Extrae todas las impresoras del inventario de almacén:
+   * Incluye las del lote de Inventario Maestro Y aquellas de checklists de recepción
+   * a las que ya se les haya dado lectura física (escaneadas).
+   * Los checklists recién subidos NO se agregan al inventario hasta que se les dé lectura.
+   * @param {Array} checklists Lista de instancias ChecklistModel
+   * @returns {Array<PrinterModel>}
    */
   static extractAllPrinters(checklists = []) {
     const list = [];
     const seenSerials = new Set();
 
     for (const batch of checklists) {
+      const isMasterBatch = batch.folio === 'MAESTRO' || batch.name === 'Inventario Maestro' || !batch.folio;
+
       for (const printer of (batch.expectedSeries || [])) {
-        if (!seenSerials.has(printer.serial)) {
-          seenSerials.add(printer.serial);
-          list.push(printer);
+        if (!printer.serial) continue;
+        const serialUpper = String(printer.serial).trim().toUpperCase();
+
+        if (!seenSerials.has(serialUpper)) {
+          // Si es del lote de inventario maestro, ya está en almacén.
+          // Si es de un checklist de recepción, SÓLO se incluye si ya se le dio lectura (isScanned === true o está en completed).
+          const isRead = Boolean(printer.isScanned) || Boolean(batch.completed && batch.completed.includes(serialUpper));
+
+          if (isMasterBatch || isRead) {
+            seenSerials.add(serialUpper);
+            list.push(printer);
+          }
         }
       }
     }
@@ -104,8 +122,8 @@ export class InventoryController {
 
   /**
    * Genera y descarga el archivo Excel Maestro con todas las impresoras de almacén
-   * Formato idéntico al documento físico oficial:
-   * Clave | Número de serie | Número de equipo | Existencias | Almacén | Fila | Espacio
+   * Formato oficial:
+   * Clave | Número de serie | Número de equipo | Almacén | Fila | Espacio
    * @param {Array<PrinterModel>} allPrinters
    */
   static exportInventoryReportToExcel(allPrinters = []) {
@@ -118,7 +136,6 @@ export class InventoryController {
       'Clave': p.material || '',
       'Número de serie': p.serial || '',
       'Número de equipo': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-      'Existencias': 1,
       'Almacén': p.warehouseName || '',
       'Fila': p.warehouseRow && p.warehouseRow !== 'Sin Asignar' ? p.warehouseRow : '',
       'Espacio': p.warehouseSpace || ''
@@ -131,7 +148,6 @@ export class InventoryController {
       { wch: 20 }, // Clave
       { wch: 22 }, // Número de serie
       { wch: 18 }, // Número de equipo
-      { wch: 12 }, // Existencias
       { wch: 16 }, // Almacén
       { wch: 14 }, // Fila
       { wch: 16 }  // Espacio

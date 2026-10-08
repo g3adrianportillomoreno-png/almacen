@@ -227,65 +227,90 @@ export default function MasterInventoryView({
         onChange={handleMasterExcelUpload} 
       />
 
-      {/* CABECERA PRINCIPAL: TÍTULO Y ACCIONES MAESTRAS */}
-      <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-slate-800 text-white flex items-center justify-center font-bold text-lg shadow-xs">
-              <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      {/* APARTADO EXCLUSIVO: SUBIR / ACTUALIZAR ARCHIVO MAESTRO */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white rounded-3xl p-6 shadow-md border border-slate-700">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-5">
+          <div className="max-w-2xl">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="bg-red-600 text-white font-bold text-[10px] px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                Base de Datos de Almacén
+              </span>
+              <span className="text-slate-400 text-xs">
+                Exclusivo para Inventario Maestro
+              </span>
+            </div>
+            <h2 className="text-xl md:text-2xl font-black text-white tracking-tight">
+              Cargar o Actualizar Archivo Maestro de Inventario
+            </h2>
+            <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+              Sube el archivo Excel con las <strong className="text-white">3 primeras columnas</strong> (<em>Clave, Número de serie, Número de equipo</em>) para registrar o relacionar equipos, o con las <strong className="text-white">6 columnas completas</strong> (incluyendo <em>Almacén, Fila, Espacio</em>) para actualizar ubicaciones de todo el almacén.
+            </p>
+            <div className="flex flex-wrap items-center gap-2.5 mt-3 text-[11px] text-slate-300">
+              <span className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 px-2.5 py-1 rounded-lg">
+                <span className="w-2 h-2 rounded-full bg-blue-400"></span>
+                Opción A: 3 Columnas (Clave, Serie, No. de Equipo)
+              </span>
+              <span className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 px-2.5 py-1 rounded-lg">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                Opción B: 6 Columnas (+ Almacén, Fila, Espacio)
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row lg:flex-col gap-2.5 w-full lg:w-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className={`bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-3 px-5 rounded-xl transition shadow-sm flex items-center justify-center gap-2 ${
+                isUploading ? 'opacity-60 cursor-not-allowed' : ''
+              }`}
+            >
+              {isUploading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <span>Procesando archivo...</span>
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                  </svg>
+                  <span>Subir Archivo Maestro (Excel)</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => InventoryController.exportInventoryReportToExcel(allPrinters)}
+              className="bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2.5 px-5 rounded-xl transition flex items-center justify-center gap-2 border border-slate-600"
+            >
+              <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-            </div>
-            <div>
-              <h2 className="text-xl font-black text-slate-800 tracking-tight">
-                Inventario Maestro de Almacén
-              </h2>
-              <p className="text-xs text-slate-500 font-medium">
-                Tabla acumuladora con las 7 columnas oficiales. Sube el Excel con números de serie para relacionar y asignar el número de equipo.
-              </p>
-            </div>
+              <span>Descargar Inventario (.xlsx)</span>
+            </button>
           </div>
         </div>
 
-        {/* BOTONES PRINCIPALES DE IMPORTACIÓN / EXPORTACIÓN */}
-        <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-          {/* Subir Excel Maestro */}
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
-            className={`flex-1 md:flex-none text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 px-4 py-2.5 rounded-xl transition shadow-xs flex items-center justify-center gap-2 ${
-              isUploading ? 'opacity-60 cursor-not-allowed' : ''
-            }`}
-            title="Subir archivo Excel para reconciliar y asignar Número de Equipo a las series registradas"
-          >
-            {isUploading ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>Procesando...</span>
-              </>
-            ) : (
-              <>
-                <svg className="w-4 h-4 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                </svg>
-                <span>Subir Excel Maestro</span>
-              </>
-            )}
-          </button>
-
-          {/* Descargar Excel Maestro (7 Columnas Exactas) */}
-          <button
-            type="button"
-            onClick={() => InventoryController.exportInventoryReportToExcel(allPrinters)}
-            className="flex-1 md:flex-none text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-4 py-2.5 rounded-xl transition shadow-2xs flex items-center justify-center gap-2"
-            title="Descargar Excel con formato oficial: Clave, Número de serie, Número de equipo, Existencias (1), Almacén, Fila, Espacio"
-          >
-            <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span>Descargar Excel</span>
-          </button>
+        {/* Separación y aclaración clara para no confundir con checklists */}
+        <div className="mt-4 pt-3 border-t border-slate-800 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 text-[11px] text-slate-400">
+          <div className="flex items-center gap-1.5">
+            <span className="text-amber-400">ℹ️</span>
+            <span>
+              <strong>Nota:</strong> Los lotes nuevos de camiones se registran en <strong>Recepciones (Checklists)</strong>. Las máquinas no entrarán al Inventario Maestro hasta que se les dé lectura física.
+            </span>
+          </div>
+          {onNavigateToChecklists && (
+            <button
+              type="button"
+              onClick={onNavigateToChecklists}
+              className="text-red-400 hover:text-red-300 font-semibold underline shrink-0"
+            >
+              Ir a Recepciones (Checklists) &rarr;
+            </button>
+          )}
         </div>
       </div>
 
@@ -432,7 +457,7 @@ export default function MasterInventoryView({
         </div>
       </div>
 
-      {/* TABLA PRINCIPAL: LAS 7 COLUMNAS OFICIALES */}
+      {/* TABLA PRINCIPAL: LAS 6 COLUMNAS OFICIALES */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -442,17 +467,16 @@ export default function MasterInventoryView({
                 <th className="py-3 px-4">1. Clave (Modelo)</th>
                 <th className="py-3 px-4">2. Número de Serie</th>
                 <th className="py-3 px-4">3. Número de Equipo</th>
-                <th className="py-3 px-4 text-center">4. Existencias</th>
-                <th className="py-3 px-4">5. Almacén</th>
-                <th className="py-3 px-4">6. Fila</th>
-                <th className="py-3 px-4">7. Espacio</th>
+                <th className="py-3 px-4">4. Almacén</th>
+                <th className="py-3 px-4">5. Fila</th>
+                <th className="py-3 px-4">6. Espacio</th>
                 <th className="py-3 px-4 text-center">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedPrinters.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="text-center py-12 text-slate-400">
+                  <td colSpan="8" className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <svg className="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
@@ -503,17 +527,12 @@ export default function MasterInventoryView({
                         )}
                       </td>
 
-                      {/* 4. EXISTENCIAS */}
-                      <td className="py-3 px-4 text-center font-bold text-slate-700">
-                        1
-                      </td>
-
-                      {/* 5. ALMACÉN */}
+                      {/* 4. ALMACÉN */}
                       <td className="py-3 px-4 font-medium text-slate-700">
                         {printer.warehouseName || 'Almacén 1'}
                       </td>
 
-                      {/* 6. FILA */}
+                      {/* 5. FILA */}
                       <td className="py-3 px-4">
                         {printer.warehouseRow && printer.warehouseRow !== 'Sin Asignar' ? (
                           <span className="font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md text-[11px]">
@@ -526,7 +545,7 @@ export default function MasterInventoryView({
                         )}
                       </td>
 
-                      {/* 7. ESPACIO */}
+                      {/* 6. ESPACIO */}
                       <td className="py-3 px-4 font-bold text-slate-800">
                         {printer.warehouseSpace ? (
                           <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-md text-[11px]">
@@ -835,3 +854,4 @@ export default function MasterInventoryView({
     </div>
   );
 }
+

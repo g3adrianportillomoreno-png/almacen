@@ -168,6 +168,41 @@ export default function HomeView({
   return (
     <div className="flex flex-col flex-1 gap-6 animate-fade-in w-full pb-16">
       
+      {/* CABECERA EXPLICATIVA DE RECEPCIONES */}
+      <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center font-bold text-lg shadow-xs shrink-0">
+            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+            </svg>
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-black text-slate-800 tracking-tight">
+                Recepciones y Checklists de Entrada (Camión)
+              </h2>
+              <span className="bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase">
+                Módulo de Lotes
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
+              Sube los lotes entrantes para verificar qué llega. Los equipos <strong className="text-slate-800">NO se agregarán al Inventario Maestro hasta que les des lectura física</strong>.
+            </p>
+          </div>
+        </div>
+
+        {onNavigateToMasterInventory && (
+          <button
+            type="button"
+            onClick={onNavigateToMasterInventory}
+            className="text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shrink-0"
+          >
+            <span>Ir al Inventario Maestro</span>
+            <span>&rarr;</span>
+          </button>
+        )}
+      </div>
+
       {/* FILA SUPERIOR: SUBIR DOCUMENTO, ESTADO DE CHECKLIST Y RESUMEN RÁPIDO */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
         {/* Input invisible para el archivo */}
@@ -179,7 +214,7 @@ export default function HomeView({
           onChange={handleFileUpload} 
         />
 
-        {/* Botón: Subir Documento */}
+        {/* Botón: Subir Checklist de Recepción */}
         <button 
           onClick={() => fileInputRef.current?.click()}
           disabled={isProcessingFile}
@@ -196,10 +231,10 @@ export default function HomeView({
           )}
           <div>
             <span className="text-sm font-semibold text-slate-800 group-hover:text-red-700 block">
-              {isProcessingFile ? 'Leyendo documento...' : 'Subir Documento (Excel / PDF)'}
+              {isProcessingFile ? 'Leyendo documento...' : 'Subir Checklist de Recepción'}
             </span>
             <span className="text-xs text-slate-500 block mt-0.5 font-normal">
-              Asignación manual de consecutivo
+              Asignar consecutivo para escaneo físico
             </span>
           </div>
         </button>
