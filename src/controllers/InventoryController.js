@@ -103,7 +103,9 @@ export class InventoryController {
   }
 
   /**
-   * Genera y descarga un archivo Excel completo con los equipos asignados y los faltantes
+   * Genera y descarga el archivo Excel Maestro con todas las impresoras de almacén
+   * Formato idéntico al documento físico oficial:
+   * Clave | Número de serie | Número de equipo | Existencias | Almacén | Fila | Espacio
    * @param {Array<PrinterModel>} allPrinters
    */
   static exportInventoryReportToExcel(allPrinters = []) {
@@ -112,76 +114,75 @@ export class InventoryController {
       return;
     }
 
-    // Dividir entre equipos que ya tienen espacio asignado (o escaneados con ubicación) y faltantes
-    const asignados = allPrinters.filter(p => p.warehouseSpace || p.isScanned);
-    const faltantes = allPrinters.filter(p => !p.warehouseSpace && !p.isScanned);
-
-    // Mapear datos para Hoja 1: Asignados
-    // Columnas exactas: CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, ALMACEN, FILA, ESPACIO
-    const dataAsignados = asignados.map((p) => ({
-      'CLAVE': p.material || '',
-      'NUMERO DE SERIE': p.serial || '',
-      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-      'ALMACEN': p.warehouseName || 'Almacén 1',
-      'FILA': p.warehouseRow || 'Fila 1',
-      'ESPACIO': p.warehouseSpace || ''
+    const dataRows = allPrinters.map((p) => ({
+      'Clave': p.material || '',
+      'Número de serie': p.serial || '',
+      'Número de equipo': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+      'Existencias': 1,
+      'Almacén': p.warehouseName || '',
+      'Fila': p.warehouseRow && p.warehouseRow !== 'Sin Asignar' ? p.warehouseRow : '',
+      'Espacio': p.warehouseSpace || ''
     }));
 
-    // Mapear datos para Hoja 2: Faltantes
-    const dataFaltantes = faltantes.map((p) => ({
-      'CLAVE': p.material || '',
-      'NUMERO DE SERIE': p.serial || '',
-      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-      'ALMACEN': '',
-      'FILA': '',
-      'ESPACIO': ''
-    }));
-
-    // Crear libro de trabajo
     const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(dataRows);
 
-    // Crear hojas
-    const wsAsignados = XLSX.utils.json_to_sheet(
-      dataAsignados.length > 0 ? dataAsignados : [{
-        'CLAVE': '',
-        'NUMERO DE SERIE': '',
-        'NUMERO DE EQUIPO': '',
-        'ALMACEN': '',
-        'FILA': '',
-        'ESPACIO': ''
-      }]
-    );
-    const wsFaltantes = XLSX.utils.json_to_sheet(
-      dataFaltantes.length > 0 ? dataFaltantes : [{
-        'CLAVE': '',
-        'NUMERO DE SERIE': '',
-        'NUMERO DE EQUIPO': '',
-        'ALMACEN': '',
-        'FILA': '',
-        'ESPACIO': ''
-      }]
-    );
-
-    // Configurar anchos de columna recomendados
-    const colWidths = [
-      { wch: 25 }, // CLAVE
-      { wch: 22 }, // NUMERO DE SERIE
-      { wch: 20 }, // NUMERO DE EQUIPO
-      { wch: 18 }, // ALMACEN
-      { wch: 15 }, // FILA
-      { wch: 18 }  // ESPACIO
+    ws['!cols'] = [
+      { wch: 20 }, // Clave
+      { wch: 22 }, // Número de serie
+      { wch: 18 }, // Número de equipo
+      { wch: 12 }, // Existencias
+      { wch: 16 }, // Almacén
+      { wch: 14 }, // Fila
+      { wch: 16 }  // Espacio
     ];
-    wsAsignados['!cols'] = colWidths;
-    wsFaltantes['!cols'] = colWidths;
 
-    // Agregar hojas al libro
-    XLSX.utils.book_append_sheet(wb, wsAsignados, "ASIGNADOS");
-    XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES");
+    XLSX.utils.book_append_sheet(wb, ws, "INVENTARIO_ALMACEN");
 
-    // Descargar archivo
     const dateStr = new Date().toISOString().slice(0, 10);
-    const fileName = `Inventario_Almacen_CDM_${dateStr}.xlsx`;
+    const fileName = `Inventario_Maestro_Almacen_${dateStr}.xlsx`;
     XLSX.writeFile(wb, fileName);
+  }
+
+  /**
+   * Reconcilia e importa filas desde un archivo Excel Maestro:
+   * Si la serie ya existe: vincula el Número de equipo y actualiza ubicación si viene en el Excel.
+   * Si la serie no existe: crea la impresora en el inventario con sus datos.
+   */
+  static async reconcileAndImportMasterExcel(parsedRows = []) {
+    if (!parsedRows || parsedRows.length === 0) return { updated: 0, added: 0 };
+
+    let updated = 0;
+    let added = 0;
+
+    for (const item of parsedRows) {
+      const serial = (item.serial || '').trim().toUpperCase();
+      if (!serial) continue;
+
+      const result = await InventoryRepository.reconcileSinglePrinter({
+        serial,
+        material: item.material,
+        internalNumber: item.internalNumber,
+        warehouseName: item.warehouseName,
+        warehouseRow: item.warehouseRow,
+        warehouseSpace: item.warehouseSpace
+      });
+
+      if (result.isUpdate) {
+        updated++;
+      } else {
+        added++;
+      }
+    }
+
+    return { updated, added, total: parsedRows.length };
+  }
+
+  /**
+   * Depura los checklists completados sin perder las impresoras asociadas.
+   */
+  static async clearCompletedChecklists(completedBatchIds = []) {
+    return await InventoryRepository.clearCompletedChecklists(completedBatchIds);
   }
 
   /**

@@ -13,9 +13,10 @@ import ScanSessionView from './components/ScanSessionView';
 import ModelSearchView from './components/ModelSearchView';
 import WarehouseMapView from './components/WarehouseMapView';
 import WarehouseAssignmentView from './components/WarehouseAssignmentView';
+import MasterInventoryView from './components/MasterInventoryView';
 
 function App() {
-  const [view, setView] = useState('home'); // 'home', 'scan', 'modelSearch', 'warehouseMap', 'assignment'
+  const [view, setView] = useState('masterInventory'); // 'masterInventory', 'home', 'scan', 'modelSearch', 'warehouseMap'
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -52,11 +53,15 @@ function App() {
     return batches.find(b => b.id === activeBatchId);
   }, [batches, activeBatchId]);
 
+  // Todas las impresoras en inventario
+  const allPrinters = useMemo(() => {
+    return InventoryController.extractAllPrinters(batches);
+  }, [batches]);
+
   // Conteo total de impresoras en estado de CONSULTA para alerta global
   const totalConsultas = useMemo(() => {
-    const all = InventoryController.extractAllPrinters(batches);
-    return all.filter(p => p.isConsulta).length;
-  }, [batches]);
+    return allPrinters.filter(p => p.isConsulta).length;
+  }, [allPrinters]);
 
   // Crear nuevo lote con número consecutivo
   const handleCreateBatch = async (fileName, series, consecutiveNumber) => {
@@ -217,14 +222,25 @@ function App() {
           </div>
         )}
 
-        {loading && view === 'home' && batches.length === 0 ? (
+        {loading && (view === 'home' || view === 'masterInventory') && batches.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64">
             <div className="w-16 h-16 border-4 border-gray-200 border-t-red-600 rounded-full animate-spin"></div>
             <p className="mt-4 text-gray-500 font-semibold">Cargando inventario y lotes de Supabase...</p>
           </div>
         ) : (
           <>
-            {/* Vista 1: Pantalla Principal / Recepción */}
+            {/* Vista 1: Inventario Maestro de Almacén (7 Columnas) */}
+            {view === 'masterInventory' && (
+              <MasterInventoryView 
+                allPrinters={allPrinters}
+                onInventoryChange={fetchBatches}
+                availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                availableRows={availableRows}
+                onNavigateToChecklists={() => setView('home')}
+              />
+            )}
+
+            {/* Vista 2: Pantalla de Recepciones / Checklists de Lotes */}
             {view === 'home' && (
               <HomeView 
                 batches={batches}
@@ -232,13 +248,14 @@ function App() {
                 onSelectBatch={handleSelectBatch}
                 onDeleteBatch={handleDeleteBatch}
                 onNavigateToModelSearch={() => setView('modelSearch')}
-                onNavigateToAssignment={() => setView('assignment')}
+                onNavigateToAssignment={() => setView('masterInventory')}
+                onNavigateToMasterInventory={() => setView('masterInventory')}
                 onStatusChange={fetchBatches}
                 onLayoutChange={handleLayoutChange}
               />
             )}
 
-            {/* Vista 2: Sesión de Escaneo */}
+            {/* Vista 3: Sesión de Escaneo de Checklist */}
             {view === 'scan' && activeBatch && (
               <ScanSessionView 
                 batchDetails={activeBatch}
@@ -247,10 +264,12 @@ function App() {
                 onFinishSession={handleFinishSession}
                 onForceFinish={handleForceFinishBatch}
                 availableRows={availableRows}
+                availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                allPrinters={allPrinters}
               />
             )}
 
-            {/* Vista 3: Buscador por Modelo (CONSULTA y BAJA) */}
+            {/* Vista 4: Buscador por Modelo (CONSULTA y BAJA) */}
             {view === 'modelSearch' && (
               <ModelSearchView 
                 checklists={batches}
@@ -260,7 +279,7 @@ function App() {
               />
             )}
 
-            {/* Vista 4: Mapa de Almacén con Rectángulos y Rangos de Serie */}
+            {/* Vista 5: Mapa de Almacén con Rectángulos y Rangos de Serie */}
             {view === 'warehouseMap' && (
               <WarehouseMapView 
                 checklists={batches}
@@ -269,16 +288,14 @@ function App() {
               />
             )}
 
-            {/* Vista 5: Pantalla Dedicada de Asignación y Acomodo con Cámara (Zoom y Linterna) o Pistola */}
+            {/* Vista 6: Asignación Rápida alternativa */}
             {view === 'assignment' && (
-              <WarehouseAssignmentView 
-                checklists={batches}
-                onCreateBatch={handleCreateBatch}
-                onAssignmentSaved={fetchBatches}
+              <MasterInventoryView 
+                allPrinters={allPrinters}
+                onInventoryChange={fetchBatches}
                 availableWarehouses={mapModel.warehouses.map(w => w.name)}
                 availableRows={availableRows}
-                onBackToHome={() => setView('home')}
-                fullScreenMode={true}
+                onNavigateToChecklists={() => setView('home')}
               />
             )}
           </>

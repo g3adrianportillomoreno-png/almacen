@@ -28,15 +28,21 @@ export async function extractSeriesFromExcel(file) {
         let serialIndex = -1;
         let materialIndex = -1;
         let internalNumberIndex = -1;
+        let warehouseIndex = -1;
+        let rowIndex = -1;
+        let spaceIndex = -1;
         let headerRowIndex = -1;
 
-        // Buscar encabezados reconociendo múltiples variaciones (CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, etc.)
+        // Buscar encabezados reconociendo múltiples variaciones (CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, ALMACEN, FILA, ESPACIO, etc.)
         for (let i = 0; i < Math.min(rows.length, 15); i++) {
           const row = rows[i];
           if (Array.isArray(row)) {
             let foundSerial = -1;
             let foundMaterial = -1;
             let foundInternal = -1;
+            let foundWarehouse = -1;
+            let foundRow = -1;
+            let foundSpace = -1;
 
             row.forEach((cell, colIdx) => {
               const norm = normalizeHeader(cell);
@@ -72,16 +78,44 @@ export async function extractSeriesFromExcel(file) {
 
               // 3. NÚMERO DE EQUIPO
               else if (
-                norm === 'numero de equipo' ||
-                norm === 'no de equipo' ||
-                norm === 'no equipo' ||
-                norm === 'num de equipo' ||
-                norm === 'numero equipo' ||
-                norm === 'equipo' ||
-                norm.includes('equipo') ||
+                norm === 'numero de equipo' || 
+                norm === 'no de equipo' || 
+                norm === 'no equipo' || 
+                norm === 'num de equipo' || 
+                norm === 'numero equipo' || 
+                norm === 'equipo' || 
+                norm.includes('equipo') || 
                 norm.includes('internal number')
               ) {
                 foundInternal = colIdx;
+              }
+
+              // 4. ALMACÉN
+              else if (
+                norm === 'almacen' || 
+                norm === 'almacenes' || 
+                norm.includes('almacen')
+              ) {
+                foundWarehouse = colIdx;
+              }
+
+              // 5. FILA
+              else if (
+                norm === 'fila' || 
+                norm === 'filas' || 
+                norm.includes('fila')
+              ) {
+                foundRow = colIdx;
+              }
+
+              // 6. ESPACIO
+              else if (
+                norm === 'espacio' || 
+                norm === 'espacios' || 
+                norm === 'posicion' || 
+                norm.includes('espacio')
+              ) {
+                foundSpace = colIdx;
               }
             });
 
@@ -89,6 +123,9 @@ export async function extractSeriesFromExcel(file) {
               serialIndex = foundSerial;
               materialIndex = foundMaterial;
               internalNumberIndex = foundInternal;
+              warehouseIndex = foundWarehouse;
+              rowIndex = foundRow;
+              spaceIndex = foundSpace;
               headerRowIndex = i;
               break;
             }
@@ -109,6 +146,9 @@ export async function extractSeriesFromExcel(file) {
           const serieRaw = row[serialIndex];
           const materialRaw = materialIndex !== -1 ? row[materialIndex] : 'MODELO GENÉRICO';
           const internalNumRaw = internalNumberIndex !== -1 ? row[internalNumberIndex] : null;
+          const warehouseRaw = warehouseIndex !== -1 ? row[warehouseIndex] : null;
+          const rowRaw = rowIndex !== -1 ? row[rowIndex] : null;
+          const spaceRaw = spaceIndex !== -1 ? row[spaceIndex] : null;
           
           if (serieRaw !== undefined && serieRaw !== null && String(serieRaw).trim() !== '') {
             const serialString = String(serieRaw).trim().toUpperCase();
@@ -123,7 +163,10 @@ export async function extractSeriesFromExcel(file) {
               items.push({
                 serial: serialString,
                 material: String(materialRaw || 'MODELO GENÉRICO').trim().toUpperCase(),
-                internalNumber: internalNumberFormatted
+                internalNumber: internalNumberFormatted,
+                warehouseName: warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null,
+                warehouseRow: rowRaw && String(rowRaw).trim() !== '' ? String(rowRaw).trim() : null,
+                warehouseSpace: spaceRaw && String(spaceRaw).trim() !== '' ? String(spaceRaw).trim() : null
               });
             }
           }

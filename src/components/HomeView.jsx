@@ -13,6 +13,7 @@ export default function HomeView({
   onDeleteBatch,
   onNavigateToModelSearch,
   onNavigateToAssignment,
+  onNavigateToMasterInventory,
   onStatusChange,
   onLayoutChange
 }) {
@@ -51,6 +52,31 @@ export default function HomeView({
   const pendingBatches = useMemo(() => {
     return batches.filter(b => b.status !== 'completed' && b.completed.length < b.expectedSeries.length);
   }, [batches]);
+
+  // Checklists 100% completados para depurar del historial sin perder impresoras
+  const completedBatches = useMemo(() => {
+    return batches.filter(b => {
+      const total = b.totalCount || b.expectedSeries.length;
+      return (total > 0 && b.completed.length >= total) || (b.status === 'completed' && b.expectedSeries.length === 0);
+    });
+  }, [batches]);
+
+  const handleClearCompletedBatches = async () => {
+    if (completedBatches.length === 0) {
+      alert("No hay checklists completados para depurar.");
+      return;
+    }
+    const confirm = window.confirm(`¿Deseas depurar ${completedBatches.length} checklist(s) completado(s) del historial? Sus impresoras ya están preservadas en el Inventario Maestro.`);
+    if (!confirm) return;
+
+    try {
+      const ids = completedBatches.map(b => b.id);
+      await InventoryController.clearCompletedChecklists(ids);
+      if (onStatusChange) onStatusChange();
+    } catch (err) {
+      alert("Error al depurar checklists: " + err.message);
+    }
+  };
 
   const hasAvailableChecklist = pendingBatches.length > 0;
 
@@ -368,25 +394,25 @@ export default function HomeView({
             )}
           </div>
 
-          {/* 2. BOTÓN DEDICADO: ASIGNACIÓN Y ACOMODO EN ALMACÉN */}
+          {/* 2. ACCESO DIRECTO AL INVENTARIO MAESTRO */}
           <div className="w-full bg-white p-4 rounded-2xl shadow-xs border border-slate-200">
             <button
               type="button"
-              onClick={onNavigateToAssignment}
+              onClick={onNavigateToMasterInventory || onNavigateToAssignment}
               className="w-full bg-slate-800 hover:bg-slate-900 text-white font-medium p-4 rounded-xl transition flex items-center justify-between shadow-xs group cursor-pointer"
             >
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-slate-700 text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                <div className="w-10 h-10 rounded-lg bg-slate-700 text-red-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform font-bold">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                   </svg>
                 </div>
                 <div className="text-left">
                   <span className="text-sm font-bold block text-white">
-                    Asignación y Acomodo en Almacén
+                    Inventario Maestro (Todas las Máquinas)
                   </span>
                   <span className="text-xs text-slate-300 block font-normal">
-                    Subir Excel, capturar con cámara (zoom/linterna) o pistola y descargar Excel
+                    Tabla oficial con las 7 columnas, subida de Excel maestro y descargas
                   </span>
                 </div>
               </div>
@@ -396,7 +422,7 @@ export default function HomeView({
 
           {/* 3. LISTA DE CHECKLISTS REGISTRADOS (CONTROL DE INVENTARIO) */}
           <div className="w-full bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
-            <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2.5">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4 border-b border-slate-100 pb-2.5">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -405,16 +431,33 @@ export default function HomeView({
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-slate-800">
-                    Checklists Registrados
+                    Checklists y Recepciones de Entrada
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    Selecciona un lote para escanear
+                    Lotes de llegada. Escanea equipos para sumarlos al inventario.
                   </p>
                 </div>
               </div>
-              <span className="text-xs bg-slate-100 text-slate-700 font-semibold px-2.5 py-0.5 rounded-full border border-slate-200">
-                {batches.length} {batches.length === 1 ? 'lote' : 'lotes'}
-              </span>
+
+              <div className="flex items-center gap-2">
+                {completedBatches.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearCompletedBatches}
+                    className="text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-1 rounded-lg transition flex items-center gap-1 shadow-2xs"
+                    title="Limpiar del historial los checklists ya completados al 100% (las máquinas se conservan en el inventario)"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    Depurar Finalizados ({completedBatches.length})
+                  </button>
+                )}
+
+                <span className="text-xs bg-slate-100 text-slate-700 font-semibold px-2.5 py-0.5 rounded-full border border-slate-200">
+                  {batches.length} {batches.length === 1 ? 'lote' : 'lotes'}
+                </span>
+              </div>
             </div>
 
             {batches.length === 0 ? (

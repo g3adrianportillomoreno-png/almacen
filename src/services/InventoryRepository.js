@@ -462,4 +462,144 @@ export class InventoryRepository {
       console.warn('Error guardando layout de mapa:', e);
     }
   }
+
+  /**
+   * Reconcilia una sola impresora: si ya existe le asigna número de equipo y/o ubicación;
+   * si no existe, la crea en el inventario.
+   */
+  static async reconcileSinglePrinter({ serial, material, internalNumber, warehouseName, warehouseRow, warehouseSpace }) {
+    const serialUpper = (serial || '').trim().toUpperCase();
+    if (!serialUpper) return { isUpdate: false };
+
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    const existing = cache.serials[serialUpper];
+    const isUpdate = Boolean(existing);
+
+    const finalInternal = (internalNumber !== undefined && internalNumber !== null && String(internalNumber).trim() !== '')
+      ? internalNumber
+      : (existing?.internalNumber ?? null);
+
+    const finalWh = warehouseName || existing?.warehouseName || 'Almacén 1';
+    const finalRow = warehouseRow || existing?.warehouseRow || 'Sin Asignar';
+    const finalSpace = warehouseSpace !== null && warehouseSpace !== undefined && String(warehouseSpace).trim() !== ''
+      ? String(warehouseSpace).trim()
+      : (existing?.warehouseSpace || '');
+
+    cache.serials[serialUpper] = {
+      ...(existing || {}),
+      material: material || existing?.material || 'Sin Modelo',
+      warehouseName: finalWh,
+      warehouseRow: finalRow,
+      warehouseSpace: finalSpace,
+      internalNumber: finalInternal,
+      isScanned: true,
+      status: existing?.status || 'DISPONIBLE',
+      assignedAt: new Date().toISOString()
+    };
+    this.saveMetadataCache(cache);
+
+    try {
+      const numVal = !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
+      const { data: updatedRows, error: updateErr } = await supabase
+        .from('expected_series')
+        .update({
+          internal_number: numVal,
+          warehouse_name: finalWh,
+          warehouse_row: finalRow,
+          warehouse_space: finalSpace,
+          is_scanned: true
+        })
+        .eq('serial_number', serialUpper)
+        .select();
+
+      if (!updateErr && updatedRows && updatedRows.length > 0) {
+        return { isUpdate: true };
+      }
+
+      // Si no existía en Supabase, creamos o usamos el lote de Inventario Maestro
+      let defaultBatchId = null;
+      const { data: generalBatch } = await supabase
+        .from('checklists')
+        .select('id')
+        .eq('name', 'Inventario Maestro')
+        .maybeSingle();
+
+      if (generalBatch) {
+        defaultBatchId = generalBatch.id;
+      } else {
+        const { data: createdBatch } = await supabase
+          .from('checklists')
+          .insert({ name: 'Inventario Maestro', status: 'completed', folio: 'MAESTRO' })
+          .select('id')
+          .single();
+        if (createdBatch) defaultBatchId = createdBatch.id;
+      }
+
+      if (defaultBatchId) {
+        await supabase
+          .from('expected_series')
+          .insert({
+            checklist_id: defaultBatchId,
+            serial_number: serialUpper,
+            material_model: material || 'Sin Modelo',
+            internal_number: numVal,
+            warehouse_name: finalWh,
+            warehouse_row: finalRow,
+            warehouse_space: finalSpace,
+            is_scanned: true
+          });
+      }
+    } catch (e) {
+      console.warn('Error sincronizando serie reconciliada en Supabase:', e);
+    }
+
+    return { isUpdate };
+  }
+
+  /**
+   * Depura los checklists completados sin perder las impresoras asociadas en el inventario.
+   */
+  static async clearCompletedChecklists(completedBatchIds = []) {
+    if (!completedBatchIds || completedBatchIds.length === 0) return;
+
+    try {
+      let masterBatchId = null;
+      const { data: mb } = await supabase
+        .from('checklists')
+        .select('id')
+        .eq('name', 'Inventario Maestro')
+        .maybeSingle();
+
+      if (mb) {
+        masterBatchId = mb.id;
+      } else {
+        const { data: nmb } = await supabase
+          .from('checklists')
+          .insert({ name: 'Inventario Maestro', status: 'completed', folio: 'MAESTRO' })
+          .select('id')
+          .single();
+        if (nmb) masterBatchId = nmb.id;
+      }
+
+      if (masterBatchId) {
+        for (const bid of completedBatchIds) {
+          if (bid !== masterBatchId) {
+            await supabase
+              .from('expected_series')
+              .update({ checklist_id: masterBatchId })
+              .eq('checklist_id', bid);
+          }
+        }
+      }
+
+      for (const bid of completedBatchIds) {
+        if (bid !== masterBatchId) {
+          await supabase.from('checklists').delete().eq('id', bid);
+        }
+      }
+    } catch (e) {
+      console.error('Error depurando checklists:', e);
+    }
+  }
 }
