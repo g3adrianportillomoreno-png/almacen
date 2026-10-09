@@ -15,9 +15,25 @@ import WarehouseMapView from './components/WarehouseMapView';
 import WarehouseAssignmentView from './components/WarehouseAssignmentView';
 import MasterInventoryView from './components/MasterInventoryView';
 import EquipmentReadingView from './components/EquipmentReadingView';
+import OperatorMobileView from './components/OperatorMobileView';
+import { supabase } from './utils/supabaseClient';
 
 function App() {
-  const [view, setView] = useState('masterInventory'); // 'masterInventory', 'home', 'scan', 'equipmentReading', 'modelSearch', 'warehouseMap'
+  const [view, setView] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('modo') === 'operador' || window.location.hash.includes('operador')) {
+        return 'operator';
+      }
+      const saved = localStorage.getItem('preferred_view');
+      if (saved) return saved;
+      if (window.innerWidth < 768) {
+        return 'operator';
+      }
+    }
+    return 'masterInventory';
+  }); // 'masterInventory', 'home', 'scan', 'equipmentReading', 'modelSearch', 'warehouseMap', 'operator'
+
   const [activeBatchId, setActiveBatchId] = useState(null);
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -26,14 +42,18 @@ function App() {
   // Obtener nombres de filas disponibles desde el layout del mapa
   const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
 
+  const handleLayoutChange = useCallback(() => {
+    setMapModel(WarehouseMapController.loadMap());
+  }, []);
+
   const availableRows = useMemo(() => {
     return mapModel.getAllRowNames ? mapModel.getAllRowNames() : mapModel.getRowNames();
   }, [mapModel]);
 
   // Carga centralizada de checklists usando el controlador
-  const fetchBatches = useCallback(async () => {
+  const fetchBatches = useCallback(async (isSilent = false) => {
     try {
-      setLoading(true);
+      if (!isSilent) setLoading(true);
       setErrorMessage(null);
       const loadedBatches = await ChecklistController.getChecklists();
       setBatches(loadedBatches);
@@ -41,13 +61,48 @@ function App() {
       console.error("Error al cargar lotes:", error);
       setErrorMessage("No se pudieron cargar los datos de Supabase. Revisa tu conexión.");
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchBatches();
   }, [fetchBatches]);
+
+  // Sincronización en tiempo real vía WebSockets de Supabase (Multi-usuario: Operadores y Oficina)
+  useEffect(() => {
+    let debounceTimer = null;
+    const triggerDebouncedRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchBatches(true);
+        handleLayoutChange();
+      }, 300);
+    };
+
+    const channel = supabase
+      .channel('warehouse-realtime-sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'expected_series' },
+        () => {
+          triggerDebouncedRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'checklists' },
+        () => {
+          triggerDebouncedRefresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [fetchBatches, handleLayoutChange]);
 
   // Lote activo en escaneo
   const activeBatch = useMemo(() => {
@@ -84,8 +139,10 @@ function App() {
   };
 
   // Registrar escaneo de impresora asignando su Almacén, Fila, Espacio y Número de inventario
-  const handleCompleteTrailer = async (serie, assignmentData) => {
-    if (!activeBatchId || !activeBatch) return;
+  const handleCompleteTrailer = async (serie, assignmentData, specificBatchId = null) => {
+    const targetBatchId = specificBatchId || assignmentData?.batchId || activeBatchId;
+    const targetBatch = batches.find(b => b.id === targetBatchId) || activeBatch;
+    if (!targetBatchId || !targetBatch) return;
 
     // Asegurar que la fila exista en el mapa del almacén activo para que aparezca dibujada al instante con su rango numérico
     if (assignmentData?.warehouseRow) {
@@ -96,7 +153,7 @@ function App() {
     // Actualización optimista local en memoria
     setBatches(prevBatches => 
       prevBatches.map(batch => {
-        if (batch.id === activeBatchId) {
+        if (batch.id === targetBatchId) {
           const serial = serie.toUpperCase();
           if (!batch.completed.includes(serial)) {
             const newCompleted = [...batch.completed, serial];
@@ -127,7 +184,7 @@ function App() {
 
     // Persistencia asíncrona a través del controlador
     try {
-      await ChecklistController.recordSuccessfulScan(activeBatchId, serie, assignmentData?.warehouseRow, activeBatch, assignmentData?.internalNumber);
+      await ChecklistController.recordSuccessfulScan(targetBatchId, serie, assignmentData?.warehouseRow, targetBatch, assignmentData?.internalNumber);
       if (assignmentData) {
         await InventoryController.assignPrinter(serie, assignmentData);
       }
@@ -192,9 +249,40 @@ function App() {
     fetchBatches();
   };
 
-  const handleLayoutChange = () => {
-    setMapModel(WarehouseMapController.loadMap());
+  const handleRequestAdminView = () => {
+    const password = window.prompt("Introduce la contraseña de acceso a Oficina:");
+    if (password === 'QWERTY' || password === 'qwerty') {
+      localStorage.setItem('preferred_view', 'masterInventory');
+      setView('masterInventory');
+    } else if (password !== null) {
+      alert("Contraseña incorrecta. Acceso restringido al Modo Operador.");
+    }
   };
+
+  // Si la vista es Modo Operador Móvil, renderizamos su pantalla táctil dedicada
+  if (view === 'operator') {
+    if (loading && batches.length === 0) {
+      return (
+        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300">
+          <div className="w-12 h-12 border-4 border-slate-800 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
+          <p className="text-sm font-semibold tracking-wide">Iniciando Modo Operador...</p>
+        </div>
+      );
+    }
+    return (
+      <OperatorMobileView 
+        batches={batches}
+        onCompleteTrailer={handleCompleteTrailer}
+        onAssignmentSaved={() => {
+          fetchBatches(true);
+          handleLayoutChange();
+        }}
+        onRequestAdminView={handleRequestAdminView}
+        availableWarehouses={mapModel.warehouses.map(w => w.name)}
+        availableRows={availableRows}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-gray-800">
@@ -203,6 +291,7 @@ function App() {
         currentView={view} 
         setView={(v) => {
           setView(v);
+          localStorage.setItem('preferred_view', v);
           if (v !== 'scan') setActiveBatchId(null);
         }}
         activeBatchId={activeBatchId}
