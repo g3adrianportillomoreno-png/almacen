@@ -33,6 +33,18 @@ export class ChecklistModel {
     return this.status === 'completed' || (this.expectedSeries.length > 0 && this.completed.length >= this.expectedSeries.length);
   }
 
+  get isMaster() {
+    const nameLower = (this.name || '').toLowerCase();
+    const cleanLower = (this.cleanName || '').toLowerCase();
+    const folioLower = (this.folio || '').toLowerCase();
+    return (
+      nameLower.includes('inventario maestro') ||
+      cleanLower.includes('inventario maestro') ||
+      folioLower === 'maestro' ||
+      nameLower === 'maestro'
+    );
+  }
+
   get totalCount() {
     return this.expectedSeries.length;
   }
@@ -51,12 +63,28 @@ export class ChecklistModel {
   }
 
   /**
+   * Sugiere el siguiente consecutivo solo a partir de checklists de recepción de equipos nuevos
+   */
+  static getNextConsecutive(checklists = []) {
+    const receptionBatches = (checklists || []).filter(c => !c.isMaster);
+    if (receptionBatches.length === 0) return 1;
+
+    const nums = receptionBatches.map(c => {
+      const parsed = parseInt(c.consecutive, 10);
+      return isNaN(parsed) ? 0 : parsed;
+    });
+
+    const max = Math.max(0, ...nums);
+    return max + 1;
+  }
+
+  /**
    * Formatea el folio manual ingresado por el operador
    */
   static formatFolio(num) {
     if (!num && num !== 0) return 'Sin Folio';
     const str = String(num).trim();
-    if (/^folio/i.test(str)) return str;
+    if (/^folio/i.test(str) || /^maestro/i.test(str)) return str;
     return `FOLIO #${str}`;
   }
 
@@ -82,17 +110,23 @@ export class ChecklistModel {
    * Factoría desde registro de Supabase
    */
   static fromDb(dbBatch, index = 0, metadataCache = {}) {
-    const consecutive = dbBatch.consecutive_number 
-      || ChecklistModel.extractConsecutive(dbBatch.name, null) 
-      || (metadataCache.checklists?.[dbBatch.id]?.consecutive)
-      || (index + 1);
+    const rawName = dbBatch.name || '';
+    const isMasterBatch = rawName.toLowerCase().includes('inventario maestro') || (dbBatch.folio || '').toUpperCase() === 'MAESTRO';
 
-    const folio = dbBatch.folio 
-      || ChecklistModel.formatFolio(consecutive);
+    const consecutive = isMasterBatch
+      ? null
+      : (dbBatch.consecutive_number 
+         || ChecklistModel.extractConsecutive(rawName, null) 
+         || (metadataCache.checklists?.[dbBatch.id]?.consecutive)
+         || (index + 1));
+
+    const folio = isMasterBatch
+      ? 'MAESTRO'
+      : (dbBatch.folio || ChecklistModel.formatFolio(consecutive));
 
     const checklistInfo = {
       id: dbBatch.id,
-      name: dbBatch.name,
+      name: rawName,
       folio: folio
     };
 

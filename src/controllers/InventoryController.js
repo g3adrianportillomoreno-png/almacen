@@ -26,7 +26,7 @@ export class InventoryController {
     const seenSerials = new Set();
 
     for (const batch of checklists) {
-      const isMasterBatch = batch.folio === 'MAESTRO' || batch.name === 'Inventario Maestro' || !batch.folio;
+      const isMasterBatch = batch.isMaster || batch.folio === 'MAESTRO' || (batch.name || '').toLowerCase().includes('inventario maestro') || !batch.folio;
 
       for (const printer of (batch.expectedSeries || [])) {
         if (!printer.serial) continue;

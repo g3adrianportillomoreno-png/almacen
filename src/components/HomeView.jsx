@@ -49,17 +49,33 @@ export default function HomeView({
     return InventoryController.filterPrinters(allPrinters, quickModelQuery.trim(), 'ALL').slice(0, 8);
   }, [allPrinters, quickModelQuery]);
 
+  // Checklists reales de recepción de equipos nuevos (excluyendo el lote contenedor de Inventario Maestro)
+  const receptionBatches = useMemo(() => {
+    return batches.filter(b => !b.isMaster);
+  }, [batches]);
+
   // Checklists pendientes / disponibles para escanear
   const pendingBatches = useMemo(() => {
-    return batches.filter(b => b.status !== 'completed' && b.completed.length < b.expectedSeries.length);
-  }, [batches]);
+    return receptionBatches.filter(b => b.status !== 'completed' && b.completed.length < b.expectedSeries.length);
+  }, [receptionBatches]);
 
   // Checklists 100% completados para depurar del historial sin perder impresoras
   const completedBatches = useMemo(() => {
-    return batches.filter(b => {
+    return receptionBatches.filter(b => {
       const total = b.totalCount || b.expectedSeries.length;
       return (total > 0 && b.completed.length >= total) || (b.status === 'completed' && b.expectedSeries.length === 0);
     });
+  }, [receptionBatches]);
+
+  // Conteo de equipos del inventario que no tienen ubicación física asignada
+  const unassignedEquipmentCount = useMemo(() => {
+    const allExpected = InventoryController.extractAllExpectedPrinters(batches);
+    return allExpected.filter(p => 
+      !p.warehouseSpace || 
+      !p.warehouseRow || 
+      p.warehouseRow === 'Sin Asignar' || 
+      p.warehouseSpace.trim() === ''
+    ).length;
   }, [batches]);
 
   const handleClearCompletedBatches = async () => {
@@ -491,19 +507,19 @@ export default function HomeView({
                 )}
 
                 <span className="text-xs bg-slate-100 text-slate-700 font-semibold px-2.5 py-0.5 rounded-full border border-slate-200">
-                  {batches.length} {batches.length === 1 ? 'lote' : 'lotes'}
+                  {receptionBatches.length} {receptionBatches.length === 1 ? 'checklist' : 'checklists'}
                 </span>
               </div>
             </div>
 
-            {batches.length === 0 ? (
+            {receptionBatches.length === 0 ? (
               <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                <p className="text-slate-600 font-medium text-xs">No hay checklists registrados todavía.</p>
-                <p className="text-[11px] text-slate-400 mt-1">Sube un archivo Excel o PDF arriba para comenzar.</p>
+                <p className="text-slate-600 font-medium text-xs">No hay checklists de recepción de equipos nuevos registrados.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Sube un checklist de llegada arriba para comenzar.</p>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {batches.map((batch) => {
+                {receptionBatches.map((batch) => {
                   const total = batch.totalCount || batch.expectedSeries.length;
                   const completedCount = batch.completed.length;
                   const pendingCount = batch.pendingCount;
@@ -615,10 +631,17 @@ export default function HomeView({
                     </svg>
                   </div>
                   <div className="text-left">
-                    <span className="text-sm font-bold block text-white">
-                      Lectura de Equipos
-                    </span>
-                    <span className="text-xs text-emerald-100 block font-normal">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold block text-white">
+                        Lectura de Equipos
+                      </span>
+                      {unassignedEquipmentCount > 0 && (
+                        <span className="bg-emerald-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-400">
+                          {unassignedEquipmentCount} pendientes
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-emerald-100 block font-normal mt-0.5">
                       Dar ubicación (Almacén, Fila y Espacio) a los equipos que no tienen ubicación
                     </span>
                   </div>

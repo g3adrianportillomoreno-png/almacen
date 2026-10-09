@@ -687,7 +687,13 @@ export default function EquipmentReadingView({
                       )}
                     </td>
                     <td className="py-2.5 px-3 text-slate-500 text-[11px]">
-                      {printer.batchFolio || printer.batchName || 'Inventario'}
+                      {printer.batchFolio === 'MAESTRO' || (printer.batchName || '').toLowerCase().includes('inventario maestro') ? (
+                        <span className="bg-slate-100 text-slate-700 font-semibold px-2 py-0.5 rounded text-[10px] border border-slate-200">
+                          Inventario Maestro
+                        </span>
+                      ) : (
+                        <span>{printer.batchFolio || printer.batchName || 'Inventario'}</span>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 text-center">
                       <button

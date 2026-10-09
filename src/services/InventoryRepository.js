@@ -527,6 +527,12 @@ export class InventoryRepository {
 
       if (generalBatch) {
         defaultBatchId = generalBatch.id;
+        supabase
+          .from('checklists')
+          .update({ folio: 'MAESTRO', status: 'completed' })
+          .eq('id', defaultBatchId)
+          .then(() => {})
+          .catch(() => {});
       } else {
         const { data: createdBatch } = await supabase
           .from('checklists')
