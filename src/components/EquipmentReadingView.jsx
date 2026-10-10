@@ -3,6 +3,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import CameraScanner from './CameraScanner.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
+import { findSerialMatch } from '../utils/serialMatcher.js';
 
 export default function EquipmentReadingView({ 
   checklists = [], 
@@ -123,11 +124,14 @@ export default function EquipmentReadingView({
     setSuccessMessage('');
     setNotFoundQuery('');
 
-    // Buscar en todas las impresoras del sistema
-    const match = allSystemPrinters.find(p => p.serial === serial);
+    // Buscar en todas las impresoras del sistema con coincidencia inteligente
+    const match = findSerialMatch(serial, allSystemPrinters);
 
     if (match) {
-      handleSelectPrinterForLocation(match);
+      handleSelectPrinterForLocation({
+        ...match,
+        scannedCode: serial
+      });
     } else {
       setActivePrinter(null);
       setNotFoundQuery(serial);
@@ -395,23 +399,44 @@ export default function EquipmentReadingView({
           </div>
 
           {/* DATOS DEL EQUIPO DETECTADO */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">1. Clave (Modelo):</span>
-              <span className="font-bold text-slate-800 text-sm truncate block mt-0.5">{activePrinter.material || 'MODELO'}</span>
-            </div>
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">2. Número de Serie:</span>
-              <span className="font-mono font-bold text-slate-900 text-sm truncate block mt-0.5">{activePrinter.serial}</span>
-            </div>
-            <div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">3. Número de Equipo:</span>
-              <span className="font-bold text-emerald-800 text-sm truncate block mt-0.5">
-                {activePrinter.internalNumber ? `#${activePrinter.internalNumber}` : 'Sin Asignar (Nuevo)'}
+          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col gap-3">
+            <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl flex items-center justify-between">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  MODELO DE LA MÁQUINA
+                </span>
+                <span className="text-base font-black text-slate-900 block mt-0.5 tracking-tight">
+                  {activePrinter.material || 'MODELO GENÉRICO'}
+                </span>
+              </div>
+              <span className="text-emerald-700 bg-white px-2 py-1 rounded-lg border border-emerald-200 text-xs font-bold shadow-2xs">
+                ✓ Detectado
               </span>
-              {activePrinter.batchFolio && (
-                <span className="text-[10px] text-slate-400 block mt-0.5 truncate">{activePrinter.batchFolio}</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 px-1 text-xs">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">Serie en Excel:</span>
+                <span className="font-mono font-bold text-slate-900 text-sm">{activePrinter.serial}</span>
+              </div>
+              {activePrinter.scannedCode && activePrinter.scannedCode !== activePrinter.serial && (
+                <div>
+                  <span className="text-[10px] text-amber-700 font-bold uppercase block tracking-wider">Leído por Pistola:</span>
+                  <span className="font-mono text-slate-700 text-xs bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium inline-block mt-0.5">
+                    {activePrinter.scannedCode}
+                  </span>
+                </div>
               )}
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wider">Número de Equipo:</span>
+                <span className="font-bold text-emerald-800 text-sm">
+                  {activePrinter.internalNumber ? `#${activePrinter.internalNumber}` : 'Sin Asignar (Nuevo)'}
+                </span>
+                {activePrinter.batchFolio && (
+                  <span className="text-[10px] text-slate-400 block truncate">{activePrinter.batchFolio}</span>
+                )}
+              </div>
             </div>
           </div>
 

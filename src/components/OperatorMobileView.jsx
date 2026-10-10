@@ -3,6 +3,7 @@ import CameraScanner from './CameraScanner.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
+import { findSerialMatch } from '../utils/serialMatcher.js';
 
 export default function OperatorMobileView({
   batches = [],
@@ -121,7 +122,7 @@ export default function OperatorMobileView({
     setSuccessMessage('');
   };
 
-  // Procesar código leído por pistola o escáner
+  // Procesar código leído por pistola o escáner con coincidencia inteligente
   const handleProcessScan = (rawCode) => {
     const code = (rawCode || '').trim().toUpperCase();
     if (!code) return;
@@ -131,23 +132,25 @@ export default function OperatorMobileView({
 
     // Si estamos en un checklist específico
     if (activeChecklist) {
-      const matchInBatch = activeChecklist.expectedSeries.find(
-        p => String(p.serial).trim().toUpperCase() === code
-      );
+      const matchInBatch = findSerialMatch(code, activeChecklist.expectedSeries);
       if (matchInBatch) {
         handleSelectPrinter({
           ...matchInBatch,
           batchId: activeChecklist.id,
-          batchFolio: activeChecklist.folio
+          batchFolio: activeChecklist.folio,
+          scannedCode: code
         });
       } else {
         setNotFoundSerial(code);
       }
     } else {
       // Búsqueda global en todo el sistema
-      const match = allSystemPrinters.find(p => String(p.serial).trim().toUpperCase() === code);
+      const match = findSerialMatch(code, allSystemPrinters);
       if (match) {
-        handleSelectPrinter(match);
+        handleSelectPrinter({
+          ...match,
+          scannedCode: code
+        });
       } else {
         setNotFoundSerial(code);
       }
@@ -196,7 +199,7 @@ export default function OperatorMobileView({
         WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
       }
 
-      setSuccessMessage(`✓ Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} [${spaceVal}]`);
+      setSuccessMessage(`✓ [${activePrinter.material || 'MÁQUINA'}] Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} [${spaceVal}]`);
 
       // Sugerir siguiente espacio si es numérico (ej: 19 D -> 20 D o 1 -> 2)
       const numMatch = spaceVal.match(/^.*?(\d+)$/);
@@ -508,15 +511,44 @@ export default function OperatorMobileView({
               </button>
             </div>
 
-            {/* DETALLES DE LA SERIE Y MODELO */}
-            <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 flex justify-between items-center">
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Modelo:</span>
-                <span className="text-sm font-bold text-white">{activePrinter.material || 'N/A'}</span>
+            {/* DETALLES DESTACADOS: MODELO DE IMPRESORA Y SERIE */}
+            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex flex-col gap-2.5 shadow-inner">
+              <div className="bg-slate-900/90 border border-emerald-500/30 p-3.5 rounded-xl flex items-center justify-between">
+                <div className="flex-1 mr-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    MODELO DE LA MÁQUINA
+                  </span>
+                  <span className="text-base sm:text-lg font-black text-white block mt-0.5 tracking-tight break-words">
+                    {activePrinter.material || 'MODELO GENÉRICO'}
+                  </span>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                  </svg>
+                </div>
               </div>
-              <div className="text-right">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Número de Serie:</span>
-                <span className="text-sm font-mono font-bold text-emerald-400">{activePrinter.serial}</span>
+
+              <div className="flex flex-wrap justify-between items-center px-1 text-xs gap-2 pt-1 border-t border-slate-800/80">
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase block">Serie en Excel:</span>
+                  <span className="font-mono font-black text-emerald-400 text-sm tracking-wide">{activePrinter.serial}</span>
+                </div>
+                {activePrinter.scannedCode && activePrinter.scannedCode !== activePrinter.serial && (
+                  <div className="text-right">
+                    <span className="text-[10px] text-amber-400 font-bold uppercase block">Leído por Pistola:</span>
+                    <span className="font-mono text-slate-200 text-xs bg-slate-800 px-2 py-0.5 rounded border border-slate-700">
+                      {activePrinter.scannedCode}
+                    </span>
+                  </div>
+                )}
+                {activePrinter.internalNumber && (
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-400 font-bold uppercase block">No. Equipo:</span>
+                    <span className="font-bold text-amber-400 text-xs">#{activePrinter.internalNumber}</span>
+                  </div>
+                )}
               </div>
             </div>
 

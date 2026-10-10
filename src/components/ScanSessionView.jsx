@@ -3,6 +3,7 @@ import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 import { InventoryController } from '../controllers/InventoryController';
 import { WarehouseMapController } from '../controllers/WarehouseMapController';
+import { findSerialMatch } from '../utils/serialMatcher';
 
 export default function ScanSessionView({ 
   batchDetails, 
@@ -99,8 +100,10 @@ export default function ScanSessionView({
     setTimeout(() => {
       setIsSearching(false);
       
-      const expectedItem = batchDetails.expectedSeries.find(item => item.serial === code);
-      const isAlreadyDone = batchDetails.completed.includes(code);
+      const expectedItem = findSerialMatch(code, batchDetails.expectedSeries);
+      const isAlreadyDone = expectedItem 
+        ? batchDetails.completed.includes(expectedItem.serial) 
+        : batchDetails.completed.includes(code);
 
       if (isAlreadyDone) {
         setLastScanned('');
@@ -109,7 +112,11 @@ export default function ScanSessionView({
 
       if (expectedItem) {
         // Abrir ventana modal preguntando: "¿Dónde la quieres colocar?"
-        setPendingAssignmentItem({ item: expectedItem, rawCode: code });
+        setPendingAssignmentItem({ 
+          item: expectedItem, 
+          rawCode: expectedItem.serial,
+          originalScanned: code 
+        });
         setSelectedWarehouse(expectedItem.warehouseName || warehouseOptions[0] || 'Almacén 1');
         setSelectedRow(expectedItem.warehouseRow && expectedItem.warehouseRow !== 'Sin Asignar' ? expectedItem.warehouseRow : (rowOptions[0] || 'Fila 1'));
         setSpaceInput(expectedItem.warehouseSpace || '');
@@ -442,17 +449,36 @@ export default function ScanSessionView({
               </p>
             </div>
             
-            {/* INFORMACIÓN DEL EQUIPO DETECTADO */}
-            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 my-4">
-              <div className="flex justify-between mb-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Clave (Modelo):</span>
-                <span className="font-bold text-slate-800 text-sm truncate max-w-[200px] text-right">
-                  {pendingAssignmentItem.item.material}
+            {/* INFORMACIÓN DESTACADA DEL EQUIPO DETECTADO */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 my-4 flex flex-col gap-2.5">
+              <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    MODELO DE LA MÁQUINA
+                  </span>
+                  <span className="text-base font-black text-slate-900 block mt-0.5 tracking-tight">
+                    {pendingAssignmentItem.item.material || 'MODELO GENÉRICO'}
+                  </span>
+                </div>
+                <span className="text-emerald-700 bg-white px-2 py-1 rounded-lg border border-emerald-200 text-xs font-bold shadow-2xs">
+                  ✓ Verificado
                 </span>
               </div>
-              <div className="flex justify-between border-t border-slate-100 pt-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Número de Serie:</span>
-                <span className="font-mono font-bold text-slate-900 text-sm">{pendingAssignmentItem.item.serial}</span>
+
+              <div className="flex flex-wrap justify-between items-center text-xs px-1 gap-2 pt-1">
+                <div>
+                  <span className="text-[10px] text-slate-400 font-bold uppercase block tracking-wide">Serie en Excel:</span>
+                  <span className="font-mono font-bold text-slate-900 text-sm">{pendingAssignmentItem.item.serial}</span>
+                </div>
+                {pendingAssignmentItem.originalScanned && pendingAssignmentItem.originalScanned !== pendingAssignmentItem.item.serial && (
+                  <div className="text-right">
+                    <span className="text-[10px] text-amber-700 font-bold uppercase block tracking-wide">Leído por Pistola:</span>
+                    <span className="font-mono text-slate-700 text-xs bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium">
+                      {pendingAssignmentItem.originalScanned}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
