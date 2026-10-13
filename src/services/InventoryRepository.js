@@ -41,30 +41,85 @@ export class InventoryRepository {
   }
 
   /**
-   * Carga todos los checklists desde Supabase combinando los datos y modelos de dominio
+   * Obtiene todas las series esperadas de Supabase utilizando paginación automática por lotes.
+   * Supera el límite estricto de 1,000 registros de PostgREST de Supabase para soportar
+   * archivos masivos de más de 1000 registros (ej. 1,118 o más).
+   */
+  static async fetchAllExpectedSeries() {
+    const PAGE_SIZE = 1000;
+    let allSeries = [];
+    let page = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const from = page * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+      const { data, error } = await supabase
+        .from('expected_series')
+        .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at')
+        .order('id', { ascending: true })
+        .range(from, to);
+
+      if (error) {
+        console.error('Error paginando expected_series desde Supabase:', error);
+        break;
+      }
+
+      if (data && data.length > 0) {
+        allSeries.push(...data);
+        if (data.length < PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+    return allSeries;
+  }
+
+  /**
+   * Carga todos los checklists desde Supabase combinando los datos y modelos de dominio.
+   * Carga la totalidad de las series sin límite de 1000 registros.
    */
   static async fetchAllChecklists() {
-    const { data, error } = await supabase
+    // 1. Obtener la lista de checklists con sus logs inesperados
+    const { data: checklistsData, error: checklistsError } = await supabase
       .from('checklists')
       .select(`
         id, name, created_at, status,
-        expected_series (id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at),
         unexpected_logs (id, scanned_value, created_at)
       `)
-      .order('created_at', { ascending: false })
-      .limit(10000, { foreignTable: 'expected_series' });
+      .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error al obtener checklists desde Supabase:', error);
-      throw error;
+    if (checklistsError) {
+      console.error('Error al obtener checklists desde Supabase:', checklistsError);
+      throw checklistsError;
+    }
+
+    // 2. Obtener todas las series esperadas con paginación completa (superando el límite de 1000)
+    const allExpectedSeries = await this.fetchAllExpectedSeries();
+
+    // 3. Agrupar las series esperadas por su checklist_id
+    const seriesByChecklist = {};
+    for (const item of allExpectedSeries) {
+      if (!seriesByChecklist[item.checklist_id]) {
+        seriesByChecklist[item.checklist_id] = [];
+      }
+      seriesByChecklist[item.checklist_id].push(item);
     }
 
     const metadataCache = this.getMetadataCache();
 
-    // Mapear cada registro de BD al modelo ChecklistModel
-    return (data || []).map((dbBatch, index) => 
-      ChecklistModel.fromDb(dbBatch, index, metadataCache)
-    );
+    // 4. Mapear cada registro de BD al modelo ChecklistModel inyectando sus series completas
+    return (checklistsData || []).map((dbBatch, index) => {
+      const fullBatch = {
+        ...dbBatch,
+        expected_series: seriesByChecklist[dbBatch.id] || []
+      };
+      return ChecklistModel.fromDb(fullBatch, index, metadataCache);
+    });
   }
 
   /**
