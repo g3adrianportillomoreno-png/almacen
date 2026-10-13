@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import UniversalSearchBar from './UniversalSearchBar.jsx';
+import { isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 
 export default function Header({ 
   currentView, 
@@ -9,6 +11,7 @@ export default function Header({
   onLocateEquipment,
   onUnlocatedSelected
 }) {
+  const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
   return (
     <header className="bg-red-700 text-white shadow-md sticky top-0 z-30">
       <div className="max-w-[1920px] mx-auto px-3 sm:px-6 py-2 flex flex-wrap justify-between items-center gap-3">
@@ -36,8 +39,22 @@ export default function Header({
           />
         </div>
 
-        {/* Pestañas de Navegación */}
+        {/* Pestañas de Navegación y Audio */}
         <nav className="flex items-center gap-2 order-2 md:order-3">
+          {/* Botón Silenciar / Activar Sonidos */}
+          <button
+            type="button"
+            onClick={() => setSoundMuted(toggleSoundMute())}
+            className={`p-1.5 px-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1 border ${
+              soundMuted
+                ? 'bg-red-900/60 text-red-300 border-red-800 hover:bg-red-800'
+                : 'bg-emerald-600 text-white border-emerald-500 shadow-xs hover:bg-emerald-500'
+            }`}
+            title={soundMuted ? 'Sonidos de escaneo silenciados (clic para activar)' : 'Sonidos de escaneo activados (clic para silenciar)'}
+          >
+            <span>{soundMuted ? '🔇' : '🔊'}</span>
+            <span className="hidden lg:inline text-[11px] font-semibold">{soundMuted ? 'Mudo' : 'Audio'}</span>
+          </button>
           {activeBatchId ? (
             <div className="flex items-center gap-2">
               <span className="text-xs bg-red-800 text-white px-3 py-1.5 rounded-full font-bold flex items-center gap-1.5 animate-pulse">

@@ -4,6 +4,7 @@ import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { findSerialMatch } from '../utils/serialMatcher.js';
+import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 
 export default function OperatorMobileView({
   batches = [],
@@ -13,6 +14,8 @@ export default function OperatorMobileView({
   availableWarehouses = ['Almacén 1', 'Almacén 2'],
   availableRows = ['Fila 1', 'Fila 2', 'Fila 3', 'Fila 4']
 }) {
+  const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
+
   // Pestaña activa del operador: 'reading' (Lectura libre / Ubicar) o 'checklists' (Lotes)
   const [operatorTab, setOperatorTab] = useState('reading');
   
@@ -134,6 +137,7 @@ export default function OperatorMobileView({
     if (activeChecklist) {
       const matchInBatch = findSerialMatch(code, activeChecklist.expectedSeries);
       if (matchInBatch) {
+        soundEffects.playScanSuccess();
         handleSelectPrinter({
           ...matchInBatch,
           batchId: activeChecklist.id,
@@ -141,17 +145,20 @@ export default function OperatorMobileView({
           scannedCode: code
         });
       } else {
+        soundEffects.playScanError();
         setNotFoundSerial(code);
       }
     } else {
       // Búsqueda global en todo el sistema
       const match = findSerialMatch(code, allSystemPrinters);
       if (match) {
+        soundEffects.playScanSuccess();
         handleSelectPrinter({
           ...match,
           scannedCode: code
         });
       } else {
+        soundEffects.playScanError();
         setNotFoundSerial(code);
       }
     }
@@ -168,7 +175,12 @@ export default function OperatorMobileView({
   // Confirmar y guardar asignación física
   const handleSaveLocation = async (e) => {
     if (e) e.preventDefault();
-    if (!activePrinter || collisionOccupant) return;
+    if (!activePrinter) return;
+
+    if (collisionOccupant) {
+      soundEffects.playScanDuplicate();
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -199,6 +211,7 @@ export default function OperatorMobileView({
         WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
       }
 
+      soundEffects.playLocationAssigned();
       setSuccessMessage(`✓ [${activePrinter.material || 'MÁQUINA'}] Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} [${spaceVal}]`);
 
       // Sugerir siguiente espacio si es numérico (ej: 19 D -> 20 D o 1 -> 2)
@@ -253,17 +266,33 @@ export default function OperatorMobileView({
           </div>
         </div>
 
-        {/* Botón para regresar a modo oficina (con contraseña) */}
-        <button
-          onClick={onRequestAdminView}
-          className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center gap-1.5 transition active:scale-95"
-          title="Acceso protegido a pantalla de oficina / computadora"
-        >
-          <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-          </svg>
-          <span>Oficina</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Botón de alternar audio */}
+          <button
+            type="button"
+            onClick={() => setSoundMuted(toggleSoundMute())}
+            className={`p-1.5 px-2 rounded-xl border text-xs font-bold transition flex items-center gap-1 ${
+              soundMuted
+                ? 'bg-slate-800 text-slate-500 border-slate-700'
+                : 'bg-emerald-950 text-emerald-400 border-emerald-700/80 shadow-2xs'
+            }`}
+            title={soundMuted ? 'Sonidos silenciados (clic para activar)' : 'Sonidos activos (clic para silenciar)'}
+          >
+            <span>{soundMuted ? '🔇' : '🔊'}</span>
+          </button>
+
+          {/* Botón para regresar a modo oficina (con contraseña) */}
+          <button
+            onClick={onRequestAdminView}
+            className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center gap-1.5 transition active:scale-95"
+            title="Acceso protegido a pantalla de oficina / computadora"
+          >
+            <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+            <span>Oficina</span>
+          </button>
+        </div>
       </header>
 
       {/* MENSAJE DE ÉXITO O ALERTA */}

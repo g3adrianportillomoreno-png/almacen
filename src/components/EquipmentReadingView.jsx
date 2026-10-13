@@ -4,6 +4,7 @@ import { WarehouseMapController } from '../controllers/WarehouseMapController.js
 import CameraScanner from './CameraScanner.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { findSerialMatch } from '../utils/serialMatcher.js';
+import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 
 export default function EquipmentReadingView({ 
   checklists = [], 
@@ -12,6 +13,7 @@ export default function EquipmentReadingView({
   availableRows = ['Fila 1', 'Fila 2', 'Fila 3', 'Fila 4'],
   onBackToHome
 }) {
+  const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
   const [scanInput, setScanInput] = useState('');
   const [activePrinter, setActivePrinter] = useState(null);
   const [notFoundQuery, setNotFoundQuery] = useState('');
@@ -128,11 +130,13 @@ export default function EquipmentReadingView({
     const match = findSerialMatch(serial, allSystemPrinters);
 
     if (match) {
+      soundEffects.playScanSuccess();
       handleSelectPrinterForLocation({
         ...match,
         scannedCode: serial
       });
     } else {
+      soundEffects.playScanError();
       setActivePrinter(null);
       setNotFoundQuery(serial);
     }
@@ -164,6 +168,7 @@ export default function EquipmentReadingView({
     if (!activePrinter) return;
 
     if (collisionOccupant) {
+      soundEffects.playScanDuplicate();
       alert(`¡Espacio ocupado! El espacio "${spaceInput}" en la ${selectedRow} (${selectedWarehouse}) ya está ocupado por la serie ${collisionOccupant.serial}. Elige otro espacio.`);
       return;
     }
@@ -186,6 +191,7 @@ export default function EquipmentReadingView({
         WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
       }
 
+      soundEffects.playLocationAssigned();
       setSuccessMessage(`¡Equipo serie ${activePrinter.serial} (${activePrinter.material || 'Equipo'}) guardado exitosamente en ${selectedWarehouse} → ${selectedRow} → ${spaceVal}!`);
       
       // Sugerir siguiente espacio si es numérico (ej: 1 -> 2)

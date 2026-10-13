@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 import { InventoryController } from '../controllers/InventoryController';
 import { WarehouseMapController } from '../controllers/WarehouseMapController';
 import { findSerialMatch } from '../utils/serialMatcher';
+import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects';
 
 export default function ScanSessionView({ 
   batchDetails, 
@@ -15,6 +16,8 @@ export default function ScanSessionView({
   availableWarehouses = ['Almacén 1', 'Almacén 2'],
   allPrinters = []
 }) {
+  const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
+
   // Modal de Asignación Física "¿Dónde la quieres colocar?"
   const [pendingAssignmentItem, setPendingAssignmentItem] = useState(null);
   const [selectedWarehouse, setSelectedWarehouse] = useState(availableWarehouses[0] || 'Almacén 1');
@@ -106,11 +109,13 @@ export default function ScanSessionView({
         : batchDetails.completed.includes(code);
 
       if (isAlreadyDone) {
+        soundEffects.playScanDuplicate();
         setLastScanned('');
         return;
       }
 
       if (expectedItem) {
+        soundEffects.playScanSuccess();
         // Abrir ventana modal preguntando: "¿Dónde la quieres colocar?"
         setPendingAssignmentItem({ 
           item: expectedItem, 
@@ -126,6 +131,7 @@ export default function ScanSessionView({
         setCustomWarehouseInput('');
         setCustomRowInput('');
       } else {
+        soundEffects.playScanError();
         setSearchError(true);
         onLogUnexpected(code);
         setTimeout(() => {
@@ -143,6 +149,7 @@ export default function ScanSessionView({
     if (!pendingAssignmentItem) return;
 
     if (collisionOccupant) {
+      soundEffects.playScanError();
       alert(`¡Espacio ocupado! El espacio "${spaceInput}" en la ${selectedRow} (${selectedWarehouse}) ya está ocupado por la serie ${collisionOccupant.serial}. Por favor elige otro espacio.`);
       return;
     }
@@ -154,6 +161,16 @@ export default function ScanSessionView({
     setLastAssignedLocation(`${selectedWarehouse} → ${selectedRow} [${spaceFinal}]`);
     setSearchSuccess(true);
     
+    // Sonido de asignación de ubicación confirmada
+    soundEffects.playLocationAssigned();
+
+    // Si con esta lectura se completó el checklist, reproducir fanfarria
+    if ((batchDetails.completed.length + 1) >= batchDetails.expectedSeries.length) {
+      setTimeout(() => {
+        soundEffects.playChecklistCompleted();
+      }, 700);
+    }
+
     // Asegurar que el almacén y la fila existan en el plano del mapa gráfico
     if (selectedRow) {
       WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
@@ -175,6 +192,13 @@ export default function ScanSessionView({
       setLastScanned('');
     }, 2500);
   };
+
+  // Sonido de celebración si se ingresa a un checklist ya completado
+  useEffect(() => {
+    if (isFinished) {
+      soundEffects.playChecklistCompleted();
+    }
+  }, [isFinished]);
 
   // VISTA AL COMPLETAR EL CHECKLIST
   if (isFinished) {
@@ -304,16 +328,30 @@ export default function ScanSessionView({
           </p>
         </div>
 
-        <div className="flex gap-3 text-xs font-medium">
-          <div className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-center min-w-[60px]">
+        <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
+          <button
+            type="button"
+            onClick={() => setSoundMuted(toggleSoundMute())}
+            className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 ${
+              soundMuted
+                ? 'bg-slate-100 text-slate-400 border-slate-200 hover:bg-slate-200'
+                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+            }`}
+            title={soundMuted ? 'Sonidos silenciados (clic para activar)' : 'Sonidos activos (clic para silenciar)'}
+          >
+            <span>{soundMuted ? '🔇' : '🔊'}</span>
+            <span className="hidden sm:inline">{soundMuted ? 'Silencio' : 'Sonido'}</span>
+          </button>
+
+          <div className="bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-xl text-center min-w-[55px]">
             <span className="text-slate-400 text-[10px] block uppercase">Total</span>
             <span className="text-base font-bold text-slate-700">{total}</span>
           </div>
-          <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-center min-w-[60px]">
+          <div className="bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl text-center min-w-[55px]">
             <span className="text-emerald-700 text-[10px] block uppercase">Listos</span>
             <span className="text-base font-bold text-emerald-700">{escaneados}</span>
           </div>
-          <div className="bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl text-center min-w-[60px]">
+          <div className="bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-xl text-center min-w-[55px]">
             <span className="text-rose-600 text-[10px] block uppercase">Faltan</span>
             <span className="text-base font-bold text-rose-700">{faltantes}</span>
           </div>
