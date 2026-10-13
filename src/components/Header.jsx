@@ -1,23 +1,43 @@
-export default function Header({ currentView, setView, activeBatchId, consultaCount = 0 }) {
+import UniversalSearchBar from './UniversalSearchBar.jsx';
+
+export default function Header({ 
+  currentView, 
+  setView, 
+  activeBatchId, 
+  consultaCount = 0,
+  printers = [],
+  onLocateEquipment,
+  onUnlocatedSelected
+}) {
   return (
     <header className="bg-red-700 text-white shadow-md sticky top-0 z-30">
-      <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap justify-between items-center gap-3">
+      <div className="max-w-[1920px] mx-auto px-3 sm:px-6 py-2 flex flex-wrap justify-between items-center gap-3">
         {/* Logo y título */}
         <div 
           onClick={() => setView('masterInventory')} 
-          className="flex items-center gap-3 cursor-pointer group"
+          className="flex items-center gap-3 cursor-pointer group shrink-0"
         >
           <div className="w-10 h-10 bg-white text-red-700 rounded-xl flex items-center justify-center font-black text-xl shadow-xs group-hover:scale-105 transition-transform">
             CDM
           </div>
           <div>
-            <h1 className="text-xl font-black tracking-wide leading-none">ALMACÉN CDM</h1>
-            <p className="text-xs text-red-200 font-medium">Inventario Maestro y Control de Recepción</p>
+            <h1 className="text-lg sm:text-xl font-black tracking-wide leading-none">ALMACÉN CDM</h1>
+            <p className="text-[11px] text-red-200 font-medium hidden sm:block">Inventario Maestro y Control de Recepción</p>
           </div>
         </div>
 
+        {/* Buscador Universal en el Centro */}
+        <div className="flex-1 max-w-lg min-w-[240px] order-3 md:order-2 w-full md:w-auto">
+          <UniversalSearchBar
+            printers={printers}
+            onLocateEquipment={onLocateEquipment}
+            onUnlocatedSelected={onUnlocatedSelected}
+            placeholder="¿Dónde está este equipo? (Serie, # o Modelo)..."
+          />
+        </div>
+
         {/* Pestañas de Navegación */}
-        <nav className="flex items-center gap-2">
+        <nav className="flex items-center gap-2 order-2 md:order-3">
           {activeBatchId ? (
             <div className="flex items-center gap-2">
               <span className="text-xs bg-red-800 text-white px-3 py-1.5 rounded-full font-bold flex items-center gap-1.5 animate-pulse">

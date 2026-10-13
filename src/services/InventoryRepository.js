@@ -152,29 +152,31 @@ export class InventoryRepository {
       is_scanned: false
     }));
 
-    try {
-      const { error: seriesError } = await supabase
-        .from('expected_series')
-        .insert(seriesToInsert);
-
-      if (seriesError) {
-        // Fallback si la columna internal_number aún no existe en Supabase
-        const fallbackSeries = series.map(s => ({
-          checklist_id: batchData.id,
-          serial_number: s.serial,
-          material_model: s.material,
-          is_scanned: false
-        }));
-        await supabase.from('expected_series').insert(fallbackSeries);
+    // Función auxiliar para insertar en chunks
+    const insertInChunks = async (dataArray, fallback = false) => {
+      const chunkSize = 500;
+      for (let i = 0; i < dataArray.length; i += chunkSize) {
+        const chunk = dataArray.slice(i, i + chunkSize);
+        if (fallback) {
+           await supabase.from('expected_series').insert(chunk);
+        } else {
+           const { error: chunkError } = await supabase.from('expected_series').insert(chunk);
+           if (chunkError) throw chunkError;
+        }
       }
+    };
+
+    try {
+      await insertInChunks(seriesToInsert, false);
     } catch {
+      // Fallback si la columna internal_number aún no existe en Supabase
       const fallbackSeries = series.map(s => ({
         checklist_id: batchData.id,
         serial_number: s.serial,
         material_model: s.material,
         is_scanned: false
       }));
-      await supabase.from('expected_series').insert(fallbackSeries);
+      await insertInChunks(fallbackSeries, true);
     }
 
     return batchData;

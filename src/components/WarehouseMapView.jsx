@@ -1,10 +1,16 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { InventoryController } from '../controllers/InventoryController.js';
+import UniversalSearchBar from './UniversalSearchBar.jsx';
 
 export default function WarehouseMapView({ 
   checklists = [], 
-  onLayoutChange 
+  onLayoutChange,
+  highlightTarget = null,
+  onClearHighlight = null,
+  onLocateEquipment = null,
+  onUnlocatedSelected = null,
+  onNavigateToReading = null
 }) {
   // Extraer todas las impresoras de todos los lotes
   const allPrinters = useMemo(() => {
@@ -41,10 +47,45 @@ export default function WarehouseMapView({
 
   const canvasRef = useRef(null);
 
+  const [selectedRowModal, setSelectedRowModal] = useState(null);
+
   // Almacén activo actualmente
   const activeWarehouse = useMemo(() => {
     return mapModel.getActiveWarehouse();
   }, [mapModel]);
+
+  // Sincronizar y enfocar automáticamente si hay un objetivo localizado
+  useEffect(() => {
+    if (!highlightTarget) return;
+
+    const targetWhName = (highlightTarget.warehouseName || '').trim().toLowerCase();
+    if (targetWhName && activeWarehouse) {
+      const currentWhName = (activeWarehouse.name || '').trim().toLowerCase();
+      if (targetWhName !== currentWhName) {
+        const matchingWh = mapModel.warehouses.find(w => 
+          w.name.trim().toLowerCase() === targetWhName || w.id === targetWhName
+        );
+        if (matchingWh) {
+          handleSelectWarehouse(matchingWh.id);
+        }
+      }
+    }
+
+    const timer = setTimeout(() => {
+      if (highlightTarget.warehouseRow) {
+        const cleanTargetRow = highlightTarget.warehouseRow.trim().toLowerCase();
+        const rowObj = mapModel.rows.find(r => r.name.trim().toLowerCase() === cleanTargetRow);
+        if (rowObj) {
+          const el = document.getElementById(`row-card-${rowObj.id}`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+          }
+        }
+      }
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [highlightTarget, activeWarehouse, mapModel]);
 
   // Calcular estadísticas y rangos numéricos para cada fila del almacén activo
   const statsMap = useMemo(() => {
@@ -256,11 +297,75 @@ export default function WarehouseMapView({
         </div>
       </div>
 
-      {/* Controles del mapa */}
-      <div className="flex items-center justify-between gap-2 px-1">
-        <span className="text-xs text-slate-500 font-medium">
-          Filas en plano: <strong className="text-slate-700 font-semibold">{mapModel.rows.length}</strong>
-        </span>
+      {/* BANNER FLOTANTE DEL EQUIPO LOCALIZADO EN EL MAPA */}
+      {highlightTarget && (
+        <div className="bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 text-white p-3.5 rounded-2xl shadow-xl border border-amber-300 flex flex-wrap justify-between items-center gap-3 animate-fade-in">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 bg-white/25 rounded-xl flex items-center justify-center text-xl shadow-inner shrink-0 animate-ping-slow">
+              📍
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] uppercase font-bold tracking-wider bg-black/25 text-amber-100 px-2 py-0.5 rounded-full">
+                  Equipo Localizado en Vivo
+                </span>
+                <span className="text-[11px] font-semibold text-amber-100">
+                  Estado: {highlightTarget.status || 'DISPONIBLE'}
+                </span>
+              </div>
+              <h3 className="text-base sm:text-lg font-black tracking-wide flex items-center gap-1.5 mt-0.5 truncate">
+                <span>{highlightTarget.warehouseName || activeWarehouse.name}</span>
+                <span className="text-amber-200 font-normal">&gt;</span>
+                <span className="text-yellow-100 underline decoration-yellow-300/80">{highlightTarget.warehouseRow}</span>
+                <span className="text-amber-200 font-normal">&gt;</span>
+                <span className="bg-black/25 px-2 py-0.5 rounded-md font-mono text-sm sm:text-base">
+                  {highlightTarget.warehouseSpace || 'Espacio Asignado'}
+                </span>
+              </h3>
+              <p className="text-xs text-amber-100 flex flex-wrap items-center gap-2 mt-0.5 font-medium">
+                <span>Serie: <strong className="text-white font-mono">{highlightTarget.serial}</strong></span>
+                <span>•</span>
+                <span>Modelo: <strong className="text-white">{highlightTarget.material}</strong></span>
+                {highlightTarget.internalNumber && (
+                  <>
+                    <span>•</span>
+                    <span>Equipo: <strong className="text-white font-mono">#{highlightTarget.internalNumber}</strong></span>
+                  </>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={onClearHighlight}
+              className="bg-black/30 hover:bg-black/50 text-white text-xs font-bold px-3 py-2 rounded-xl transition shadow-xs flex items-center gap-1.5"
+            >
+              <span>✕</span> Quitar Marcador
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Controles del mapa y buscador integrado */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500 font-medium">
+            Filas en plano: <strong className="text-slate-700 font-semibold">{mapModel.rows.length}</strong>
+          </span>
+        </div>
+
+        {/* Buscador Integrado en la cabecera del mapa */}
+        <div className="w-full sm:w-80">
+          <UniversalSearchBar
+            printers={allPrinters}
+            onLocateEquipment={onLocateEquipment}
+            onUnlocatedSelected={onUnlocatedSelected}
+            placeholder="Localizar en plano (Serie, # o Mod)..."
+            compact={true}
+          />
+        </div>
 
         <div className="flex items-center gap-1.5">
           <button
@@ -314,10 +419,14 @@ export default function WarehouseMapView({
 
             const isDragging = draggingId === row.id;
             const isEditing = editingRowId === row.id;
+            const isTargetRow = highlightTarget && 
+              highlightTarget.warehouseRow && 
+              row.name.trim().toLowerCase() === highlightTarget.warehouseRow.trim().toLowerCase();
 
             return (
               <div
                 key={row.id}
+                id={`row-card-${row.id}`}
                 onMouseDown={(e) => handleMouseDown(e, row)}
                 style={{
                   position: 'absolute',
@@ -325,11 +434,13 @@ export default function WarehouseMapView({
                   top: `${row.y}px`,
                   width: `${row.width || 190}px`,
                   minHeight: `${row.height || 120}px`,
-                  zIndex: isDragging ? 30 : 10
+                  zIndex: isDragging ? 35 : isTargetRow ? 40 : 10
                 }}
-                className={`rounded-xl border transition-shadow cursor-grab active:cursor-grabbing p-3 flex flex-col justify-between select-none ${
+                className={`rounded-xl border transition-all cursor-grab active:cursor-grabbing p-3 flex flex-col justify-between select-none ${
                   isDragging 
                     ? 'shadow-lg ring-2 ring-blue-400 border-blue-500 bg-white z-40' 
+                    : isTargetRow
+                    ? 'animate-locate-pulse border-amber-500 bg-amber-50/95 ring-4 ring-amber-400 shadow-2xl'
                     : stats.consultasCount > 0
                     ? 'bg-amber-50/50 border-amber-300 hover:border-amber-400 shadow-xs'
                     : 'bg-white border-slate-200 hover:border-slate-300 shadow-xs'
@@ -360,7 +471,7 @@ export default function WarehouseMapView({
                       </form>
                     ) : (
                       <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0"></span>
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isTargetRow ? 'bg-amber-500 animate-ping' : 'bg-slate-400'}`}></span>
                         <h4 className="font-semibold text-slate-800 text-xs uppercase tracking-wide truncate">
                           {row.name}
                         </h4>
@@ -379,9 +490,17 @@ export default function WarehouseMapView({
 
                     {!isEditing && (
                       <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-[10px] bg-slate-100 text-slate-600 font-medium px-1.5 py-0.5 rounded">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedRowModal({ row, stats });
+                          }}
+                          className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-1.5 py-0.5 rounded transition"
+                          title="Ver todos los equipos ubicados en esta fila"
+                        >
                           {stats.totalCount} eqs
-                        </span>
+                        </button>
                         <button
                           type="button"
                           onClick={(e) => handleDeleteRow(row.id, e)}
@@ -406,6 +525,28 @@ export default function WarehouseMapView({
                       {stats.numberRangeText}
                     </p>
                   </div>
+
+                  {/* DESTACADO PARPADEANTE DEL EQUIPO BUSCADO */}
+                  {isTargetRow && (
+                    <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-lg p-2 my-1.5 shadow-md flex flex-col gap-0.5 animate-pulse">
+                      <div className="flex items-center justify-between text-xs font-black">
+                        <span className="flex items-center gap-1">
+                          <span className="text-sm">📍</span> ¡AQUÍ ESTÁ!
+                        </span>
+                        <span className="bg-black/25 text-white text-[10px] px-1.5 py-0.5 rounded font-mono font-bold">
+                          {highlightTarget.warehouseSpace ? `Espacio: ${highlightTarget.warehouseSpace}` : 'Espacio asignado'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-mono text-amber-100 font-bold truncate">
+                        Serie: {highlightTarget.serial}
+                      </div>
+                      {highlightTarget.internalNumber && (
+                        <div className="text-[10px] text-white font-bold">
+                          Equipo #{highlightTarget.internalNumber}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Modelos y estado */}
@@ -514,6 +655,86 @@ export default function WarehouseMapView({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Modal para ver todos los equipos de la Fila seleccionada */}
+      {selectedRowModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[85vh] flex flex-col shadow-2xl border border-slate-200 animate-fade-in-up">
+            <div className="p-4 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
+                  <span>🏢 {activeWarehouse.name}</span>
+                  <span className="text-slate-400">&gt;</span>
+                  <span>{selectedRowModal.row.name}</span>
+                </h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  {selectedRowModal.stats.totalCount} equipo(s) ubicado(s) • Rango: {selectedRowModal.stats.numberRangeText}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedRowModal(null)}
+                className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto divide-y divide-slate-100 flex-1">
+              {selectedRowModal.stats.printers && selectedRowModal.stats.printers.length > 0 ? (
+                selectedRowModal.stats.printers.map((p, idx) => {
+                  const isHighlighted = highlightTarget && highlightTarget.serial === p.serial;
+                  return (
+                    <div 
+                      key={`${p.serial}-${idx}`} 
+                      className={`py-2.5 px-2 flex items-center justify-between text-xs rounded-lg transition ${
+                        isHighlighted ? 'bg-amber-100/90 border border-amber-300 font-bold' : 'hover:bg-slate-50'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900">{p.material}</span>
+                          {p.internalNumber && (
+                            <span className="bg-slate-100 text-slate-700 text-[10px] font-mono px-1 py-0.2 rounded border border-slate-200">
+                              #{p.internalNumber}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 font-mono">
+                          Serie: {p.serial}
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <div className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-xs">
+                          {p.warehouseSpace || 'Sin Espacio'}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          {p.status || 'DISPONIBLE'}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="py-8 text-center text-slate-400 text-xs">
+                  No hay equipos registrados en esta fila todavía.
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-slate-50 border-t border-slate-200 rounded-b-2xl flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedRowModal(null)}
+                className="px-4 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

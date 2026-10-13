@@ -109,15 +109,44 @@ function App() {
     return batches.find(b => b.id === activeBatchId);
   }, [batches, activeBatchId]);
 
-  // Todas las impresoras en inventario
+  // Todas las impresoras en inventario activo
   const allPrinters = useMemo(() => {
     return InventoryController.extractAllPrinters(batches);
+  }, [batches]);
+
+  // Absolutamente todas las impresoras del sistema (incluyendo pendientes de lectura física)
+  const allSystemPrinters = useMemo(() => {
+    return InventoryController.extractAllExpectedPrinters(batches);
   }, [batches]);
 
   // Conteo total de impresoras en estado de CONSULTA para alerta global
   const totalConsultas = useMemo(() => {
     return allPrinters.filter(p => p.isConsulta).length;
   }, [allPrinters]);
+
+  // Estado para el equipo localizado en el mapa gráfico ("¿Dónde está este equipo?")
+  const [highlightTarget, setHighlightTarget] = useState(null);
+  const [unlocatedModalTarget, setUnlocatedModalTarget] = useState(null);
+
+  // Acción cuando se selecciona un equipo con ubicación: llevar al Mapa y resaltarlo
+  const handleLocateEquipment = useCallback((printer) => {
+    setHighlightTarget({
+      serial: printer.serial,
+      material: printer.material,
+      internalNumber: printer.internalNumber,
+      warehouseName: printer.warehouseName || 'Almacén 1',
+      warehouseRow: printer.warehouseRow || 'Fila 1',
+      warehouseSpace: printer.warehouseSpace || '',
+      status: printer.status || 'DISPONIBLE',
+      timestamp: Date.now()
+    });
+    setView('warehouseMap');
+  }, []);
+
+  // Acción cuando se selecciona un equipo que aún no tiene ubicación asignada
+  const handleUnlocatedSelected = useCallback((printer) => {
+    setUnlocatedModalTarget(printer);
+  }, []);
 
   // Crear nuevo lote con número consecutivo
   const handleCreateBatch = async (fileName, series, consecutiveNumber) => {
@@ -296,6 +325,9 @@ function App() {
         }}
         activeBatchId={activeBatchId}
         consultaCount={totalConsultas}
+        printers={allSystemPrinters}
+        onLocateEquipment={handleLocateEquipment}
+        onUnlocatedSelected={handleUnlocatedSelected}
       />
 
       {/* Contenido Principal a Pantalla Completa */}
@@ -393,11 +425,56 @@ function App() {
                 checklists={batches}
                 onLayoutChange={handleLayoutChange}
                 onPrinterChange={fetchBatches}
+                highlightTarget={highlightTarget}
+                onClearHighlight={() => setHighlightTarget(null)}
+                onLocateEquipment={handleLocateEquipment}
+                onUnlocatedSelected={handleUnlocatedSelected}
+                onNavigateToReading={() => setView('equipmentReading')}
               />
             )}
           </>
         )}
       </main>
+
+      {/* Modal de Aviso para Equipos sin Ubicación Física Asignada */}
+      {unlocatedModalTarget && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-fade-in-up">
+            <div className="w-12 h-12 bg-amber-100 text-amber-700 rounded-2xl flex items-center justify-center text-2xl mb-4">
+              ⚠️
+            </div>
+            <h3 className="text-base font-bold text-slate-900 mb-1">
+              Equipo sin Ubicación en el Mapa
+            </h3>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              El equipo con serie <strong className="text-slate-900 font-mono font-bold">{unlocatedModalTarget.serial}</strong> ({unlocatedModalTarget.material}) está registrado en el sistema, pero <strong>aún no tiene asignado Almacén, Fila ni Espacio</strong> físico.
+            </p>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mb-5 text-xs text-slate-600 flex flex-col gap-1.5 font-medium">
+              <div><span className="text-slate-400 font-semibold">Lote / Origen:</span> {unlocatedModalTarget.batchFolio || unlocatedModalTarget.batchName || 'Recepción'}</div>
+              <div><span className="text-slate-400 font-semibold">Estado actual:</span> {unlocatedModalTarget.status || 'DISPONIBLE'}</div>
+            </div>
+            <div className="flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setUnlocatedModalTarget(null)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition"
+              >
+                Cerrar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUnlocatedModalTarget(null);
+                  setView('equipmentReading');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs transition shadow-xs flex items-center justify-center gap-1.5"
+              >
+                <span>📦</span> Ubicar en Almacén
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
