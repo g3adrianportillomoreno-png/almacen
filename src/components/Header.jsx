@@ -62,7 +62,7 @@ export default function Header({
                 Sesión de Escaneo Activa
               </span>
               <button 
-                onClick={() => setView('home')}
+                onClick={() => setView(currentView === 'mercadoLibreScan' ? 'mercadoLibre' : 'home')}
                 className="text-xs bg-white text-red-700 px-3.5 py-1.5 rounded-lg font-bold hover:bg-gray-100 transition shadow-xs"
               >
                 Pausar y Volver
@@ -100,6 +100,20 @@ export default function Header({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                 </svg>
                 <span>Recepciones</span>
+              </button>
+
+              {/* PESTAÑA 3: MERCADO LIBRE */}
+              <button
+                onClick={() => setView('mercadoLibre')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                  currentView === 'mercadoLibre' || currentView === 'mercadoLibreScan'
+                    ? 'bg-amber-400 text-amber-950 shadow-xs font-black' 
+                    : 'text-amber-200 hover:text-white hover:bg-red-800 font-bold'
+                }`}
+                title="Control de despachos, guías y rastreo de Mercado Libre"
+              >
+                <span className="text-sm">📦</span>
+                <span>Mercado Libre</span>
               </button>
 
               {/* PESTAÑA 3: MAPA DE ALMACÉN */}

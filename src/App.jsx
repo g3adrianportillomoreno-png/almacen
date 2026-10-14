@@ -5,6 +5,7 @@ import './App.css';
 import { ChecklistController } from './controllers/ChecklistController';
 import { WarehouseMapController } from './controllers/WarehouseMapController';
 import { InventoryController } from './controllers/InventoryController';
+import { MercadoLibreController } from './controllers/MercadoLibreController';
 
 // Componentes y Vistas
 import Header from './components/Header';
@@ -16,6 +17,8 @@ import WarehouseAssignmentView from './components/WarehouseAssignmentView';
 import MasterInventoryView from './components/MasterInventoryView';
 import EquipmentReadingView from './components/EquipmentReadingView';
 import OperatorMobileView from './components/OperatorMobileView';
+import MercadoLibreView from './components/MercadoLibreView';
+import MercadoLibreScanView from './components/MercadoLibreScanView';
 import { supabase } from './utils/supabaseClient';
 
 function App() {
@@ -38,6 +41,10 @@ function App() {
   const [batches, setBatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
+
+  // Lotes y Sesiones de Mercado Libre
+  const [mlBatches, setMlBatches] = useState([]);
+  const [activeMlBatchId, setActiveMlBatchId] = useState(null);
 
   // Obtener nombres de filas disponibles desde el layout del mapa
   const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
@@ -69,6 +76,20 @@ function App() {
     fetchBatches();
   }, [fetchBatches]);
 
+  // Carga centralizada de lotes de Mercado Libre
+  const fetchMlBatches = useCallback(async () => {
+    try {
+      const loaded = await MercadoLibreController.getBatches();
+      setMlBatches(loaded);
+    } catch (err) {
+      console.warn("Error cargando lotes de Mercado Libre:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMlBatches();
+  }, [fetchMlBatches]);
+
   // Sincronización en tiempo real vía WebSockets de Supabase (Multi-usuario: Operadores y Oficina)
   useEffect(() => {
     let debounceTimer = null;
@@ -76,6 +97,7 @@ function App() {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         fetchBatches(true);
+        fetchMlBatches();
         handleLayoutChange();
       }, 300);
     };
@@ -96,18 +118,37 @@ function App() {
           triggerDebouncedRefresh();
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mercadolibre_batches' },
+        () => {
+          triggerDebouncedRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'mercadolibre_items' },
+        () => {
+          triggerDebouncedRefresh();
+        }
+      )
       .subscribe();
 
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
-  }, [fetchBatches, handleLayoutChange]);
+  }, [fetchBatches, fetchMlBatches, handleLayoutChange]);
 
   // Lote activo en escaneo
   const activeBatch = useMemo(() => {
     return batches.find(b => b.id === activeBatchId);
   }, [batches, activeBatchId]);
+
+  // Lote activo en escaneo de Mercado Libre
+  const activeMlBatch = useMemo(() => {
+    return mlBatches.find(b => String(b.id) === String(activeMlBatchId));
+  }, [mlBatches, activeMlBatchId]);
 
   // Todas las impresoras en inventario activo
   const allPrinters = useMemo(() => {
@@ -278,6 +319,77 @@ function App() {
     fetchBatches();
   };
 
+  // Handlers para Módulo Mercado Libre
+  const handleCreateMlBatch = async (fileName, items, consecutive) => {
+    const created = await MercadoLibreController.createBatch(fileName, items, consecutive);
+    await fetchMlBatches();
+    return created;
+  };
+
+  const handleSelectMlBatch = (batchId) => {
+    setActiveMlBatchId(batchId);
+    setView('mercadoLibreScan');
+  };
+
+  const handleDeleteMlBatch = async (batchId) => {
+    await MercadoLibreController.deleteBatch(batchId);
+    setMlBatches(prev => prev.filter(b => String(b.id) !== String(batchId)));
+    await fetchMlBatches();
+  };
+
+  const handleRecordMlScan = async (batchId, itemId, method) => {
+    setMlBatches(prev => prev.map(b => {
+      if (String(b.id) === String(batchId)) {
+        const updatedItems = b.items.map(it => {
+          if (String(it.id) === String(itemId)) {
+            return {
+              ...it,
+              isScanned: true,
+              scannedAt: new Date().toISOString(),
+              scannedWith: method
+            };
+          }
+          return it;
+        });
+        return {
+          ...b,
+          items: updatedItems
+        };
+      }
+      return b;
+    }));
+
+    await MercadoLibreController.recordSuccessfulScan(batchId, itemId, method, activeMlBatch);
+  };
+
+  const handleRecordMlUnexpected = async (batchId, code) => {
+    setMlBatches(prev => prev.map(b => {
+      if (String(b.id) === String(batchId)) {
+        const logs = b.unexpectedLogs || [];
+        return {
+          ...b,
+          unexpectedLogs: [{ id: Date.now(), scannedValue: code, createdAt: new Date().toISOString() }, ...logs]
+        };
+      }
+      return b;
+    }));
+
+    await MercadoLibreController.recordUnexpectedScan(batchId, code);
+  };
+
+  const handleFinishMlSession = () => {
+    setActiveMlBatchId(null);
+    setView('mercadoLibre');
+    fetchMlBatches();
+  };
+
+  const handleForceFinishMlBatch = async () => {
+    if (activeMlBatchId) {
+      await MercadoLibreController.forceFinishBatch(activeMlBatchId);
+      await fetchMlBatches();
+    }
+  };
+
   const handleRequestAdminView = () => {
     const password = window.prompt("Introduce la contraseña de acceso a Oficina:");
     if (password === 'QWERTY' || password === 'qwerty') {
@@ -322,8 +434,9 @@ function App() {
           setView(v);
           localStorage.setItem('preferred_view', v);
           if (v !== 'scan') setActiveBatchId(null);
+          if (v !== 'mercadoLibreScan') setActiveMlBatchId(null);
         }}
-        activeBatchId={activeBatchId}
+        activeBatchId={activeBatchId || activeMlBatchId}
         consultaCount={totalConsultas}
         printers={allSystemPrinters}
         onLocateEquipment={handleLocateEquipment}
@@ -430,6 +543,28 @@ function App() {
                 onLocateEquipment={handleLocateEquipment}
                 onUnlocatedSelected={handleUnlocatedSelected}
                 onNavigateToReading={() => setView('equipmentReading')}
+              />
+            )}
+
+            {/* Vista 7: Mercado Libre - Lista de Lotes */}
+            {view === 'mercadoLibre' && (
+              <MercadoLibreView 
+                batches={mlBatches}
+                onCreateBatch={handleCreateMlBatch}
+                onSelectBatch={handleSelectMlBatch}
+                onDeleteBatch={handleDeleteMlBatch}
+                onRefresh={fetchMlBatches}
+              />
+            )}
+
+            {/* Vista 8: Mercado Libre - Sesión de Escaneo */}
+            {view === 'mercadoLibreScan' && activeMlBatch && (
+              <MercadoLibreScanView 
+                batchDetails={activeMlBatch}
+                onRecordScan={handleRecordMlScan}
+                onRecordUnexpected={handleRecordMlUnexpected}
+                onFinishSession={handleFinishMlSession}
+                onForceFinish={handleForceFinishMlBatch}
               />
             )}
           </>
