@@ -14,6 +14,7 @@ export default function MasterInventoryView({
   const [warehouseFilter, setWarehouseFilter] = useState('ALL');
   const [rowFilter, setRowFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL', 'ASSIGNED', 'UNASSIGNED', 'NEW'
+  const [systemStateFilter, setSystemStateFilter] = useState('ALL'); // 'ALL', 'Principal', 'Seminuevos', 'Remanufacturado', 'Refacciones para operaciones'
   
   // Modal de edición de ubicación
   const [editingPrinter, setEditingPrinter] = useState(null);
@@ -21,6 +22,7 @@ export default function MasterInventoryView({
   const [editRow, setEditRow] = useState('');
   const [editSpace, setEditSpace] = useState('');
   const [editInternalNumber, setEditInternalNumber] = useState('');
+  const [editSystemStatus, setEditSystemStatus] = useState('Principal');
   const [customWarehouseInput, setCustomWarehouseInput] = useState('');
   const [showCustomWarehouse, setShowCustomWarehouse] = useState(false);
   const [customRowInput, setCustomRowInput] = useState('');
@@ -31,6 +33,17 @@ export default function MasterInventoryView({
   const [isUploading, setIsUploading] = useState(false);
   const [reconcileResult, setReconcileResult] = useState(null);
   const fileInputRef = useRef(null);
+
+  // Actualización de Maestro con purga de Bajas por Diferencia
+  const [pendingUpdateData, setPendingUpdateData] = useState(null);
+  const [updatePasswordInput, setUpdatePasswordInput] = useState('');
+  const [isExecutingUpdate, setIsExecutingUpdate] = useState(false);
+  const updateFileInputRef = useRef(null);
+
+  // Historial de Bajas (30 días)
+  const [showDeparturesModal, setShowDeparturesModal] = useState(false);
+  const [departuresList, setDeparturesList] = useState([]);
+  const [isLoadingDepartures, setIsLoadingDepartures] = useState(false);
 
   // Paginación
   const [currentPage, setCurrentPage] = useState(1);
@@ -66,7 +79,11 @@ export default function MasterInventoryView({
     const conUbicacion = allPrinters.filter(p => p.warehouseSpace && p.warehouseRow && p.warehouseRow !== 'Sin Asignar').length;
     const sinUbicacion = total - conUbicacion;
     const sinNumeroEquipo = allPrinters.filter(p => !p.internalNumber || String(p.internalNumber).trim() === '').length;
-    return { total, conUbicacion, sinUbicacion, sinNumeroEquipo };
+    const principal = allPrinters.filter(p => (p.systemStatus || 'Principal') === 'Principal').length;
+    const seminuevos = allPrinters.filter(p => p.systemStatus === 'Seminuevos').length;
+    const remanufacturado = allPrinters.filter(p => p.systemStatus === 'Remanufacturado').length;
+    const refacciones = allPrinters.filter(p => p.systemStatus === 'Refacciones para operaciones').length;
+    return { total, conUbicacion, sinUbicacion, sinNumeroEquipo, principal, seminuevos, remanufacturado, refacciones };
   }, [allPrinters]);
 
   // Filtrado de impresoras
@@ -80,7 +97,8 @@ export default function MasterInventoryView({
         const matchesModel = (p.material || '').toLowerCase().includes(query);
         const matchesInternal = String(p.internalNumber || '').toLowerCase().includes(query);
         const matchesSpace = (p.warehouseSpace || '').toLowerCase().includes(query);
-        if (!matchesSerial && !matchesModel && !matchesInternal && !matchesSpace) {
+        const matchesSystemStatus = (p.systemStatus || '').toLowerCase().includes(query);
+        if (!matchesSerial && !matchesModel && !matchesInternal && !matchesSpace && !matchesSystemStatus) {
           return false;
         }
       }
@@ -95,7 +113,7 @@ export default function MasterInventoryView({
         if ((p.warehouseRow || '') !== rowFilter) return false;
       }
 
-      // Filtro por Estado
+      // Filtro por Estado de Ubicación
       if (statusFilter === 'ASSIGNED') {
         if (!p.warehouseSpace || !p.warehouseRow || p.warehouseRow === 'Sin Asignar') return false;
       } else if (statusFilter === 'UNASSIGNED') {
@@ -104,9 +122,15 @@ export default function MasterInventoryView({
         if (p.internalNumber && String(p.internalNumber).trim() !== '') return false;
       }
 
+      // Filtro por Estado de Proceso (Sistema)
+      if (systemStateFilter !== 'ALL') {
+        const itemStatus = p.systemStatus || 'Principal';
+        if (itemStatus !== systemStateFilter) return false;
+      }
+
       return true;
     });
-  }, [allPrinters, searchQuery, warehouseFilter, rowFilter, statusFilter]);
+  }, [allPrinters, searchQuery, warehouseFilter, rowFilter, statusFilter, systemStateFilter]);
 
   // Paginación
   const totalPages = Math.ceil(filteredPrinters.length / itemsPerPage) || 1;
@@ -141,13 +165,14 @@ export default function MasterInventoryView({
     setEditRow(printer.warehouseRow && printer.warehouseRow !== 'Sin Asignar' ? printer.warehouseRow : (rowList[0] || 'Fila 1'));
     setEditSpace(printer.warehouseSpace || '');
     setEditInternalNumber(printer.internalNumber !== null && printer.internalNumber !== undefined ? String(printer.internalNumber) : '');
+    setEditSystemStatus(printer.systemStatus || 'Principal');
     setShowCustomWarehouse(false);
     setShowCustomRow(false);
     setCustomWarehouseInput('');
     setCustomRowInput('');
   };
 
-  // Guardar reubicación física
+  // Guardar reubicación física y estado
   const handleSaveLocation = async (e) => {
     e.preventDefault();
     if (!editingPrinter) return;
@@ -166,7 +191,8 @@ export default function MasterInventoryView({
         warehouseName: editWarehouse,
         warehouseRow: editRow,
         warehouseSpace: spaceFinal,
-        internalNumber: internalFinal
+        internalNumber: internalFinal,
+        systemStatus: editSystemStatus
       });
 
       // Asegurar que la fila se refleje en el plano si es nueva
@@ -216,6 +242,83 @@ export default function MasterInventoryView({
     }
   };
 
+  // Manejo de actualización de maestro con purga de bajas por diferencia
+  const handleUpdateExcelSelected = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const extractedRows = await extractSeriesFromExcel(file);
+      if (extractedRows.length === 0) {
+        alert("No se detectaron series en el documento. Asegúrate de incluir la columna 'NUMERO DE SERIE'.");
+        return;
+      }
+
+      // Comparar contra el inventario actual para detectar qué impresoras ya no vienen
+      const newSerialsSet = new Set(extractedRows.map(r => r.serial.toUpperCase()));
+      const removedPrinters = allPrinters.filter(p => !newSerialsSet.has(p.serial.toUpperCase()));
+
+      setPendingUpdateData({
+        fileName: file.name,
+        extractedRows,
+        removedPrinters
+      });
+      setUpdatePasswordInput('');
+    } catch (err) {
+      alert("Error al analizar el archivo para actualización: " + err.message);
+    } finally {
+      if (updateFileInputRef.current) updateFileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmUpdate = async (e) => {
+    e.preventDefault();
+    if (!pendingUpdateData) return;
+
+    if (updatePasswordInput.trim() !== 'QWERTY') {
+      alert("Contraseña incorrecta. Se requiere autorización (QWERTY) para aplicar bajas y actualizar el maestro.");
+      return;
+    }
+
+    setIsExecutingUpdate(true);
+    try {
+      const res = await InventoryController.updateMasterInventoryWithPurge(
+        pendingUpdateData.extractedRows,
+        pendingUpdateData.removedPrinters
+      );
+
+      alert(
+        `✓ Actualización de Inventario Maestro completada con éxito:\n\n` +
+        `• Impresoras leídas del archivo: ${res.totalRead}\n` +
+        `• Bajas registradas / eliminadas: ${res.removedCount}\n` +
+        `• Impresoras actualizadas: ${res.updated}\n` +
+        `• Impresoras nuevas agregadas: ${res.added}`
+      );
+
+      setPendingUpdateData(null);
+      setUpdatePasswordInput('');
+      if (onInventoryChange) onInventoryChange();
+    } catch (err) {
+      alert("Error al actualizar el inventario maestro: " + err.message);
+    } finally {
+      setIsExecutingUpdate(false);
+    }
+  };
+
+  // Abrir historial de bajas de los últimos 30 días
+  const handleOpenDepartures = async () => {
+    setShowDeparturesModal(true);
+    setIsLoadingDepartures(true);
+    try {
+      const data = await InventoryController.getDeparturesHistory();
+      setDeparturesList(data);
+    } catch (err) {
+      console.warn("Error cargando bajas:", err);
+    } finally {
+      setIsLoadingDepartures(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5 w-full animate-fade-in pb-12">
       {/* Input invisible para subir Excel Maestro */}
@@ -225,6 +328,15 @@ export default function MasterInventoryView({
         ref={fileInputRef} 
         style={{ display: 'none' }} 
         onChange={handleMasterExcelUpload} 
+      />
+
+      {/* Input invisible para actualizar Excel Maestro con bajas por diferencia */}
+      <input 
+        type="file" 
+        accept=".xlsx, .xls, .csv" 
+        ref={updateFileInputRef} 
+        style={{ display: 'none' }} 
+        onChange={handleUpdateExcelSelected} 
       />
 
       {/* APARTADO EXCLUSIVO: SUBIR / ACTUALIZAR ARCHIVO MAESTRO */}
@@ -243,7 +355,7 @@ export default function MasterInventoryView({
               Cargar o Actualizar Archivo Maestro de Inventario
             </h2>
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-              Sube el archivo Excel con las <strong className="text-white">3 primeras columnas</strong> (<em>Clave, Número de serie, Número de equipo</em>) para registrar o relacionar equipos, o con las <strong className="text-white">6 columnas completas</strong> (incluyendo <em>Almacén, Fila, Espacio</em>) para actualizar ubicaciones de todo el almacén.
+              Sube el archivo Excel con las <strong className="text-white">3 primeras columnas</strong> (<em>Clave, Número de serie, Número de equipo</em>) para registrar o relacionar equipos, o con las <strong className="text-white">6 o 7 columnas completas</strong> (incluyendo <em>Almacén, Fila, Espacio, Estado</em>) para actualizar ubicaciones y estados de todo el almacén.
             </p>
             <div className="flex flex-wrap items-center gap-2.5 mt-3 text-[11px] text-slate-300">
               <span className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 px-2.5 py-1 rounded-lg">
@@ -252,7 +364,7 @@ export default function MasterInventoryView({
               </span>
               <span className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 px-2.5 py-1 rounded-lg">
                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                Opción B: 6 Columnas (+ Almacén, Fila, Espacio)
+                Opción B: 6 o 7 Columnas (+ Ubicación y Estado)
               </span>
             </div>
           </div>
@@ -262,9 +374,10 @@ export default function MasterInventoryView({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className={`bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-3 px-5 rounded-xl transition shadow-sm flex items-center justify-center gap-2 ${
+              className={`bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition shadow-sm flex items-center justify-center gap-2 ${
                 isUploading ? 'opacity-60 cursor-not-allowed' : ''
               }`}
+              title="Sube un archivo para agregar o actualizar equipos existentes sin eliminar bajas"
             >
               {isUploading ? (
                 <>
@@ -283,14 +396,37 @@ export default function MasterInventoryView({
 
             <button
               type="button"
-              onClick={() => InventoryController.exportInventoryReportToExcel(allPrinters)}
-              className="bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2.5 px-5 rounded-xl transition flex items-center justify-center gap-2 border border-slate-600"
+              onClick={() => updateFileInputRef.current?.click()}
+              className="bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition shadow-sm flex items-center justify-center gap-2"
+              title="Reconcilia contra un nuevo Excel y borra las impresoras ausentes (registrando bajas)"
             >
-              <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              <svg className="w-4 h-4 text-amber-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              <span>Descargar Inventario (.xlsx)</span>
+              <span>Actualizar (Bajas por Diferencia)</span>
             </button>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleOpenDepartures}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center justify-center gap-1.5 border border-slate-700"
+                title="Ver historial de bajas de los últimos 30 días"
+              >
+                <span>📋 Bajas (30 d)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => InventoryController.exportInventoryReportToExcel(allPrinters)}
+                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center justify-center gap-1.5 border border-slate-600"
+              >
+                <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Descargar</span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -378,6 +514,93 @@ export default function MasterInventoryView({
         </div>
       </div>
 
+      {/* MÉTRICAS POR ESTADO DE PROCESO / SISTEMA */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <button
+          type="button"
+          onClick={() => {
+            setSystemStateFilter(prev => prev === 'Principal' ? 'ALL' : 'Principal');
+            setCurrentPage(1);
+          }}
+          className={`p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
+            systemStateFilter === 'Principal' 
+              ? 'bg-blue-100 border-blue-400 ring-2 ring-blue-300' 
+              : 'bg-blue-50/50 hover:bg-blue-50 border-blue-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
+            <span className="text-[11px] font-bold text-blue-950">Principal</span>
+          </div>
+          <span className="text-xs font-black text-blue-900 bg-white/80 px-2 py-0.5 rounded-md border border-blue-200">
+            {stats.principal}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSystemStateFilter(prev => prev === 'Seminuevos' ? 'ALL' : 'Seminuevos');
+            setCurrentPage(1);
+          }}
+          className={`p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
+            systemStateFilter === 'Seminuevos' 
+              ? 'bg-orange-100 border-orange-400 ring-2 ring-orange-300' 
+              : 'bg-orange-50/50 hover:bg-orange-50 border-orange-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-orange-500"></span>
+            <span className="text-[11px] font-bold text-orange-950">Seminuevos</span>
+          </div>
+          <span className="text-xs font-black text-orange-900 bg-white/80 px-2 py-0.5 rounded-md border border-orange-200">
+            {stats.seminuevos}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSystemStateFilter(prev => prev === 'Remanufacturado' ? 'ALL' : 'Remanufacturado');
+            setCurrentPage(1);
+          }}
+          className={`p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
+            systemStateFilter === 'Remanufacturado' 
+              ? 'bg-emerald-100 border-emerald-400 ring-2 ring-emerald-300' 
+              : 'bg-emerald-50/50 hover:bg-emerald-50 border-emerald-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+            <span className="text-[11px] font-bold text-emerald-950">Remanufacturado</span>
+          </div>
+          <span className="text-xs font-black text-emerald-900 bg-white/80 px-2 py-0.5 rounded-md border border-emerald-200">
+            {stats.remanufacturado}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSystemStateFilter(prev => prev === 'Refacciones para operaciones' ? 'ALL' : 'Refacciones para operaciones');
+            setCurrentPage(1);
+          }}
+          className={`p-2.5 rounded-xl border text-left transition flex items-center justify-between ${
+            systemStateFilter === 'Refacciones para operaciones' 
+              ? 'bg-amber-100 border-amber-400 ring-2 ring-amber-300' 
+              : 'bg-amber-50/50 hover:bg-amber-50 border-amber-200'
+          }`}
+        >
+          <div className="flex items-center gap-2 truncate mr-1">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0"></span>
+            <span className="text-[11px] font-bold text-amber-950 truncate">Refacciones</span>
+          </div>
+          <span className="text-xs font-black text-amber-900 bg-white/80 px-2 py-0.5 rounded-md border border-amber-200 shrink-0">
+            {stats.refacciones}
+          </span>
+        </button>
+      </div>
+
       {/* BARRA DE BÚSQUEDA Y FILTROS */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row gap-3">
         {/* Buscador */}
@@ -406,7 +629,7 @@ export default function MasterInventoryView({
         </div>
 
         {/* Filtro por Almacén */}
-        <div className="w-full md:w-44">
+        <div className="w-full md:w-36">
           <select
             value={warehouseFilter}
             onChange={(e) => {
@@ -415,7 +638,7 @@ export default function MasterInventoryView({
             }}
             className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-red-500 outline-none"
           >
-            <option value="ALL">Todos los Almacenes</option>
+            <option value="ALL">Almacenes</option>
             {warehouseList.map((w, idx) => (
               <option key={idx} value={w}>{w}</option>
             ))}
@@ -423,7 +646,7 @@ export default function MasterInventoryView({
         </div>
 
         {/* Filtro por Fila */}
-        <div className="w-full md:w-36">
+        <div className="w-full md:w-32">
           <select
             value={rowFilter}
             onChange={(e) => {
@@ -432,15 +655,15 @@ export default function MasterInventoryView({
             }}
             className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-red-500 outline-none"
           >
-            <option value="ALL">Todas las Filas</option>
+            <option value="ALL">Filas</option>
             {rowList.map((r, idx) => (
               <option key={idx} value={r}>{r}</option>
             ))}
           </select>
         </div>
 
-        {/* Filtro por Estado */}
-        <div className="w-full md:w-44">
+        {/* Filtro por Ubicación */}
+        <div className="w-full md:w-40">
           <select
             value={statusFilter}
             onChange={(e) => {
@@ -449,15 +672,33 @@ export default function MasterInventoryView({
             }}
             className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-red-500 outline-none"
           >
-            <option value="ALL">Todos los Equipos</option>
-            <option value="ASSIGNED">Con Ubicación Completa</option>
-            <option value="UNASSIGNED">Sin Ubicación</option>
-            <option value="NEW">Nuevas (Sin No. Equipo)</option>
+            <option value="ALL">Todos (Ubicación)</option>
+            <option value="ASSIGNED">Con Ubicación</option>
+            <option value="UNASSIGNED">Sin Ubicar</option>
+            <option value="NEW">Nuevas (Sin No.)</option>
+          </select>
+        </div>
+
+        {/* Filtro por Estado (Sistema / Área) */}
+        <div className="w-full md:w-48">
+          <select
+            value={systemStateFilter}
+            onChange={(e) => {
+              setSystemStateFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 focus:border-red-500 outline-none"
+          >
+            <option value="ALL">Todos los Estados</option>
+            <option value="Principal">🔵 Principal ({stats.principal})</option>
+            <option value="Seminuevos">🟠 Seminuevos ({stats.seminuevos})</option>
+            <option value="Remanufacturado">🟢 Remanufacturado ({stats.remanufacturado})</option>
+            <option value="Refacciones para operaciones">🟡 Refacciones ({stats.refacciones})</option>
           </select>
         </div>
       </div>
 
-      {/* TABLA PRINCIPAL: LAS 6 COLUMNAS OFICIALES */}
+      {/* TABLA PRINCIPAL: LAS 7 COLUMNAS OFICIALES */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -470,13 +711,14 @@ export default function MasterInventoryView({
                 <th className="py-3 px-4">4. Almacén</th>
                 <th className="py-3 px-4">5. Fila</th>
                 <th className="py-3 px-4">6. Espacio</th>
+                <th className="py-3 px-4">7. Estado</th>
                 <th className="py-3 px-4 text-center">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedPrinters.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-12 text-slate-400">
+                  <td colSpan="9" className="text-center py-12 text-slate-400">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <svg className="w-8 h-8 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
@@ -491,6 +733,7 @@ export default function MasterInventoryView({
                   const globalIdx = (currentPage - 1) * itemsPerPage + idx + 1;
                   const hasLocation = printer.warehouseSpace && printer.warehouseRow && printer.warehouseRow !== 'Sin Asignar';
                   const isNewWithoutEquipmentNumber = !printer.internalNumber || String(printer.internalNumber).trim() === '';
+                  const systemState = printer.systemStatus || 'Principal';
 
                   return (
                     <tr 
@@ -558,18 +801,42 @@ export default function MasterInventoryView({
                         )}
                       </td>
 
+                      {/* 7. ESTADO (SISTEMA / ÁREA) */}
+                      <td className="py-3 px-4">
+                        {(() => {
+                          let badgeClass = 'bg-blue-100 text-blue-900 border-blue-300';
+                          let dotColor = 'bg-blue-500';
+                          if (systemState === 'Seminuevos') {
+                            badgeClass = 'bg-orange-100 text-orange-950 border-orange-300';
+                            dotColor = 'bg-orange-500';
+                          } else if (systemState === 'Remanufacturado') {
+                            badgeClass = 'bg-emerald-100 text-emerald-950 border-emerald-300';
+                            dotColor = 'bg-emerald-500';
+                          } else if (systemState === 'Refacciones para operaciones') {
+                            badgeClass = 'bg-amber-100 text-amber-950 border-amber-300';
+                            dotColor = 'bg-amber-500';
+                          }
+                          return (
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-bold ${badgeClass}`}>
+                              <span className={`w-2 h-2 rounded-full ${dotColor}`}></span>
+                              {systemState}
+                            </span>
+                          );
+                        })()}
+                      </td>
+
                       {/* ACCIONES */}
                       <td className="py-3 px-4 text-center">
                         <button
                           type="button"
                           onClick={() => handleOpenEdit(printer)}
                           className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold px-2.5 py-1 rounded-lg text-[11px] transition border border-slate-200 shadow-2xs inline-flex items-center gap-1"
-                          title="Cambiar Almacén, Fila, Espacio o Número de Equipo"
+                          title="Cambiar Almacén, Fila, Espacio, Número de Equipo o Estado"
                         >
                           <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                           </svg>
-                          Reubicar
+                          Editar
                         </button>
                       </td>
                     </tr>
@@ -805,6 +1072,26 @@ export default function MasterInventoryView({
                   className="w-full bg-slate-50 border border-slate-300 focus:border-red-500 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none"
                 />
               </div>
+
+              {/* 7. ESTADO DE PROCESO / SISTEMA */}
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                  7. Estado (Área / Proceso en Sistema):
+                </label>
+                <select
+                  value={editSystemStatus}
+                  onChange={(e) => setEditSystemStatus(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-300 focus:border-red-500 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none"
+                >
+                  <option value="Principal">🔵 Principal (Azul)</option>
+                  <option value="Seminuevos">🟠 Seminuevos (Naranja)</option>
+                  <option value="Remanufacturado">🟢 Remanufacturado (Verde)</option>
+                  <option value="Refacciones para operaciones">🟡 Refacciones para operaciones (Amarillo)</option>
+                </select>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Define el área de proceso: Principal, Seminuevos, Remanufacturado o Refacciones.
+                </p>
+              </div>
             </div>
 
             {/* ALERTA VISIBLE DE COLISIÓN DE ESPACIO */}
@@ -845,10 +1132,255 @@ export default function MasterInventoryView({
                     : 'bg-emerald-600 hover:bg-emerald-700'
                 }`}
               >
-                {isSaving ? 'Guardando...' : 'Confirmar Ubicación'}
+                {isSaving ? 'Guardando...' : 'Confirmar Datos'}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRMACIÓN DE ACTUALIZACIÓN MAESTRO CON PURGA DE BAJAS */}
+      {pendingUpdateData && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <form 
+            onSubmit={handleConfirmUpdate}
+            className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 animate-fade-in-up flex flex-col gap-4 relative max-h-[90vh] overflow-y-auto"
+          >
+            <button 
+              type="button" 
+              onClick={() => {
+                setPendingUpdateData(null);
+                setUpdatePasswordInput('');
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm p-1"
+            >
+              ✕
+            </button>
+
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                Reconciliación con Detección de Bajas
+              </span>
+              <h3 className="text-lg font-black text-slate-900 mt-1">
+                Actualizar Inventario Maestro
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Archivo analizado: <strong className="text-slate-800">{pendingUpdateData.fileName}</strong>
+              </p>
+            </div>
+
+            {/* RESUMEN DE DIFERENCIAS */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-blue-50/60 border border-blue-200 p-3 rounded-2xl text-center">
+                <span className="text-[10px] uppercase font-bold text-blue-700 block">
+                  Impresoras Leídas en Archivo
+                </span>
+                <span className="text-2xl font-black text-blue-950 block mt-1">
+                  {pendingUpdateData.extractedRows.length}
+                </span>
+                <span className="text-[10px] text-blue-600 mt-0.5 block">
+                  Permanecerán o se actualizarán
+                </span>
+              </div>
+
+              <div className="bg-rose-50/60 border border-rose-200 p-3 rounded-2xl text-center">
+                <span className="text-[10px] uppercase font-bold text-rose-700 block">
+                  Impresoras No Presentes (Bajas)
+                </span>
+                <span className="text-2xl font-black text-rose-700 block mt-1">
+                  {pendingUpdateData.removedPrinters.length}
+                </span>
+                <span className="text-[10px] text-rose-600 mt-0.5 block">
+                  Se darán de baja del maestro
+                </span>
+              </div>
+            </div>
+
+            {/* LISTA DETALLADA DE BAJAS */}
+            {pendingUpdateData.removedPrinters.length > 0 ? (
+              <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                <div className="bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-700 flex justify-between items-center">
+                  <span>Equipos que causarán baja ({pendingUpdateData.removedPrinters.length})</span>
+                  <span className="text-[10px] text-slate-500 font-normal">Se guardarán en el Historial de Bajas (30 días)</span>
+                </div>
+                <div className="max-h-44 overflow-y-auto divide-y divide-slate-100 text-xs">
+                  {pendingUpdateData.removedPrinters.map((p, idx) => (
+                    <div key={idx} className="p-2.5 flex justify-between items-center hover:bg-slate-50">
+                      <div>
+                        <span className="font-mono font-bold text-slate-900">{p.serial}</span>
+                        <span className="text-slate-500 text-[11px] ml-2">({p.material || 'Sin modelo'})</span>
+                      </div>
+                      <div className="text-right text-[11px]">
+                        <span className="text-slate-600 font-medium">{p.warehouseName || 'Almacén 1'} - {p.warehouseRow || 'Sin Fila'}</span>
+                        {p.warehouseSpace && <span className="ml-1 text-emerald-700 font-bold">[{p.warehouseSpace}]</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-2xl text-xs text-emerald-800 flex items-center gap-2">
+                <span>✓ No se detectaron bajas. Todas las máquinas actuales coinciden con el archivo.</span>
+              </div>
+            )}
+
+            {/* AUTORIZACIÓN CON CONTRASEÑA */}
+            <div className="bg-amber-50/50 border border-amber-200 p-3.5 rounded-2xl">
+              <label className="block text-[11px] font-bold text-amber-950 uppercase mb-1">
+                Autorización de Administrador:
+              </label>
+              <p className="text-[11px] text-amber-800 mb-2">
+                Ingresa la contraseña de autorización (<code className="bg-amber-100 px-1 py-0.5 rounded font-mono font-bold">QWERTY</code>) para confirmar las bajas y actualizar el inventario.
+              </p>
+              <input
+                type="password"
+                required
+                placeholder="Ingresa la contraseña..."
+                value={updatePasswordInput}
+                onChange={(e) => setUpdatePasswordInput(e.target.value)}
+                className="w-full bg-white border border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 outline-none"
+              />
+            </div>
+
+            {/* BOTONES */}
+            <div className="flex gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingUpdateData(null);
+                  setUpdatePasswordInput('');
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isExecutingUpdate}
+                className="flex-1 py-2.5 px-4 rounded-xl font-bold text-xs text-white bg-red-600 hover:bg-red-700 transition shadow-xs flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isExecutingUpdate ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Aplicando Cambios...</span>
+                  </>
+                ) : (
+                  <span>Confirmar y Actualizar Maestro</span>
+                )}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL: HISTORIAL DE BAJAS (30 DÍAS) */}
+      {showDeparturesModal && (
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-3xl w-full p-6 shadow-2xl border border-slate-200 animate-fade-in-up flex flex-col gap-4 relative max-h-[90vh]">
+            <button 
+              type="button" 
+              onClick={() => setShowDeparturesModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 text-sm p-1"
+            >
+              ✕
+            </button>
+
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                  Historial de Salidas
+                </span>
+                <h3 className="text-lg font-black text-slate-900 mt-1">
+                  Historial de Bajas de Inventario
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Registros de los últimos 30 días (1 mes). Las bajas más antiguas se depuran automáticamente.
+                </p>
+              </div>
+
+              {departuresList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => InventoryController.exportDeparturesReportToExcel(departuresList)}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold py-2 px-3.5 rounded-xl transition flex items-center gap-1.5 shadow-2xs shrink-0"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>Descargar Excel</span>
+                </button>
+              )}
+            </div>
+
+            {/* TABLA DE BAJAS */}
+            <div className="flex-1 overflow-y-auto border border-slate-200 rounded-2xl">
+              {isLoadingDepartures ? (
+                <div className="p-8 text-center text-slate-500 flex flex-col items-center justify-center gap-2">
+                  <div className="w-6 h-6 border-2 border-slate-300 border-t-red-600 rounded-full animate-spin"></div>
+                  <span className="text-xs font-medium">Cargando bajas de los últimos 30 días...</span>
+                </div>
+              ) : departuresList.length === 0 ? (
+                <div className="p-10 text-center text-slate-400">
+                  <p className="font-semibold text-slate-600">No hay registros de bajas en los últimos 30 días.</p>
+                  <p className="text-[11px] text-slate-400 mt-1">Cuando actualices el inventario maestro con un archivo donde falten equipos, aparecerán aquí.</p>
+                </div>
+              ) : (
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-slate-100 text-slate-700 font-bold uppercase text-[10px] tracking-wider sticky top-0">
+                    <tr>
+                      <th className="py-2.5 px-3">Fecha Baja</th>
+                      <th className="py-2.5 px-3">Serie</th>
+                      <th className="py-2.5 px-3">Clave (Modelo)</th>
+                      <th className="py-2.5 px-3">No. Equipo</th>
+                      <th className="py-2.5 px-3">Ubicación Previa</th>
+                      <th className="py-2.5 px-3">Estado Previo</th>
+                      <th className="py-2.5 px-3">Motivo</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {departuresList.map((dep, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50">
+                        <td className="py-2 px-3 font-medium text-slate-600 whitespace-nowrap">
+                          {dep.departure_date ? new Date(dep.departure_date).toLocaleDateString('es-MX', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                        </td>
+                        <td className="py-2 px-3 font-mono font-bold text-slate-900">
+                          {dep.serial}
+                        </td>
+                        <td className="py-2 px-3 font-medium text-slate-700 truncate max-w-[120px]">
+                          {dep.material || '-'}
+                        </td>
+                        <td className="py-2 px-3 font-mono text-slate-700">
+                          {dep.internal_number ? `#${dep.internal_number}` : '-'}
+                        </td>
+                        <td className="py-2 px-3 text-slate-600">
+                          {dep.warehouse_name || '-'} {dep.warehouse_row ? `/ ${dep.warehouse_row}` : ''} {dep.warehouse_space ? `[${dep.warehouse_space}]` : ''}
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                            {dep.system_status || 'Principal'}
+                          </span>
+                        </td>
+                        <td className="py-2 px-3 text-[11px] text-slate-500 italic">
+                          {dep.reason || 'Baja por actualización de maestro'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="flex justify-between items-center pt-2 border-t border-slate-100 text-xs text-slate-500">
+              <span>Total de bajas registradas: <strong className="text-slate-800">{departuresList.length}</strong></span>
+              <button
+                type="button"
+                onClick={() => setShowDeparturesModal(false)}
+                className="py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs transition"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -54,11 +54,21 @@ export class InventoryRepository {
     while (hasMore) {
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      const { data, error } = await supabase
+      let queryRes = await supabase
         .from('expected_series')
-        .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at')
+        .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at, system_status')
         .order('id', { ascending: true })
         .range(from, to);
+
+      if (queryRes.error) {
+        queryRes = await supabase
+          .from('expected_series')
+          .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at')
+          .order('id', { ascending: true })
+          .range(from, to);
+      }
+
+      const { data, error } = queryRes;
 
       if (error) {
         console.error('Error paginando expected_series desde Supabase:', error);
@@ -198,12 +208,13 @@ export class InventoryRepository {
     }
     this.saveMetadataCache(cache);
 
-    // Insertar series esperadas con internal_number si viene del Excel
+    // Insertar series esperadas con internal_number y system_status (por defecto 'Principal')
     const seriesToInsert = series.map(s => ({
       checklist_id: batchData.id,
       serial_number: s.serial,
       material_model: s.material,
       internal_number: s.internalNumber && !isNaN(Number(s.internalNumber)) ? Number(s.internalNumber) : null,
+      system_status: s.systemStatus || 'Principal',
       is_scanned: false
     }));
 
@@ -224,14 +235,25 @@ export class InventoryRepository {
     try {
       await insertInChunks(seriesToInsert, false);
     } catch {
-      // Fallback si la columna internal_number aún no existe en Supabase
-      const fallbackSeries = series.map(s => ({
-        checklist_id: batchData.id,
-        serial_number: s.serial,
-        material_model: s.material,
-        is_scanned: false
-      }));
-      await insertInChunks(fallbackSeries, true);
+      // Fallback si la columna system_status o internal_number aún no existen en Supabase
+      try {
+        const fallbackWithInternal = series.map(s => ({
+          checklist_id: batchData.id,
+          serial_number: s.serial,
+          material_model: s.material,
+          internal_number: s.internalNumber && !isNaN(Number(s.internalNumber)) ? Number(s.internalNumber) : null,
+          is_scanned: false
+        }));
+        await insertInChunks(fallbackWithInternal, false);
+      } catch {
+        const baseSeries = series.map(s => ({
+          checklist_id: batchData.id,
+          serial_number: s.serial,
+          material_model: s.material,
+          is_scanned: false
+        }));
+        await insertInChunks(baseSeries, true);
+      }
     }
 
     return batchData;
@@ -390,7 +412,7 @@ export class InventoryRepository {
   /**
    * Asigna ubicación completa en almacén (Almacén, Fila y Espacio) y vincula datos
    */
-  static async assignPrinterLocation(serialNumber, { warehouseName = 'Almacén 1', warehouseRow = 'Fila 1', warehouseSpace = '', internalNumber = null }) {
+  static async assignPrinterLocation(serialNumber, { warehouseName = 'Almacén 1', warehouseRow = 'Fila 1', warehouseSpace = '', internalNumber = null, systemStatus = null }) {
     const serial = serialNumber.trim().toUpperCase();
     const cache = this.getMetadataCache();
     cache.serials = cache.serials || {};
@@ -402,6 +424,7 @@ export class InventoryRepository {
     const finalInternal = internalNumber !== undefined && internalNumber !== null && internalNumber !== ''
       ? internalNumber
       : (existing.internalNumber ?? null);
+    const finalSystemStatus = systemStatus || existing.systemStatus || 'Principal';
 
     cache.serials[serial] = {
       ...existing,
@@ -409,6 +432,7 @@ export class InventoryRepository {
       warehouseRow: finalRow,
       warehouseSpace: finalSpace,
       internalNumber: finalInternal,
+      systemStatus: finalSystemStatus,
       isScanned: true,
       assignedAt: new Date().toISOString()
     };
@@ -424,6 +448,7 @@ export class InventoryRepository {
           warehouse_row: finalRow,
           warehouse_space: finalSpace,
           internal_number: numVal,
+          system_status: finalSystemStatus,
           is_scanned: true,
           scanned_at: new Date().toISOString()
         })
@@ -678,6 +703,7 @@ export class InventoryRepository {
       const finalSpace = item.warehouseSpace !== null && item.warehouseSpace !== undefined && String(item.warehouseSpace).trim() !== ''
         ? String(item.warehouseSpace).trim()
         : (existing?.warehouseSpace || '');
+      const finalSystemStatus = item.systemStatus || existing?.systemStatus || 'Principal';
 
       cache.serials[serialUpper] = {
         ...(existing || {}),
@@ -686,6 +712,7 @@ export class InventoryRepository {
         warehouseRow: finalRow,
         warehouseSpace: finalSpace,
         internalNumber: finalInternal,
+        systemStatus: finalSystemStatus,
         isScanned: true,
         status: existing?.status || 'DISPONIBLE',
         assignedAt: new Date().toISOString()
@@ -698,7 +725,8 @@ export class InventoryRepository {
         numVal,
         finalWh,
         finalRow,
-        finalSpace
+        finalSpace,
+        finalSystemStatus
       });
     }
 
@@ -736,6 +764,7 @@ export class InventoryRepository {
                   warehouse_name: c.finalWh,
                   warehouse_row: c.finalRow,
                   warehouse_space: c.finalSpace,
+                  system_status: c.finalSystemStatus,
                   is_scanned: true
                 })
                 .eq('serial_number', c.serialUpper)
@@ -751,6 +780,7 @@ export class InventoryRepository {
                 warehouse_name: c.finalWh,
                 warehouse_row: c.finalRow,
                 warehouse_space: c.finalSpace,
+                system_status: c.finalSystemStatus,
                 is_scanned: true
               });
             }
@@ -771,6 +801,140 @@ export class InventoryRepository {
     }
 
     return { updated, added, total: cleanItems.length };
+  }
+
+  /**
+   * Actualiza el Inventario Maestro con purga de bajas por diferencia:
+   * 1. Registra las impresoras eliminadas en el historial de bajas (inventory_departures).
+   * 2. Las elimina de la base de datos activa (expected_series).
+   * 3. Actualiza o inserta las impresoras leídas del archivo.
+   */
+  static async updateMasterWithPurge(items = [], removedPrinters = []) {
+    // 1. Registrar en historial de bajas
+    if (removedPrinters && removedPrinters.length > 0) {
+      await this.logDepartures(removedPrinters, 'Baja por actualización de archivo maestro');
+
+      // 2. Eliminar de Supabase en chunks
+      const removedSerials = removedPrinters.map(p => (p.serial || p).trim().toUpperCase());
+      const cache = this.getMetadataCache();
+      cache.serials = cache.serials || {};
+
+      for (const s of removedSerials) {
+        delete cache.serials[s];
+      }
+      this.saveMetadataCache(cache);
+
+      const CHUNK_SIZE = 100;
+      for (let i = 0; i < removedSerials.length; i += CHUNK_SIZE) {
+        const chunk = removedSerials.slice(i, i + CHUNK_SIZE);
+        try {
+          await supabase.from('expected_series').delete().in('serial_number', chunk);
+        } catch (e) {
+          console.warn('Error eliminando bajas de expected_series:', e);
+        }
+      }
+    }
+
+    // 3. Reconciliar las impresoras del nuevo archivo
+    const reconcileRes = await this.reconcileBatchPrinters(items);
+
+    return {
+      totalRead: items.length,
+      removedCount: removedPrinters.length,
+      updated: reconcileRes.updated,
+      added: reconcileRes.added
+    };
+  }
+
+  /**
+   * Registra impresoras en la tabla de historial de bajas (inventory_departures)
+   */
+  static async logDepartures(printers = [], reason = 'Baja de inventario') {
+    if (!printers || printers.length === 0) return;
+
+    const nowIso = new Date().toISOString();
+    const rowsToInsert = printers.map(p => ({
+      serial: (p.serial || p).trim().toUpperCase(),
+      material: p.material || 'Sin Modelo',
+      internal_number: p.internalNumber !== undefined && p.internalNumber !== null ? String(p.internalNumber) : null,
+      warehouse_name: p.warehouseName || 'Almacén 1',
+      warehouse_row: p.warehouseRow || 'Sin Asignar',
+      warehouse_space: p.warehouseSpace || '',
+      system_status: p.systemStatus || 'Principal',
+      reason: reason,
+      departure_date: nowIso
+    }));
+
+    // Respaldo en localStorage
+    try {
+      const rawCache = localStorage.getItem('cdm_inventory_departures_v1');
+      const currentList = rawCache ? JSON.parse(rawCache) : [];
+      const updatedList = [...rowsToInsert, ...currentList].slice(0, 2000);
+      localStorage.setItem('cdm_inventory_departures_v1', JSON.stringify(updatedList));
+    } catch (e) {
+      console.warn('Error guardando bajas en local storage:', e);
+    }
+
+    // Guardar en Supabase en chunks
+    const CHUNK = 80;
+    for (let i = 0; i < rowsToInsert.length; i += CHUNK) {
+      const chunk = rowsToInsert.slice(i, i + CHUNK);
+      try {
+        await supabase.from('inventory_departures').insert(chunk);
+      } catch (e) {
+        console.warn('Nota Supabase inventory_departures:', e.message);
+      }
+    }
+  }
+
+  /**
+   * Obtiene el historial de bajas del último mes (30 días) y purga las más antiguas
+   */
+  static async fetchDeparturesHistory() {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    // 1. Purgar registros mayores a 30 días en Supabase
+    try {
+      await supabase.from('inventory_departures').delete().lt('departure_date', thirtyDaysAgo);
+    } catch (e) {
+      // Ignorar si la tabla aún no existe en Supabase
+    }
+
+    // 2. Consultar historial de bajas de los últimos 30 días en Supabase
+    try {
+      const { data, error } = await supabase
+        .from('inventory_departures')
+        .select('*')
+        .gte('departure_date', thirtyDaysAgo)
+        .order('departure_date', { ascending: false })
+        .limit(1000);
+
+      if (!error && data) {
+        localStorage.setItem('cdm_inventory_departures_v1', JSON.stringify(data));
+        return data;
+      }
+    } catch (e) {
+      console.warn('Consultando bajas desde respaldo local:', e.message);
+    }
+
+    // 3. Respaldo en localStorage filtrando los últimos 30 días
+    try {
+      const rawCache = localStorage.getItem('cdm_inventory_departures_v1');
+      if (rawCache) {
+        const list = JSON.parse(rawCache);
+        const filtered = list.filter(item => {
+          const dateField = item.departure_date || item.departed_at;
+          if (!dateField) return true;
+          return new Date(dateField).getTime() >= (Date.now() - 30 * 24 * 60 * 60 * 1000);
+        });
+        localStorage.setItem('cdm_inventory_departures_v1', JSON.stringify(filtered));
+        return filtered;
+      }
+    } catch {
+      return [];
+    }
+
+    return [];
   }
 
   /**

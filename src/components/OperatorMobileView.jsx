@@ -5,6 +5,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { findSerialMatch } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
+import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 
 export default function OperatorMobileView({
   batches = [],
@@ -12,15 +13,23 @@ export default function OperatorMobileView({
   onAssignmentSaved,
   onRequestAdminView,
   availableWarehouses = ['Almacén 1', 'Almacén 2'],
-  availableRows = ['Fila 1', 'Fila 2', 'Fila 3', 'Fila 4']
+  availableRows = ['Fila 1', 'Fila 2', 'Fila 3', 'Fila 4'],
+  mlBatches = [],
+  onRecordMlScan,
+  onRecordMlUnexpected,
+  onRefreshMl,
+  onForceFinishMlBatch
 }) {
   const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
 
-  // Pestaña activa del operador: 'reading' (Lectura libre / Ubicar) o 'checklists' (Lotes)
+  // Pestaña activa del operador: 'reading' (Lectura libre / Ubicar), 'checklists' (Lotes) o 'mercadolibre'
   const [operatorTab, setOperatorTab] = useState('reading');
   
   // Lote activo si el operador eligió un checklist
   const [activeChecklistId, setActiveChecklistId] = useState(null);
+
+  // Lote activo si el operador eligió Mercado Libre
+  const [activeMlBatchId, setActiveMlBatchId] = useState(null);
 
   // Estados de escaneo y búsqueda
   const [scanInput, setScanInput] = useState('');
@@ -51,6 +60,10 @@ export default function OperatorMobileView({
   const activeChecklist = useMemo(() => {
     return receptionBatches.find(b => b.id === activeChecklistId);
   }, [receptionBatches, activeChecklistId]);
+
+  const activeMlBatch = useMemo(() => {
+    return mlBatches.find(b => String(b.id) === String(activeMlBatchId));
+  }, [mlBatches, activeMlBatchId]);
 
   // Todas las impresoras esperadas del sistema
   const allSystemPrinters = useMemo(() => {
@@ -248,6 +261,45 @@ export default function OperatorMobileView({
     );
   }, [unassignedPrinters, searchTableQuery]);
 
+  // Si hay un lote de Mercado Libre seleccionado para escaneo
+  if (activeMlBatch) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans select-none max-w-lg mx-auto pb-10">
+        <header className="bg-slate-950 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between sticky top-0 z-40">
+          <button
+            onClick={() => setActiveMlBatchId(null)}
+            className="text-xs text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1.5 py-1.5 px-3 bg-slate-800/90 rounded-xl border border-slate-700 active:scale-95"
+          >
+            <span>&larr; Volver a Despachos ML</span>
+          </button>
+          <div className="text-right">
+            <span className="bg-amber-600 text-white font-black text-[10px] px-2 py-0.5 rounded uppercase">
+              {activeMlBatch.folio}
+            </span>
+          </div>
+        </header>
+        <div className="flex-1">
+          <MercadoLibreScanView
+            batchDetails={activeMlBatch}
+            onRecordScan={(batchId, itemId, method) => {
+              if (onRecordMlScan) onRecordMlScan(batchId, itemId, method);
+            }}
+            onRecordUnexpected={(batchId, code) => {
+              if (onRecordMlUnexpected) onRecordMlUnexpected(batchId, code);
+            }}
+            onFinishSession={() => {
+              setActiveMlBatchId(null);
+              if (onRefreshMl) onRefreshMl();
+            }}
+            onForceFinish={() => {
+              if (onForceFinishMlBatch) onForceFinishMlBatch();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans select-none max-w-lg mx-auto pb-10">
       
@@ -309,38 +361,57 @@ export default function OperatorMobileView({
         </div>
       )}
 
-      {/* SELECTOR DE MODO: LECTURA LIBRE O CHECKLISTS */}
+      {/* SELECTOR DE MODO: 3 PESTAÑAS (LECTURA, CHECKLISTS, MERCADO LIBRE) */}
       <div className="p-3 bg-slate-950/60 border-b border-slate-800">
-        <div className="grid grid-cols-2 gap-2 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        <div className="grid grid-cols-3 gap-1.5 bg-slate-900 p-1 rounded-2xl border border-slate-800">
           <button
             onClick={() => {
               setOperatorTab('reading');
               setActiveChecklistId(null);
+              setActiveMlBatchId(null);
             }}
-            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+            className={`py-2 px-1.5 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 ${
               operatorTab === 'reading' && !activeChecklistId
                 ? 'bg-emerald-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
             </svg>
-            <span>Lectura / Acomodo</span>
+            <span>Lectura</span>
           </button>
 
           <button
-            onClick={() => setOperatorTab('checklists')}
-            className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+            onClick={() => {
+              setOperatorTab('checklists');
+              setActiveMlBatchId(null);
+            }}
+            className={`py-2 px-1.5 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 ${
               operatorTab === 'checklists' || activeChecklistId
                 ? 'bg-red-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
             </svg>
             <span>Checklists ({receptionBatches.length})</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setOperatorTab('mercadolibre');
+              setActiveChecklistId(null);
+            }}
+            className={`py-2 px-1.5 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+              operatorTab === 'mercadolibre'
+                ? 'bg-amber-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <span className="text-amber-400">📦</span>
+            <span>ML ({mlBatches.length})</span>
           </button>
         </div>
       </div>
@@ -381,8 +452,78 @@ export default function OperatorMobileView({
           </div>
         )}
 
+        {/* SI ESTÁ VIENDO LA LISTA DE MERCADO LIBRE */}
+        {operatorTab === 'mercadolibre' && (
+          <div className="flex flex-col gap-3 animate-fade-in">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+                  <span>Despachos Mercado Libre ({mlBatches.length}):</span>
+                </h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">Selecciona un despacho para iniciar la lectura</p>
+              </div>
+              {onRefreshMl && (
+                <button
+                  type="button"
+                  onClick={onRefreshMl}
+                  className="text-xs text-slate-300 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 rounded-xl border border-slate-700 flex items-center gap-1 active:scale-95"
+                  title="Actualizar despachos de Mercado Libre"
+                >
+                  <span>🔄 Refrescar</span>
+                </button>
+              )}
+            </div>
+
+            {mlBatches.length === 0 ? (
+              <div className="bg-slate-800/60 p-6 rounded-2xl border border-slate-700 text-center">
+                <p className="text-xs text-slate-300 font-semibold">No hay despachos de Mercado Libre cargados.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Sube el archivo Excel en la vista de Oficina para que aparezca aquí para escaneo.</p>
+              </div>
+            ) : (
+              mlBatches.map(batch => {
+                const totalItems = batch.totalCount || batch.items.length;
+                const scannedItems = batch.scannedCount || batch.items.filter(i => i.isScanned).length;
+                const isComplete = batch.status === 'completed' || (totalItems > 0 && scannedItems >= totalItems);
+
+                return (
+                  <button
+                    key={batch.id}
+                    onClick={() => setActiveMlBatchId(batch.id)}
+                    className="bg-slate-800 hover:bg-slate-700/80 p-4 rounded-2xl border border-slate-700 text-left transition flex items-center justify-between active:scale-98"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="bg-amber-600 text-white font-bold text-xs px-2.5 py-0.5 rounded-lg">
+                          {batch.folio}
+                        </span>
+                        <span className="text-xs font-bold text-white truncate max-w-[180px]">
+                          {batch.cleanName || batch.name}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        {scannedItems} de {totalItems} paquetes escaneados
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        isComplete 
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' 
+                          : 'bg-amber-950 text-amber-400 border border-amber-800'
+                      }`}>
+                        {isComplete ? 'Listo' : 'Pendiente'}
+                      </span>
+                      <span className="text-amber-400 text-sm font-bold">&rarr;</span>
+                    </div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        )}
+
         {/* SI TIENE UN CHECKLIST ACTIVO O ESTÁ EN LECTURA DIRECTA */}
-        {(operatorTab === 'reading' || activeChecklistId) && (
+        {(operatorTab === 'reading' || (operatorTab === 'checklists' && activeChecklistId)) && (
           <div className="flex flex-col gap-4">
             
             {/* ENCABEZADO DE MODO ACTIVO */}

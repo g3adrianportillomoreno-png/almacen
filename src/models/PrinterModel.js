@@ -8,6 +8,30 @@ export class PrinterModel {
   static STATUS_CONSULTA = 'CONSULTA';
   static STATUS_BAJA = 'BAJA';
 
+  // Estados de Proceso / Sistema en Almacén
+  static SYSTEM_STATE_REFACCIONES = 'Refacciones para operaciones';
+  static SYSTEM_STATE_SEMINUEVOS = 'Seminuevos';
+  static SYSTEM_STATE_REMANUFACTURADO = 'Remanufacturado';
+  static SYSTEM_STATE_PRINCIPAL = 'Principal';
+
+  static normalizeSystemStatus(val) {
+    if (!val) return PrinterModel.SYSTEM_STATE_PRINCIPAL;
+    const str = String(val).trim().toLowerCase();
+    if (str.includes('refaccion') || str.includes('operacion')) {
+      return PrinterModel.SYSTEM_STATE_REFACCIONES;
+    }
+    if (str.includes('seminuevo') || str.includes('semi nuevo')) {
+      return PrinterModel.SYSTEM_STATE_SEMINUEVOS;
+    }
+    if (str.includes('reman')) {
+      return PrinterModel.SYSTEM_STATE_REMANUFACTURADO;
+    }
+    if (str.includes('principal')) {
+      return PrinterModel.SYSTEM_STATE_PRINCIPAL;
+    }
+    return PrinterModel.SYSTEM_STATE_PRINCIPAL;
+  }
+
   constructor({
     id = null,
     serial = '',
@@ -19,6 +43,7 @@ export class PrinterModel {
     warehouseRow = 'Fila 1',
     warehouseSpace = '',
     status = PrinterModel.STATUS_DISPONIBLE,
+    systemStatus = PrinterModel.SYSTEM_STATE_PRINCIPAL,
     checklistName = '',
     checklistFolio = '',
     internalNumber = null,
@@ -34,6 +59,7 @@ export class PrinterModel {
     this.warehouseRow = warehouseRow || 'Fila 1';
     this.warehouseSpace = (warehouseSpace || '').trim();
     this.status = status || PrinterModel.STATUS_DISPONIBLE;
+    this.systemStatus = PrinterModel.normalizeSystemStatus(systemStatus);
     this.checklistName = checklistName || 'Inventario General';
     this.checklistFolio = (checklistFolio && String(checklistFolio).trim() !== '' && String(checklistFolio).toLowerCase() !== 'sin folio')
       ? String(checklistFolio).trim()
@@ -91,6 +117,47 @@ export class PrinterModel {
     };
   }
 
+  /**
+   * Clases visuales de Tailwind según el Estado de Proceso / Sistema
+   * 1. Refacciones para operaciones: Amarillo
+   * 2. Seminuevos: Naranja
+   * 3. Remanufacturado: Verde
+   * 4. Principal: Azul
+   */
+  getSystemStatusBadge() {
+    switch (this.systemStatus) {
+      case PrinterModel.SYSTEM_STATE_REFACCIONES:
+        return {
+          label: PrinterModel.SYSTEM_STATE_REFACCIONES,
+          badgeClass: 'bg-amber-100 text-amber-900 border-amber-300 font-bold',
+          dotColor: 'bg-amber-500',
+          textColor: 'text-amber-900'
+        };
+      case PrinterModel.SYSTEM_STATE_SEMINUEVOS:
+        return {
+          label: PrinterModel.SYSTEM_STATE_SEMINUEVOS,
+          badgeClass: 'bg-orange-100 text-orange-950 border-orange-300 font-bold',
+          dotColor: 'bg-orange-500',
+          textColor: 'text-orange-950'
+        };
+      case PrinterModel.SYSTEM_STATE_REMANUFACTURADO:
+        return {
+          label: PrinterModel.SYSTEM_STATE_REMANUFACTURADO,
+          badgeClass: 'bg-emerald-100 text-emerald-950 border-emerald-300 font-bold',
+          dotColor: 'bg-emerald-500',
+          textColor: 'text-emerald-950'
+        };
+      case PrinterModel.SYSTEM_STATE_PRINCIPAL:
+      default:
+        return {
+          label: PrinterModel.SYSTEM_STATE_PRINCIPAL,
+          badgeClass: 'bg-blue-100 text-blue-950 border-blue-300 font-bold',
+          dotColor: 'bg-blue-500',
+          textColor: 'text-blue-950'
+        };
+    }
+  }
+
   static fromDb(dbItem, checklistInfo = {}, metadataCache = {}) {
     const serial = (dbItem.serial_number || dbItem.serial || '').toUpperCase();
     const meta = metadataCache[serial] || {};
@@ -100,6 +167,8 @@ export class PrinterModel {
     const internalNum = dbItem.internal_number !== undefined && dbItem.internal_number !== null
       ? dbItem.internal_number
       : (meta.internalNumber ?? null);
+
+    const systemStatus = dbItem.system_status || meta.systemStatus || PrinterModel.SYSTEM_STATE_PRINCIPAL;
 
     return new PrinterModel({
       id: dbItem.id,
@@ -112,6 +181,7 @@ export class PrinterModel {
       warehouseRow: dbItem.warehouse_row || meta.warehouseRow || 'Fila 1',
       warehouseSpace: warehouseSpace,
       status: dbItem.printer_status || meta.status || PrinterModel.STATUS_DISPONIBLE,
+      systemStatus: systemStatus,
       checklistName: checklistInfo?.name || meta.checklistName || 'Inventario General',
       checklistFolio: checklistInfo?.folio || meta.checklistFolio || 'SIN FOLIO',
       internalNumber: internalNum,

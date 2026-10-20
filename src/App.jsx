@@ -421,6 +421,11 @@ function App() {
         onRequestAdminView={handleRequestAdminView}
         availableWarehouses={mapModel.warehouses.map(w => w.name)}
         availableRows={availableRows}
+        mlBatches={mlBatches}
+        onRecordMlScan={handleRecordMlScan}
+        onRecordMlUnexpected={handleRecordMlUnexpected}
+        onRefreshMl={fetchMlBatches}
+        onForceFinishMlBatch={handleForceFinishMlBatch}
       />
     );
   }

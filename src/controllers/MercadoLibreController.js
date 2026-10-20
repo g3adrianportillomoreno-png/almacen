@@ -214,3 +214,4 @@ export class MercadoLibreController {
     XLSX.writeFile(wb, fileName);
   }
 }
+

@@ -201,3 +201,4 @@ export async function extractMercadoLibreData(file) {
     reader.readAsArrayBuffer(file);
   });
 }
+

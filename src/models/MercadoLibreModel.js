@@ -116,3 +116,4 @@ export class MercadoLibreBatchModel {
     return rawName.replace(/^\[ML-[^\]]+\]\s*/i, '').trim();
   }
 }
+

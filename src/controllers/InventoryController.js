@@ -167,7 +167,8 @@ export class InventoryController {
       'Número de equipo': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
       'Almacén': p.warehouseName || '',
       'Fila': p.warehouseRow && p.warehouseRow !== 'Sin Asignar' ? p.warehouseRow : '',
-      'Espacio': p.warehouseSpace || ''
+      'Espacio': p.warehouseSpace || '',
+      'Estado': p.systemStatus || 'Principal'
     }));
 
     const wb = XLSX.utils.book_new();
@@ -179,7 +180,8 @@ export class InventoryController {
       { wch: 18 }, // Número de equipo
       { wch: 16 }, // Almacén
       { wch: 14 }, // Fila
-      { wch: 16 }  // Espacio
+      { wch: 16 }, // Espacio
+      { wch: 25 }  // Estado
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, "INVENTARIO_ALMACEN");
@@ -220,6 +222,82 @@ export class InventoryController {
     }
 
     return result;
+  }
+
+  /**
+   * Actualiza el Inventario Maestro aplicando bajas para impresoras que ya no vengan en el archivo.
+   */
+  static async updateMasterInventoryWithPurge(parsedRows = [], removedPrinters = []) {
+    const result = await InventoryRepository.updateMasterWithPurge(parsedRows, removedPrinters);
+
+    try {
+      let mapModel = WarehouseMapController.loadMap();
+      let mapChanged = false;
+      for (const item of parsedRows) {
+        if (item.warehouseRow && item.warehouseRow.trim() && item.warehouseRow !== 'Sin Asignar') {
+          const updated = mapModel.ensureRowExists(item.warehouseRow, item.warehouseName);
+          if (updated !== mapModel) {
+            mapModel = updated;
+            mapChanged = true;
+          }
+        }
+      }
+      if (mapChanged) {
+        WarehouseMapController.saveMap(mapModel);
+      }
+    } catch (err) {
+      console.warn("Error sincronizando filas en layout del mapa:", err);
+    }
+
+    return result;
+  }
+
+  /**
+   * Obtiene el historial de bajas de los últimos 30 días
+   */
+  static async getDeparturesHistory() {
+    return await InventoryRepository.fetchDeparturesHistory();
+  }
+
+  /**
+   * Exporta a Excel el historial de bajas de los últimos 30 días
+   */
+  static exportDeparturesReportToExcel(departures = []) {
+    if (!departures || departures.length === 0) {
+      alert("No hay registros de bajas para exportar.");
+      return;
+    }
+
+    const dataRows = departures.map((d, idx) => ({
+      'No.': idx + 1,
+      'Número de Serie': d.serial || '',
+      'Clave / Modelo': d.material || '',
+      'Número de Equipo': d.internal_number || '',
+      'Último Almacén': d.warehouse_name || '',
+      'Última Fila': d.warehouse_row || '',
+      'Último Espacio': d.warehouse_space || '',
+      'Estado Previo': d.system_status || 'Principal',
+      'Motivo': d.reason || 'Baja de inventario',
+      'Fecha y Hora de Baja': d.departure_date ? new Date(d.departure_date).toLocaleString('es-MX') : ''
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(dataRows);
+    ws['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 25 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 25 },
+      { wch: 30 },
+      { wch: 22 }
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, "HISTORIAL_BAJAS_30_DIAS");
+    const dateStr = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Reporte_Bajas_Inventario_30_Dias_${dateStr}.xlsx`);
   }
 
   /**

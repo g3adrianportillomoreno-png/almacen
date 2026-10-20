@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { PrinterModel } from '../models/PrinterModel.js';
 
 function normalizeHeader(str) {
   if (typeof str !== 'string') return '';
@@ -31,9 +32,10 @@ export async function extractSeriesFromExcel(file) {
         let warehouseIndex = -1;
         let rowIndex = -1;
         let spaceIndex = -1;
+        let statusIndex = -1;
         let headerRowIndex = -1;
 
-        // Buscar encabezados reconociendo múltiples variaciones (CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, ALMACEN, FILA, ESPACIO, etc.)
+        // Buscar encabezados reconociendo múltiples variaciones (CLAVE, NUMERO DE SERIE, NUMERO DE EQUIPO, ALMACEN, FILA, ESPACIO, ESTADO, etc.)
         for (let i = 0; i < Math.min(rows.length, 15); i++) {
           const row = rows[i];
           if (Array.isArray(row)) {
@@ -43,6 +45,7 @@ export async function extractSeriesFromExcel(file) {
             let foundWarehouse = -1;
             let foundRow = -1;
             let foundSpace = -1;
+            let foundStatus = -1;
 
             row.forEach((cell, colIdx) => {
               const norm = normalizeHeader(cell);
@@ -117,6 +120,21 @@ export async function extractSeriesFromExcel(file) {
               ) {
                 foundSpace = colIdx;
               }
+
+              // 7. ESTADO (SISTEMA / PROCESO)
+              else if (
+                norm === 'estado' || 
+                norm === 'status' || 
+                norm === 'estatus' || 
+                norm === 'area' || 
+                norm === 'proceso' || 
+                norm === 'etapa' ||
+                norm.includes('estado') || 
+                norm.includes('status') ||
+                norm.includes('estatus')
+              ) {
+                foundStatus = colIdx;
+              }
             });
 
             if (foundSerial !== -1) {
@@ -126,6 +144,7 @@ export async function extractSeriesFromExcel(file) {
               warehouseIndex = foundWarehouse;
               rowIndex = foundRow;
               spaceIndex = foundSpace;
+              statusIndex = foundStatus;
               headerRowIndex = i;
               break;
             }
@@ -149,6 +168,7 @@ export async function extractSeriesFromExcel(file) {
           const warehouseRaw = warehouseIndex !== -1 ? row[warehouseIndex] : null;
           const rowRaw = rowIndex !== -1 ? row[rowIndex] : null;
           const spaceRaw = spaceIndex !== -1 ? row[spaceIndex] : null;
+          const statusRaw = statusIndex !== -1 ? row[statusIndex] : null;
           
           if (serieRaw !== undefined && serieRaw !== null && String(serieRaw).trim() !== '') {
             const serialString = String(serieRaw).trim().toUpperCase();
@@ -160,13 +180,16 @@ export async function extractSeriesFromExcel(file) {
                 ? String(internalNumRaw).trim()
                 : null;
 
+              const systemStatus = PrinterModel.normalizeSystemStatus(statusRaw);
+
               items.push({
                 serial: serialString,
                 material: String(materialRaw || 'MODELO GENÉRICO').trim().toUpperCase(),
                 internalNumber: internalNumberFormatted,
                 warehouseName: warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null,
                 warehouseRow: rowRaw && String(rowRaw).trim() !== '' ? String(rowRaw).trim() : null,
-                warehouseSpace: spaceRaw && String(spaceRaw).trim() !== '' ? String(spaceRaw).trim() : null
+                warehouseSpace: spaceRaw && String(spaceRaw).trim() !== '' ? String(spaceRaw).trim() : null,
+                systemStatus: systemStatus
               });
             }
           }
