@@ -101,13 +101,18 @@ function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
 
 /**
  * Analiza el texto extraído (ya sea de capa nativa o de OCR) y devuelve la lista [{ serial, material }]
+ * Incluye corrección estructural inteligente para los documentos "Anexo de Series y Pedimentos":
+ * 1. Une series que el OCR haya partido con un espacio a mitad del renglón (ej. "U65160C6HT 66699").
+ * 2. Elimina letras fantasma insertadas por manchas de escáner en series de 16 caracteres (ej. "U65160C6HT766809" -> "U65160C6H766809").
+ * 3. Corrige el '7' leído como 'T' en el consecutivo numérico (ej. "U65160C6HT66731" -> "U65160C6H766731").
+ * 4. Valida el prefijo de 9 caracteres contra el pedimento de la misma línea y el código de modelo de 5 dígitos del documento.
  */
 function parseSeriesFromText(rawText) {
   const items = [];
   const seenSerials = new Set();
 
   // Buscar el Modelo de Impresora:
-  // Priorizar modelos Brother (MFC..., HL..., DCP...) o Sharp (MX-..., BP-...) evitando confundir con Factura "MXF0374378"
+  // Priorizar modelos Brother (MFC..., HL..., DCP...) o Sharp (MX-..., BP-...) evitando confundir con Factura "MXF0374377"
   const brotherModelMatch = rawText.match(/\b(MFC-?[A-Z0-9]{3,12}|HL-?[A-Z0-9]{3,12}|DCP-?[A-Z0-9]{3,12})\b/i);
   const sharpModelMatch = rawText.match(/\b(MX-(?!F\d)[A-Z0-9-]{3,12}|BP-[A-Z0-9-]{3,12})\b/i);
   let materialRaw = 'DESCONOCIDO';
@@ -121,95 +126,171 @@ function parseSeriesFromText(rawText) {
     materialRaw = sharpModelMatch[0].toUpperCase();
   }
 
+  // Mapa extendido para reparar caracteres que en una posición 100% numérica fueron leídos como letra por el OCR
   const fixDigit = (ch) => {
-    const map = { 'O': '0', 'Q': '0', 'I': '1', 'L': '1', 'Z': '2', 'S': '5', 'B': '8', 'G': '6' };
+    const map = {
+      'O': '0', 'Q': '0', 'D': '0',
+      'I': '1', 'L': '1',
+      'Z': '2',
+      'S': '5',
+      'G': '6',
+      'T': '7', 'Y': '7', 'J': '7', '?': '7',
+      'B': '8'
+    };
     return map[ch] || ch;
   };
 
-  const normalizeBrotherCandidate = (candidate) => {
-    let clean = candidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    if (/^[0OVJ][0-9A-Z]{13,15}$/.test(clean)) {
-      clean = 'U' + clean.slice(1);
-    }
-    if (clean.length === 15 && clean.startsWith('U')) {
-      const chars = clean.split('');
-      for (let idx = 1; idx <= 5; idx++) chars[idx] = fixDigit(chars[idx]);
-      chars[7] = fixDigit(chars[7]);
-      for (let idx = 9; idx <= 14; idx++) chars[idx] = fixDigit(chars[idx]);
-      clean = chars.join('');
-    }
-    return clean;
-  };
-
-  const rawBrotherCandidates = [];
-
-  // 1. Formato "Anexo de Series y Pedimentos" (Serie al inicio de línea acompañada de pedimento 3904-6007834 o fecha 202X-XX-XX)
+  // Extraer candidatos línea por línea (soportando cuando el OCR parte la serie con un espacio, ej. "U65160C6HT 66699 3904-6004465")
+  const rawEntries = []; // { rawSerial, pedimento }
   const lines = rawText.split(/\r?\n/);
+
   for (const line of lines) {
-    if (/\b\d{4}-\d{6,8}\b/.test(line) || /\b202\d-\d{2}-\d{2}\b/.test(line)) {
-      const tokens = line.trim().split(/\s+/);
-      for (const token of tokens) {
-        const cleanedToken = token.replace(/[^A-Z0-9-]/gi, '').toUpperCase();
-        if (/^\d{4}-\d{6,8}$/.test(cleanedToken) || /^202\d-\d{2}-\d{2}$/.test(cleanedToken)) continue;
-        const alphaNum = cleanedToken.replace(/-/g, '');
-        if (alphaNum.length >= 13 && alphaNum.length <= 17 && /[A-Z]/.test(alphaNum) && /\d{4,}/.test(alphaNum)) {
-          rawBrotherCandidates.push(alphaNum);
-        }
+    const pedMatch = line.match(/\b(\d{4}-\d{6,8})\b/);
+    const hasDate = /\b202\d-\d{2}-\d{2}\b/.test(line);
+
+    if (pedMatch || hasDate) {
+      const cutIdx = pedMatch ? line.indexOf(pedMatch[1]) : line.search(/\b202\d-\d{2}-\d{2}\b/);
+      const leftPart = (cutIdx > 0 ? line.slice(0, cutIdx) : line).trim();
+      const compactLeft = leftPart.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      if (compactLeft.length >= 13 && compactLeft.length <= 17 && /[A-Z]/i.test(compactLeft) && /\d{4,}/.test(compactLeft)) {
+        rawEntries.push({
+          rawSerial: compactLeft,
+          pedimento: pedMatch ? pedMatch[1] : null
+        });
       }
     }
   }
 
-  // 2. Expresión regular general para series Brother en cualquier documento
-  const brotherRegex = /\b([U0OVJ][A-Z0-9]{12,15})\b/gi;
-  let match;
-  while ((match = brotherRegex.exec(rawText)) !== null) {
-    const cand = match[1].trim().toUpperCase();
-    if (/[A-Z]/i.test(cand.slice(1)) && /\d{4,}/.test(cand)) {
-      rawBrotherCandidates.push(cand);
+  // Si no era un documento con columnas de pedimento/fecha, buscar con expresiones regulares generales
+  if (rawEntries.length === 0) {
+    const brotherRegex = /\b([U0OVJ][A-Z0-9]{12,15})\b/gi;
+    let match;
+    while ((match = brotherRegex.exec(rawText)) !== null) {
+      const cand = match[1].trim().toUpperCase();
+      if (/[A-Z]/i.test(cand.slice(1)) && /\d{4,}/.test(cand)) {
+        rawEntries.push({ rawSerial: cand, pedimento: null });
+      }
+    }
+
+    const brotherFallbackRegex = /(U[A-Z0-9]{13,15})/gi;
+    while ((match = brotherFallbackRegex.exec(rawText)) !== null) {
+      const cand = match[1].trim().toUpperCase();
+      if (/\d{4,}/.test(cand)) {
+        rawEntries.push({ rawSerial: cand, pedimento: null });
+      }
     }
   }
 
-  // 3. Respaldo por si un número escrito a mano se pegó antes de la 'U' (ej: 15U67672F6N214922)
-  const brotherFallbackRegex = /(U[A-Z0-9]{13,15})/gi;
-  while ((match = brotherFallbackRegex.exec(rawText)) !== null) {
-    const cand = match[1].trim().toUpperCase();
-    if (/\d{4,}/.test(cand)) {
-      rawBrotherCandidates.push(cand);
+  // Analizar el código de modelo de 5 dígitos (pos 1..5), letra de planta (pos 8) y relación Pedimento -> Prefijo de 9 chars
+  const model5Counts = {};
+  const plantCounts = {};
+  const pedimentoToPrefix9 = {};
+
+  for (const entry of rawEntries) {
+    const c = entry.rawSerial;
+    if (c.length === 15 && /^U\d{5}[A-Z]\d[A-Z]\d{6}$/.test(c)) {
+      const m5 = c.slice(1, 6);
+      const plant = c[8];
+      const prefix9 = c.slice(0, 9);
+      model5Counts[m5] = (model5Counts[m5] || 0) + 1;
+      plantCounts[plant] = (plantCounts[plant] || 0) + 1;
+      if (entry.pedimento) {
+        pedimentoToPrefix9[entry.pedimento] = prefix9;
+      }
     }
   }
 
-  // Determinar el prefijo de lote dominante de 9 caracteres (ej. U67672F6N) para reparar errores puntuales de OCR
-  // como U6T7672F6N214939 (16 chars por una T infiltrada) o U67672r6N214913 ('r' en vez de 'F')
-  const normalizedPreList = rawBrotherCandidates.map(normalizeBrotherCandidate);
-  const prefixCounts = {};
-  for (const c of normalizedPreList) {
-    if (c.length === 15 && c.startsWith('U')) {
-      const p = c.slice(0, 9);
-      prefixCounts[p] = (prefixCounts[p] || 0) + 1;
-    }
-  }
-  let dominantPrefix = null;
-  let maxCount = 0;
-  for (const [p, count] of Object.entries(prefixCounts)) {
-    if (count > maxCount && count >= 3) {
-      maxCount = count;
-      dominantPrefix = p;
+  let dominantModel5 = null;
+  let maxM5 = 0;
+  for (const [m5, cnt] of Object.entries(model5Counts)) {
+    if (cnt > maxM5 && cnt >= 2) {
+      maxM5 = cnt;
+      dominantModel5 = m5;
     }
   }
 
-  for (let clean of normalizedPreList) {
-    if (dominantPrefix) {
+  let dominantPlant = null;
+  let maxPlant = 0;
+  for (const [pl, cnt] of Object.entries(plantCounts)) {
+    if (cnt > maxPlant && cnt >= 2) {
+      maxPlant = cnt;
+      dominantPlant = pl;
+    }
+  }
+
+  // Función que repara un candidato Brother a sus 15 caracteres exactos
+  const normalizeBrotherSerial = (rawCandidate) => {
+    let clean = rawCandidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+
+    if (/^[0OVJ]/.test(clean) && clean.length >= 14) {
+      clean = 'U' + clean.slice(1);
+    }
+
+    // Caso 1: 16 caracteres (el OCR insertó una letra fantasma, ej. U65160C6HT766809, U65160D6EH106775, U6T7672F6N214939)
+    if (clean.length === 16 && clean.startsWith('U')) {
       const last6 = clean.slice(-6).split('').map(fixDigit).join('');
-      if (clean.length === 16 && /^\d{6}$/.test(last6)) {
-        clean = dominantPrefix + last6;
-      } else if (clean.length === 15 && /^\d{6}$/.test(last6)) {
-        let diffs = 0;
-        for (let i = 0; i < 9; i++) {
-          if (clean[i] !== dominantPrefix[i]) diffs++;
+      if (/^\d{6}$/.test(last6)) {
+        const prefix10 = clean.slice(0, 10);
+        let bestCandidate = null;
+        for (const removeIdx of [9, 8, 7, 6, 2, 3, 4, 5, 1]) {
+          const candidate9 = prefix10.slice(0, removeIdx) + prefix10.slice(removeIdx + 1);
+          const pDigits = candidate9.slice(1, 6).split('').map(fixDigit).join('');
+          const monthChar = candidate9[6];
+          const yearDigit = fixDigit(candidate9[7]);
+          const plantChar = candidate9[8];
+          if (/^\d{5}$/.test(pDigits) && /[A-Z]/.test(monthChar) && /^\d$/.test(yearDigit) && /[A-Z]/.test(plantChar)) {
+            const built = 'U' + pDigits + monthChar + yearDigit + plantChar + last6;
+            if (!bestCandidate) bestCandidate = built;
+            // Si además coincide con el código de modelo de 5 dígitos dominante del documento, elegirlo de inmediato
+            if (dominantModel5 && pDigits === dominantModel5 && (!dominantPlant || plantChar === dominantPlant)) {
+              bestCandidate = built;
+              break;
+            }
+          }
         }
-        if (diffs <= 2) {
-          clean = dominantPrefix + last6;
+        if (bestCandidate) {
+          clean = bestCandidate;
         }
+      }
+    }
+
+    // Caso 2: 15 caracteres (estructura estándar Brother: U + 5 dígitos + LetraMes + DígitoAño + LetraPlanta + 6 dígitos)
+    if (clean.length === 15 && clean.startsWith('U')) {
+      const chars = clean.split('');
+      for (let idx = 1; idx <= 5; idx++) chars[idx] = fixDigit(chars[idx]);
+      if (chars[6] === '0') chars[6] = 'D';
+      if (chars[6] === '8') chars[6] = 'B';
+      chars[7] = fixDigit(chars[7]);
+      if (dominantPlant && !/[A-Z]/.test(chars[8])) {
+        chars[8] = dominantPlant;
+      }
+      for (let idx = 9; idx <= 14; idx++) chars[idx] = fixDigit(chars[idx]);
+      clean = chars.join('');
+    }
+
+    return clean;
+  };
+
+  for (const entry of rawEntries) {
+    let clean = normalizeBrotherSerial(entry.rawSerial);
+
+    // Validar prefijo de 9 caracteres contra el pedimento de la misma línea (ej. 3904-6004465 -> U65160C6H)
+    if (entry.pedimento && pedimentoToPrefix9[entry.pedimento] && clean.length === 15) {
+      const expectedPrefix9 = pedimentoToPrefix9[entry.pedimento];
+      let diffs = 0;
+      for (let i = 0; i < 9; i++) {
+        if (clean[i] !== expectedPrefix9[i]) diffs++;
+      }
+      if (diffs <= 2) {
+        clean = expectedPrefix9 + clean.slice(9);
+      }
+    } else if (dominantModel5 && clean.length === 15) {
+      let diffs = 0;
+      for (let i = 0; i < 5; i++) {
+        if (clean[i + 1] !== dominantModel5[i]) diffs++;
+      }
+      if (diffs === 1) {
+        clean = 'U' + dominantModel5 + clean.slice(6);
       }
     }
 
@@ -221,8 +302,9 @@ function parseSeriesFromText(rawText) {
     }
   }
 
-  // 4. Series Sharp (Dice "Serial #..." o "Serial..." seguido del número)
+  // Series Sharp (Dice "Serial #..." o "Serial..." seguido del número)
   const sharpRegex = /Serial\s*#?\s*([A-Z0-9]{6,15})/gi;
+  let match;
   while ((match = sharpRegex.exec(rawText)) !== null) {
     const serialString = match[1].trim().toUpperCase();
     if (!seenSerials.has(serialString)) {
@@ -243,7 +325,7 @@ export async function extractSeriesFromPDF(file) {
         const typedarray = new Uint8Array(e.target.result);
 
         // PASO 1: Si el PDF proviene de un escáner Sharp/copiadora con compresión CCITTFaxDecode,
-        // extraer el stream TIFF directamente y pasarlo a Tesseract (mucho más rápido y no falla en navegadores sin soporte CCITT en pdf.js)
+        // extraer el stream TIFF de cada página directamente y pasarlo a Tesseract
         const ccittBlobs = extractCcittTiffBuffersFromPdfBytes(typedarray);
         if (ccittBlobs.length > 0) {
           console.log(`Detectadas ${ccittBlobs.length} página(s) escaneadas (CCITT Fax). Ejecutando OCR directo...`);
