@@ -255,7 +255,7 @@ function App() {
     // Persistencia asíncrona a través del controlador
     try {
       await ChecklistController.recordSuccessfulScan(targetBatchId, serie, assignmentData?.warehouseRow, targetBatch, assignmentData?.internalNumber);
-      if (assignmentData) {
+      if (assignmentData && (assignmentData.warehouseSpace || assignmentData.warehouseRow)) {
         await InventoryController.assignPrinter(serie, assignmentData);
       }
     } catch (error) {
@@ -264,15 +264,16 @@ function App() {
   };
 
   // Registrar serie fuera de lista
-  const handleLogUnexpected = async (serie) => {
-    if (!activeBatchId) return;
+  const handleLogUnexpected = async (serie, specificBatchId = null) => {
+    const targetBatchId = specificBatchId || activeBatchId;
+    if (!targetBatchId) return;
 
     const serial = serie.toUpperCase();
 
     // Optimista local
     setBatches(prevBatches => 
       prevBatches.map(batch => {
-        if (batch.id === activeBatchId) {
+        if (batch.id === targetBatchId) {
           const logs = batch.unexpectedLogs || [];
           if (!logs.includes(serial)) {
             return {
@@ -285,7 +286,7 @@ function App() {
       })
     );
 
-    await ChecklistController.recordUnexpectedScan(activeBatchId, serial);
+    await ChecklistController.recordUnexpectedScan(targetBatchId, serial);
   };
 
   // Eliminar checklist
@@ -414,6 +415,7 @@ function App() {
       <OperatorMobileView 
         batches={batches}
         onCompleteTrailer={handleCompleteTrailer}
+        onLogUnexpected={handleLogUnexpected}
         onAssignmentSaved={() => {
           fetchBatches(true);
           handleLayoutChange();

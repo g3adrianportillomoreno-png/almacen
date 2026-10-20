@@ -33,6 +33,7 @@ export default function HomeView({
   const [quickModelQuery, setQuickModelQuery] = useState('');
 
   const fileInputRef = useRef(null);
+  const addMoreFilesInputRef = useRef(null);
 
   // Layout de almacenes y filas activas
   const mapLayout = useMemo(() => WarehouseMapController.loadMap(), []);
@@ -105,42 +106,80 @@ export default function HomeView({
     return { total, consultas, bajas };
   }, [allPrinters]);
 
-  // Subida de Excel o PDF
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+  // Procesa uno o varios archivos (PDF / Excel) y devuelve sus series combinadas sin duplicados
+  const processUploadedFiles = async (fileList, existingData = null) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
 
     setIsProcessingFile(true);
 
     try {
-      let extractedSeries = [];
-      
-      if (file.name.toLowerCase().endsWith('.pdf')) {
-        extractedSeries = await extractSeriesFromPDF(file);
-      } else {
-        extractedSeries = await extractSeriesFromExcel(file);
+      const combinedSeries = existingData ? [...existingData.series] : [];
+      const seenSerials = new Set(combinedSeries.map(s => String(s.serial).trim().toUpperCase()));
+      const fileSummaries = existingData?.files ? [...existingData.files] : [];
+
+      for (const file of files) {
+        let extracted = [];
+        if (file.name.toLowerCase().endsWith('.pdf')) {
+          extracted = await extractSeriesFromPDF(file);
+        } else {
+          extracted = await extractSeriesFromExcel(file);
+        }
+
+        let addedFromFile = 0;
+        for (const item of extracted) {
+          const sUpper = String(item.serial || '').trim().toUpperCase();
+          if (sUpper && !seenSerials.has(sUpper)) {
+            seenSerials.add(sUpper);
+            combinedSeries.push(item);
+            addedFromFile++;
+          }
+        }
+
+        fileSummaries.push({
+          name: file.name,
+          count: extracted.length,
+          addedCount: addedFromFile
+        });
       }
-      
-      if (extractedSeries.length === 0) {
+
+      if (combinedSeries.length === 0) {
         alert("No se encontraron números de serie. Verifica el formato del documento.");
         setIsProcessingFile(false);
         return;
       }
 
-      setManualConsecutiveInput('');
-      setUploadPasswordInput('');
+      const combinedFileName = fileSummaries.length === 1
+        ? fileSummaries[0].name
+        : `${fileSummaries[0].name.replace(/\.[^/.]+$/, '')} (+${fileSummaries.length - 1} doc${fileSummaries.length - 1 > 1 ? 's' : ''})`;
+
+      if (!existingData) {
+        setManualConsecutiveInput('');
+        setUploadPasswordInput('');
+      }
+
       setPendingUploadData({
-        fileName: file.name,
-        series: extractedSeries
+        fileName: combinedFileName,
+        files: fileSummaries,
+        series: combinedSeries
       });
     } catch (error) {
       alert("Error al procesar el documento: " + error.message);
     } finally {
       setIsProcessingFile(false);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (addMoreFilesInputRef.current) addMoreFilesInputRef.current.value = '';
     }
+  };
+
+  // Subida inicial de uno o varios Excel / PDF
+  const handleFileUpload = async (e) => {
+    await processUploadedFiles(e.target.files, null);
+  };
+
+  // Agregar más documentos PDF/Excel al mismo checklist antes de guardarlo
+  const handleAddMoreFiles = async (e) => {
+    await processUploadedFiles(e.target.files, pendingUploadData);
   };
 
   const handleConfirmCreateBatch = (e) => {
@@ -222,13 +261,23 @@ export default function HomeView({
 
       {/* FILA SUPERIOR: SUBIR DOCUMENTO, ESTADO DE CHECKLIST Y RESUMEN RÁPIDO */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full">
-        {/* Input invisible para el archivo */}
+        {/* Input invisible para el archivo (permite seleccionar varios documentos a la vez) */}
         <input 
           type="file" 
+          multiple
           accept=".pdf, .xlsx, .xls, .csv" 
           ref={fileInputRef} 
           style={{ display: 'none' }} 
           onChange={handleFileUpload} 
+        />
+        {/* Input invisible para agregar más documentos al mismo checklist en el modal */}
+        <input 
+          type="file" 
+          multiple
+          accept=".pdf, .xlsx, .xls, .csv" 
+          ref={addMoreFilesInputRef} 
+          style={{ display: 'none' }} 
+          onChange={handleAddMoreFiles} 
         />
 
         {/* Botón: Subir Checklist de Recepción */}
@@ -248,10 +297,10 @@ export default function HomeView({
           )}
           <div>
             <span className="text-sm font-semibold text-slate-800 group-hover:text-red-700 block">
-              {isProcessingFile ? 'Leyendo documento...' : 'Subir Checklist de Recepción'}
+              {isProcessingFile ? 'Leyendo documento(s)...' : 'Subir Checklist de Recepción (1 o varios PDFs)'}
             </span>
             <span className="text-xs text-slate-500 block mt-0.5 font-normal">
-              Asignar consecutivo para escaneo físico
+              Selecciona uno o varios archivos para unirlos en un checklist
             </span>
           </div>
         </button>
@@ -687,14 +736,37 @@ export default function HomeView({
               </p>
             </div>
 
-            {/* AVISO DESTACADO DE IMPRESORAS DETECTADAS */}
-            <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3 rounded-xl text-center flex items-center justify-center gap-2">
-              <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="text-xs font-semibold">
-                Se detectaron <strong className="text-sm font-bold text-emerald-700">{pendingUploadData.series.length} impresoras</strong> en el documento.
-              </span>
+            {/* AVISO DESTACADO DE IMPRESORAS DETECTADAS Y LISTA DE DOCUMENTOS */}
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3 rounded-xl flex flex-col gap-2">
+              <div className="flex items-center justify-center gap-2 text-center">
+                <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="text-xs font-semibold">
+                  Total acumulado: <strong className="text-sm font-bold text-emerald-700">{pendingUploadData.series.length} impresoras</strong> ({pendingUploadData.files?.length || 1} documento{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
+                </span>
+              </div>
+
+              {pendingUploadData.files && pendingUploadData.files.length > 0 && (
+                <div className="bg-white/80 rounded-lg p-2 border border-emerald-200/80 max-h-28 overflow-y-auto flex flex-col gap-1 text-[11px]">
+                  {pendingUploadData.files.map((f, i) => (
+                    <div key={i} className="flex justify-between items-center text-slate-700 px-1">
+                      <span className="truncate font-medium max-w-[230px]">{i + 1}. {f.name}</span>
+                      <span className="font-bold text-emerald-700 shrink-0">+{f.addedCount} series</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={isProcessingFile}
+                onClick={() => addMoreFilesInputRef.current?.click()}
+                className="w-full py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+              >
+                <span>➕</span>
+                <span>{isProcessingFile ? 'Leyendo documento...' : 'Agregar otro PDF / Documento a este mismo Checklist'}</span>
+              </button>
             </div>
 
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-3">

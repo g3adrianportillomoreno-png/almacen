@@ -10,6 +10,7 @@ import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 export default function OperatorMobileView({
   batches = [],
   onCompleteTrailer,
+  onLogUnexpected,
   onAssignmentSaved,
   onRequestAdminView,
   availableWarehouses = ['Almacén 1', 'Almacén 2'],
@@ -139,30 +140,45 @@ export default function OperatorMobileView({
   };
 
   // Procesar código leído por pistola o escáner con coincidencia inteligente
-  const handleProcessScan = (rawCode) => {
+  const handleProcessScan = async (rawCode) => {
     const code = (rawCode || '').trim().toUpperCase();
     if (!code) return;
 
     setNotFoundSerial('');
     setSuccessMessage('');
 
-    // Si estamos en un checklist específico
+    // Si estamos en un checklist específico: SOLO marcar si está o no está (sin pedir ubicación física)
     if (activeChecklist) {
       const matchInBatch = findSerialMatch(code, activeChecklist.expectedSeries);
+      const isAlreadyDone = matchInBatch
+        ? activeChecklist.completed.includes(matchInBatch.serial)
+        : activeChecklist.completed.includes(code);
+
+      if (isAlreadyDone) {
+        soundEffects.playScanDuplicate();
+        setSuccessMessage(`⚠️ La serie ${matchInBatch ? matchInBatch.serial : code} YA estaba verificada en este checklist.`);
+        setScanInput('');
+        return;
+      }
+
       if (matchInBatch) {
         soundEffects.playScanSuccess();
-        handleSelectPrinter({
-          ...matchInBatch,
-          batchId: activeChecklist.id,
-          batchFolio: activeChecklist.folio,
-          scannedCode: code
-        });
+        if ((activeChecklist.completed.length + 1) >= activeChecklist.expectedSeries.length) {
+          setTimeout(() => soundEffects.playChecklistCompleted(), 500);
+        }
+        setSuccessMessage(`✓ ¡SÍ ESTÁ! [${matchInBatch.material || 'EQUIPO'}] Serie: ${matchInBatch.serial}`);
+        if (onCompleteTrailer) {
+          await onCompleteTrailer(matchInBatch.serial, null, activeChecklist.id);
+        }
       } else {
         soundEffects.playScanError();
         setNotFoundSerial(code);
+        if (onLogUnexpected) {
+          await onLogUnexpected(code, activeChecklist.id);
+        }
       }
     } else {
-      // Búsqueda global en todo el sistema
+      // Búsqueda global en todo el sistema (Pestaña "Lectura": aquí SÍ abre el modal para dar ubicación física)
       const match = findSerialMatch(code, allSystemPrinters);
       if (match) {
         soundEffects.playScanSuccess();
@@ -603,8 +619,8 @@ export default function OperatorMobileView({
               </div>
             )}
 
-            {/* LISTA RÁPIDA DE EQUIPOS PENDIENTES DE UBICACIÓN */}
-            {!activeChecklist && (
+            {/* LISTA RÁPIDA DE EQUIPOS PENDIENTES DE UBICACIÓN O SERIES DEL CHECKLIST */}
+            {!activeChecklist ? (
               <div className="bg-slate-800/60 rounded-3xl p-4 border border-slate-700/80 flex flex-col gap-3">
                 <div className="flex items-center justify-between">
                   <div>
@@ -651,6 +667,46 @@ export default function OperatorMobileView({
                       </div>
                     ))
                   )}
+                </div>
+              </div>
+            ) : (
+              <div className="bg-slate-800/60 rounded-3xl p-4 border border-slate-700/80 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wide">
+                      Series del Checklist ({activeChecklist.completed.length} / {activeChecklist.expectedSeries.length})
+                    </h3>
+                    <p className="text-[10px] text-slate-400">Escaneo rápido: solo marca si está o no está</p>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
+                  {activeChecklist.expectedSeries.map((item, idx) => {
+                    const isPresent = activeChecklist.completed.includes(item.serial);
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-3 rounded-2xl border flex items-center justify-between ${
+                          isPresent
+                            ? 'bg-emerald-950/50 border-emerald-700/80'
+                            : 'bg-slate-900 border-slate-700/80'
+                        }`}
+                      >
+                        <div>
+                          <span className="font-mono font-bold text-white text-xs block">{item.serial}</span>
+                          <span className="text-[11px] text-slate-400 block mt-0.5">{item.material}</span>
+                        </div>
+                        <span
+                          className={`text-[10px] font-bold px-2.5 py-1 rounded-xl border ${
+                            isPresent
+                              ? 'bg-emerald-600 text-white border-emerald-500'
+                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                          }`}
+                        >
+                          {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

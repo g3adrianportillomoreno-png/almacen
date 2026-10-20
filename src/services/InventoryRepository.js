@@ -267,39 +267,45 @@ export class InventoryRepository {
   }
 
   /**
-   * Actualiza el escaneo de una serie: la marca como completada, asigna su Fila y su Número de Inventario asignado por el operador
+   * Actualiza el escaneo de una serie: la marca como completada (presente).
+   * Si no se proporciona fila (escaneo rápido de checklist), conserva su ubicación o la deja en 'Sin Asignar' para ubicarse después.
    */
-  static async registerScan(checklistId, serialNumber, warehouseRow = 'Fila 1', internalNumber = null) {
+  static async registerScan(checklistId, serialNumber, warehouseRow = null, internalNumber = null) {
     const serial = serialNumber.trim().toUpperCase();
-    const row = warehouseRow || 'Fila 1';
-
-    // 1. Guardar en caché local
     const cache = this.getMetadataCache();
     cache.serials = cache.serials || {};
+    const existing = cache.serials[serial] || {};
+    const row = warehouseRow || existing.warehouseRow || 'Sin Asignar';
+
+    // 1. Guardar en caché local
     cache.serials[serial] = {
-      ...(cache.serials[serial] || {}),
+      ...existing,
+      isScanned: true,
       warehouseRow: row,
-      internalNumber: internalNumber !== null && internalNumber !== undefined ? internalNumber : (cache.serials[serial]?.internalNumber ?? null),
-      status: cache.serials[serial]?.status || 'DISPONIBLE'
+      internalNumber: internalNumber !== null && internalNumber !== undefined ? internalNumber : (existing.internalNumber ?? null),
+      status: existing.status || 'DISPONIBLE'
     };
     this.saveMetadataCache(cache);
 
     // 2. Actualizar en Supabase
-    const numVal = !isNaN(Number(internalNumber)) ? Number(internalNumber) : null;
+    const numVal = internalNumber !== null && internalNumber !== undefined && !isNaN(Number(internalNumber)) ? Number(internalNumber) : null;
+    const updatePayload = {
+      is_scanned: true,
+      scanned_at: new Date().toISOString(),
+      warehouse_row: row
+    };
+    if (numVal !== null) {
+      updatePayload.internal_number = numVal;
+    }
+
     try {
       const { error: fullError } = await supabase
         .from('expected_series')
-        .update({
-          is_scanned: true,
-          scanned_at: new Date().toISOString(),
-          warehouse_row: row,
-          internal_number: numVal
-        })
+        .update(updatePayload)
         .eq('checklist_id', checklistId)
         .eq('serial_number', serial);
 
       if (fullError) {
-        // Fallback si la columna internal_number no ha sido migrada en Supabase
         await supabase
           .from('expected_series')
           .update({
