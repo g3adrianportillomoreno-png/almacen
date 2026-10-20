@@ -158,6 +158,41 @@ export class PrinterModel {
     }
   }
 
+  static encodePrinterStatusWithSystemState(status = 'DISPONIBLE', systemStatus = 'Principal') {
+    const base = ['CONSULTA', 'BAJA', 'DISPONIBLE'].includes(String(status).toUpperCase())
+      ? String(status).toUpperCase()
+      : 'DISPONIBLE';
+    const sys = PrinterModel.normalizeSystemStatus(systemStatus);
+    return `${base}|${sys}`;
+  }
+
+  static decodePrinterStatusAndSystemState(rawPrinterStatus, rawSystemStatus, meta = {}) {
+    let baseStatus = PrinterModel.STATUS_DISPONIBLE;
+    let sysStatus = rawSystemStatus || meta.systemStatus || PrinterModel.SYSTEM_STATE_PRINCIPAL;
+
+    if (rawPrinterStatus && String(rawPrinterStatus).includes('|')) {
+      const [partStatus, partSys] = String(rawPrinterStatus).split('|');
+      baseStatus = partStatus || PrinterModel.STATUS_DISPONIBLE;
+      if (!rawSystemStatus && partSys) {
+        sysStatus = partSys;
+      }
+    } else if (rawPrinterStatus) {
+      const upper = String(rawPrinterStatus).trim().toUpperCase();
+      if (['DISPONIBLE', 'CONSULTA', 'BAJA'].includes(upper)) {
+        baseStatus = upper;
+      } else {
+        sysStatus = rawPrinterStatus;
+      }
+    } else if (meta.status) {
+      baseStatus = meta.status;
+    }
+
+    return {
+      status: baseStatus,
+      systemStatus: PrinterModel.normalizeSystemStatus(sysStatus)
+    };
+  }
+
   static fromDb(dbItem, checklistInfo = {}, metadataCache = {}) {
     const serial = (dbItem.serial_number || dbItem.serial || '').toUpperCase();
     const meta = metadataCache[serial] || {};
@@ -168,7 +203,11 @@ export class PrinterModel {
       ? dbItem.internal_number
       : (meta.internalNumber ?? null);
 
-    const systemStatus = dbItem.system_status || meta.systemStatus || PrinterModel.SYSTEM_STATE_PRINCIPAL;
+    const decoded = PrinterModel.decodePrinterStatusAndSystemState(
+      dbItem.printer_status,
+      dbItem.system_status,
+      meta
+    );
 
     return new PrinterModel({
       id: dbItem.id,
@@ -180,8 +219,8 @@ export class PrinterModel {
       warehouseName: warehouseName,
       warehouseRow: dbItem.warehouse_row || meta.warehouseRow || 'Fila 1',
       warehouseSpace: warehouseSpace,
-      status: dbItem.printer_status || meta.status || PrinterModel.STATUS_DISPONIBLE,
-      systemStatus: systemStatus,
+      status: decoded.status,
+      systemStatus: decoded.systemStatus,
       checklistName: checklistInfo?.name || meta.checklistName || 'Inventario General',
       checklistFolio: checklistInfo?.folio || meta.checklistFolio || 'SIN FOLIO',
       internalNumber: internalNum,

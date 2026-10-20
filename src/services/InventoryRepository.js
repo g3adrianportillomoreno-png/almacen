@@ -123,7 +123,14 @@ export class InventoryRepository {
     const metadataCache = this.getMetadataCache();
 
     // 4. Mapear cada registro de BD al modelo ChecklistModel inyectando sus series completas
-    return (checklistsData || []).map((dbBatch, index) => {
+    // Excluir lotes de Mercado Libre que usan la tabla checklists como respaldo en la nube
+    const validChecklists = (checklistsData || []).filter(dbBatch => {
+      const nm = (dbBatch.name || '').trim().toUpperCase();
+      const fl = (dbBatch.folio || '').trim().toUpperCase();
+      return !nm.startsWith('[ML-') && !fl.startsWith('ML-');
+    });
+
+    return validChecklists.map((dbBatch, index) => {
       const fullBatch = {
         ...dbBatch,
         expected_series: seriesByChecklist[dbBatch.id] || []
@@ -441,6 +448,7 @@ export class InventoryRepository {
     // Intentar actualizar en Supabase
     try {
       const numVal = !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
+      const encodedStatus = `${existing.status || 'DISPONIBLE'}|${finalSystemStatus}`;
       const { error } = await supabase
         .from('expected_series')
         .update({
@@ -448,6 +456,7 @@ export class InventoryRepository {
           warehouse_row: finalRow,
           warehouse_space: finalSpace,
           internal_number: numVal,
+          printer_status: encodedStatus,
           system_status: finalSystemStatus,
           is_scanned: true,
           scanned_at: new Date().toISOString()
@@ -455,11 +464,15 @@ export class InventoryRepository {
         .eq('serial_number', serial);
 
       if (error) {
-        // Fallback si faltan columnas nuevas
+        // Fallback si aún no existe la columna system_status en Supabase (guarda el Estado dentro de printer_status)
         await supabase
           .from('expected_series')
           .update({
+            warehouse_name: finalWh,
             warehouse_row: finalRow,
+            warehouse_space: finalSpace,
+            internal_number: numVal,
+            printer_status: encodedStatus,
             is_scanned: true,
             scanned_at: new Date().toISOString()
           })
@@ -754,6 +767,7 @@ export class InventoryRepository {
         const toUpdatePromises = [];
 
         for (const c of chunk) {
+          const encodedStatus = `DISPONIBLE|${c.finalSystemStatus}`;
           if (existingDbSerials.has(c.serialUpper)) {
             updated++;
             toUpdatePromises.push(
@@ -764,7 +778,7 @@ export class InventoryRepository {
                   warehouse_name: c.finalWh,
                   warehouse_row: c.finalRow,
                   warehouse_space: c.finalSpace,
-                  system_status: c.finalSystemStatus,
+                  printer_status: encodedStatus,
                   is_scanned: true
                 })
                 .eq('serial_number', c.serialUpper)
@@ -780,7 +794,7 @@ export class InventoryRepository {
                 warehouse_name: c.finalWh,
                 warehouse_row: c.finalRow,
                 warehouse_space: c.finalSpace,
-                system_status: c.finalSystemStatus,
+                printer_status: encodedStatus,
                 is_scanned: true
               });
             }
