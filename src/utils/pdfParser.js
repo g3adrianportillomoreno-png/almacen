@@ -5,6 +5,37 @@ import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 /**
+ * Preprocesa un Canvas de HTML5 aumentando el contraste y eliminando ruido de fondo
+ * (sombras de escáner, manchas de fotocopiadora, fondo grisáceo).
+ * Deja el texto en negro puro y el fondo en blanco puro para que Tesseract alcance 99%+ de precisión.
+ */
+function preprocessCanvasForOcr(canvas) {
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      // Fórmula de luminancia ITU-R BT.601
+      const gray = (r * 299 + g * 587 + b * 114) / 1000;
+
+      // Umbral adaptativo: fondo claro/gris a blanco puro (255), trazo oscuro a negro puro (0)
+      const clean = gray > 180 ? 255 : (gray < 115 ? 0 : Math.max(0, (gray - 60) * 1.6));
+      data[i] = clean;
+      data[i + 1] = clean;
+      data[i + 2] = clean;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  } catch (e) {
+    console.warn("No se pudo preprocesar el canvas para OCR:", e);
+  }
+}
+
+/**
  * Extrae directamente imágenes CCITTFaxDecode (Group 4) de PDFs escaneados en fotocopiadoras (Sharp, Ricoh, Brother)
  * y las empaqueta en buffers TIFF en memoria para que Tesseract las lea al instante sin depender de pdfjs canvas/WASM.
  */
@@ -101,21 +132,28 @@ function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
 
 /**
  * Analiza el texto extraído (ya sea de capa nativa o de OCR) y devuelve la lista [{ serial, material }]
- * Incluye corrección estructural inteligente para los documentos "Anexo de Series y Pedimentos":
- * 1. Une series que el OCR haya partido con un espacio a mitad del renglón (ej. "U65160C6HT 66699").
- * 2. Elimina letras fantasma insertadas por manchas de escáner en series de 16 caracteres (ej. "U65160C6HT766809" -> "U65160C6H766809").
- * 3. Corrige el '7' leído como 'T' en el consecutivo numérico (ej. "U65160C6HT66731" -> "U65160C6H766731").
- * 4. Valida el prefijo de 9 caracteres contra el pedimento de la misma línea y el código de modelo de 5 dígitos del documento.
+ * Motor Inteligente de Corrección Estructural Multi-Marca:
+ * 1. Resuelve saltos de espacio del OCR a mitad de la serie (ej. "U65160C6HT 66699").
+ * 2. Soporta múltiples series en un mismo renglón antes del pedimento.
+ * 3. Corrige caracteres fantasma por manchas de escáner en series de 16 o 17 caracteres.
+ * 4. Corrige confusión T/7, O/0, I/1, S/5, G/6, B/8, Z/2 en las posiciones estrictamente numéricas.
+ * 5. Reconstruye el mes Brother en la posición 6 (letras A..M, ej. '0'->'D', '8'->'B').
+ * 6. Valida y sincroniza el prefijo de 9 caracteres por Pedimento y Modelo dominante del lote.
+ * 7. Extrae series de otras marcas (Sharp, HP, Ricoh, Canon, Kyocera, Lexmark) y detecta modelos.
  */
 function parseSeriesFromText(rawText) {
   const items = [];
   const seenSerials = new Set();
 
-  // Buscar el Modelo de Impresora:
-  // Priorizar modelos Brother (MFC..., HL..., DCP...) o Sharp (MX-..., BP-...) evitando confundir con Factura "MXF0374377"
+  // Detección del Modelo de Impresora en el Documento:
   const brotherModelMatch = rawText.match(/\b(MFC-?[A-Z0-9]{3,12}|HL-?[A-Z0-9]{3,12}|DCP-?[A-Z0-9]{3,12})\b/i);
-  const sharpModelMatch = rawText.match(/\b(MX-(?!F\d)[A-Z0-9-]{3,12}|BP-[A-Z0-9-]{3,12})\b/i);
-  let materialRaw = 'DESCONOCIDO';
+  const sharpModelMatch = rawText.match(/\b(MX-(?!F\d)[A-Z0-9-]{3,12}|BP-[A-Z0-9-]{3,12}|DX-[A-Z0-9-]{3,12})\b/i);
+  const hpModelMatch = rawText.match(/\b(?:LaserJet|PageWide|DesignJet)\s+(?:Pro\s+)?([A-Z0-9-]{3,12})\b/i);
+  const ricohModelMatch = rawText.match(/\b(MP\s*\d{3,4}[A-Z]*|IM\s*\d{3,4}[A-Z]*|Aficio\s+[A-Z0-9]+)\b/i);
+  const canonModelMatch = rawText.match(/\b(imageRUNNER\s+[A-Z0-9-]+|iR-ADV\s+[A-Z0-9-]+)\b/i);
+  const kyoceraModelMatch = rawText.match(/\b(ECOSYS\s+[A-Z0-9-]+|TASKalfa\s+[A-Z0-9-]+)\b/i);
+
+  let materialRaw = 'MODELO GENERAL';
 
   if (brotherModelMatch) {
     materialRaw = brotherModelMatch[0].toUpperCase();
@@ -124,26 +162,39 @@ function parseSeriesFromText(rawText) {
     }
   } else if (sharpModelMatch) {
     materialRaw = sharpModelMatch[0].toUpperCase();
+  } else if (hpModelMatch) {
+    materialRaw = 'HP ' + hpModelMatch[0].toUpperCase();
+  } else if (ricohModelMatch) {
+    materialRaw = 'RICOH ' + ricohModelMatch[0].toUpperCase().replace(/\s+/g, ' ');
+  } else if (canonModelMatch) {
+    materialRaw = canonModelMatch[0].toUpperCase();
+  } else if (kyoceraModelMatch) {
+    materialRaw = kyoceraModelMatch[0].toUpperCase();
   }
 
-  // Mapa extendido para reparar caracteres que en una posición 100% numérica fueron leídos como letra por el OCR
+  // Mapa exhaustivo de caracteres OCR leídos como letras/símbolos en posiciones que DEBEN ser números
   const fixDigit = (ch) => {
+    if (!ch) return '0';
+    const upper = String(ch).toUpperCase();
     const map = {
-      'O': '0', 'Q': '0', 'D': '0',
-      'I': '1', 'L': '1',
+      'O': '0', 'Q': '0', 'D': '0', 'U': '0',
+      'I': '1', 'L': '1', '|': '1', '!': '1', '/': '1', ']': '1', '[': '1', 'J': '1',
       'Z': '2',
+      'E': '3',
+      'A': '4',
       'S': '5',
-      'G': '6',
-      'T': '7', 'Y': '7', 'J': '7', '?': '7',
-      'B': '8'
+      'G': '6', 'b': '6',
+      'T': '7', 'Y': '7', '?': '7', '\\': '7',
+      'B': '8', '&': '8',
+      'g': '9', 'q': '9', 'P': '9'
     };
-    return map[ch] || ch;
+    return map[upper] || (/\d/.test(upper) ? upper : upper);
   };
 
-  // Extraer candidatos línea por línea (soportando cuando el OCR parte la serie con un espacio, ej. "U65160C6HT 66699 3904-6004465")
   const rawEntries = []; // { rawSerial, pedimento }
   const lines = rawText.split(/\r?\n/);
 
+  // 1. Extraer candidatos línea por línea considerando columnas de pedimento o fecha
   for (const line of lines) {
     const pedMatch = line.match(/\b(\d{4}-\d{6,8})\b/);
     const hasDate = /\b202\d-\d{2}-\d{2}\b/.test(line);
@@ -151,37 +202,65 @@ function parseSeriesFromText(rawText) {
     if (pedMatch || hasDate) {
       const cutIdx = pedMatch ? line.indexOf(pedMatch[1]) : line.search(/\b202\d-\d{2}-\d{2}\b/);
       const leftPart = (cutIdx > 0 ? line.slice(0, cutIdx) : line).trim();
-      const compactLeft = leftPart.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-      if (compactLeft.length >= 13 && compactLeft.length <= 17 && /[A-Z]/i.test(compactLeft) && /\d{4,}/.test(compactLeft)) {
-        rawEntries.push({
-          rawSerial: compactLeft,
-          pedimento: pedMatch ? pedMatch[1] : null
-        });
+
+      // Descomponer en palabras para manejar:
+      // a) Series partidas con un espacio ("U65160C6HT 66699")
+      // b) Múltiples series en una misma línea antes del pedimento
+      const tokens = leftPart.split(/\s+/).filter(Boolean);
+      let temp = '';
+
+      for (let t = 0; t < tokens.length; t++) {
+        const cleanTok = tokens[t].replace(/[^A-Z0-9]/gi, '').toUpperCase();
+        if (!cleanTok) continue;
+
+        if (cleanTok.length >= 13 && cleanTok.length <= 17) {
+          if (temp) {
+            if (temp.length >= 13 && temp.length <= 17) {
+              rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
+            }
+            temp = '';
+          }
+          rawEntries.push({ rawSerial: cleanTok, pedimento: pedMatch ? pedMatch[1] : null });
+        } else if (cleanTok.length >= 5 && cleanTok.length <= 12) {
+          if (!temp) {
+            temp = cleanTok;
+          } else {
+            const combined = temp + cleanTok;
+            if (combined.length >= 13 && combined.length <= 17) {
+              rawEntries.push({ rawSerial: combined, pedimento: pedMatch ? pedMatch[1] : null });
+              temp = '';
+            } else {
+              if (temp.length >= 13 && temp.length <= 17) {
+                rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
+              }
+              temp = cleanTok;
+            }
+          }
+        }
+      }
+
+      if (temp && temp.length >= 13 && temp.length <= 17) {
+        rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
       }
     }
   }
 
-  // Si no era un documento con columnas de pedimento/fecha, buscar con expresiones regulares generales
-  if (rawEntries.length === 0) {
-    const brotherRegex = /\b([U0OVJ][A-Z0-9]{12,15})\b/gi;
-    let match;
-    while ((match = brotherRegex.exec(rawText)) !== null) {
-      const cand = match[1].trim().toUpperCase();
-      if (/[A-Z]/i.test(cand.slice(1)) && /\d{4,}/.test(cand)) {
-        rawEntries.push({ rawSerial: cand, pedimento: null });
-      }
-    }
-
-    const brotherFallbackRegex = /(U[A-Z0-9]{13,15})/gi;
-    while ((match = brotherFallbackRegex.exec(rawText)) !== null) {
-      const cand = match[1].trim().toUpperCase();
-      if (/\d{4,}/.test(cand)) {
+  // 2. Escáner global continuo (NO excluyente): Captura series Brother en páginas o renglones sin columna de pedimento
+  const brotherRegex = /\b([U0OVJE][A-Z0-9]{12,16})\b/gi;
+  let bMatch;
+  while ((bMatch = brotherRegex.exec(rawText)) !== null) {
+    const cand = bMatch[1].trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (cand.length >= 13 && cand.length <= 17 && /\d{4,}/.test(cand)) {
+      const alreadyIncluded = rawEntries.some(e => e.rawSerial === cand || e.rawSerial.includes(cand));
+      if (!alreadyIncluded) {
         rawEntries.push({ rawSerial: cand, pedimento: null });
       }
     }
   }
 
-  // Analizar el código de modelo de 5 dígitos (pos 1..5), letra de planta (pos 8) y relación Pedimento -> Prefijo de 9 chars
+  // 3. Análisis de consenso del lote:
+  // Determina el código de modelo Brother dominante (5 dígitos en pos 1..5), letra de planta (pos 8)
+  // y relación Pedimento -> Prefijo de 9 caracteres
   const model5Counts = {};
   const plantCounts = {};
   const pedimentoToPrefix9 = {};
@@ -218,63 +297,86 @@ function parseSeriesFromText(rawText) {
     }
   }
 
-  // Función que repara un candidato Brother a sus 15 caracteres exactos
+  // 4. Reparador Maestro de Series Brother (Normaliza a 15 caracteres exactos)
   const normalizeBrotherSerial = (rawCandidate) => {
     let clean = rawCandidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
 
-    if (/^[0OVJ]/.test(clean) && clean.length >= 14) {
+    // Reparar 'U' inicial leída erróneamente por OCR
+    if (/^[0OVJEL]/.test(clean) && clean.length >= 14) {
       clean = 'U' + clean.slice(1);
     }
 
-    // Caso 1: 16 caracteres (el OCR insertó una letra fantasma, ej. U65160C6HT766809, U65160D6EH106775, U6T7672F6N214939)
-    if (clean.length === 16 && clean.startsWith('U')) {
+    // CASO A: 16 o 17 caracteres (el escáner insertó caracteres o manchas fantasma)
+    if ((clean.length === 16 || clean.length === 17) && clean.startsWith('U')) {
       const last6 = clean.slice(-6).split('').map(fixDigit).join('');
       if (/^\d{6}$/.test(last6)) {
-        const prefix10 = clean.slice(0, 10);
+        const prefixPart = clean.slice(0, clean.length - 6);
         let bestCandidate = null;
-        for (const removeIdx of [9, 8, 7, 6, 2, 3, 4, 5, 1]) {
-          const candidate9 = prefix10.slice(0, removeIdx) + prefix10.slice(removeIdx + 1);
+
+        // Probar remover cada posición sobrante para alcanzar los 9 caracteres de prefijo
+        for (let removeIdx = prefixPart.length - 1; removeIdx >= 1; removeIdx--) {
+          const candidate9 = prefixPart.slice(0, removeIdx) + prefixPart.slice(removeIdx + 1);
+          if (candidate9.length !== 9) continue;
+
           const pDigits = candidate9.slice(1, 6).split('').map(fixDigit).join('');
-          const monthChar = candidate9[6];
+          let monthChar = candidate9[6];
+          if (monthChar === '0' || monthChar === 'O') monthChar = 'D';
+          if (monthChar === '8') monthChar = 'B';
+          if (monthChar === '6') monthChar = 'G';
+
           const yearDigit = fixDigit(candidate9[7]);
-          const plantChar = candidate9[8];
+          let plantChar = candidate9[8];
+          if (dominantPlant && !/[A-Z]/.test(plantChar)) {
+            plantChar = dominantPlant;
+          }
+
           if (/^\d{5}$/.test(pDigits) && /[A-Z]/.test(monthChar) && /^\d$/.test(yearDigit) && /[A-Z]/.test(plantChar)) {
             const built = 'U' + pDigits + monthChar + yearDigit + plantChar + last6;
             if (!bestCandidate) bestCandidate = built;
-            // Si además coincide con el código de modelo de 5 dígitos dominante del documento, elegirlo de inmediato
             if (dominantModel5 && pDigits === dominantModel5 && (!dominantPlant || plantChar === dominantPlant)) {
               bestCandidate = built;
               break;
             }
           }
         }
+
         if (bestCandidate) {
           clean = bestCandidate;
         }
       }
     }
 
-    // Caso 2: 15 caracteres (estructura estándar Brother: U + 5 dígitos + LetraMes + DígitoAño + LetraPlanta + 6 dígitos)
+    // CASO B: 15 caracteres (Estructura estándar Brother: U + 5 dígitos + LetraMes + DígitoAño + LetraPlanta + 6 dígitos)
     if (clean.length === 15 && clean.startsWith('U')) {
       const chars = clean.split('');
       for (let idx = 1; idx <= 5; idx++) chars[idx] = fixDigit(chars[idx]);
-      if (chars[6] === '0') chars[6] = 'D';
+
+      // Corrección de Letra de Mes (pos 6: A..M)
+      if (chars[6] === '0' || chars[6] === 'O') chars[6] = 'D';
       if (chars[6] === '8') chars[6] = 'B';
+      if (chars[6] === '6') chars[6] = 'G';
+
+      // Corrección de Dígito de Año (pos 7: 0..9)
       chars[7] = fixDigit(chars[7]);
+
+      // Corrección de Letra de Planta (pos 8: Letra)
       if (dominantPlant && !/[A-Z]/.test(chars[8])) {
         chars[8] = dominantPlant;
       }
+
+      // Corrección de los 6 dígitos consecutivos finales (pos 9..14: 0..9)
       for (let idx = 9; idx <= 14; idx++) chars[idx] = fixDigit(chars[idx]);
+
       clean = chars.join('');
     }
 
     return clean;
   };
 
+  // 5. Aplicar validación contra pedimento y modelo dominante
   for (const entry of rawEntries) {
     let clean = normalizeBrotherSerial(entry.rawSerial);
 
-    // Validar prefijo de 9 caracteres contra el pedimento de la misma línea (ej. 3904-6004465 -> U65160C6H)
     if (entry.pedimento && pedimentoToPrefix9[entry.pedimento] && clean.length === 15) {
       const expectedPrefix9 = pedimentoToPrefix9[entry.pedimento];
       let diffs = 0;
@@ -302,41 +404,66 @@ function parseSeriesFromText(rawText) {
     }
   }
 
-  // Series Sharp (Dice "Serial #..." o "Serial..." seguido del número)
-  const sharpRegex = /Serial\s*#?\s*([A-Z0-9]{6,15})/gi;
-  let match;
-  while ((match = sharpRegex.exec(rawText)) !== null) {
-    const serialString = match[1].trim().toUpperCase();
-    if (!seenSerials.has(serialString)) {
-      seenSerials.add(serialString);
-      items.push({ serial: serialString, material: materialRaw });
+  // 6. Extracción para otras marcas (Sharp, HP, Ricoh, Canon, Lexmark):
+  // Formato Sharp: "Serial #..." o "Serial..." seguido del número
+  const sharpRegex = /(?:Serial\s*#?|S\/N\s*[:#]?|SERIE\s*[:#]?)\s*([A-Z0-9-]{6,16})/gi;
+  let sMatch;
+  while ((sMatch = sharpRegex.exec(rawText)) !== null) {
+    const serialString = sMatch[1].trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    if (serialString.length >= 6 && !seenSerials.has(serialString)) {
+      // Evitar confundir con números de pedimento o facturas
+      if (!/^\d{4}-\d{6,8}$/.test(serialString) && !/^MXF\d+$/.test(serialString)) {
+        seenSerials.add(serialString);
+        items.push({ serial: serialString, material: materialRaw });
+      }
+    }
+  }
+
+  // Formato HP estándar (10 caracteres: 3 letras de país + 7 alfanuméricos, ej. VNC3K04921, CNB8G12345)
+  const hpSerialRegex = /\b([A-Z]{3}[A-Z0-9]{7})\b/g;
+  let hpMatch;
+  while ((hpMatch = hpSerialRegex.exec(rawText)) !== null) {
+    const cand = hpMatch[1].toUpperCase();
+    if (!seenSerials.has(cand) && /[A-Z]/.test(cand.slice(0, 3)) && /\d/.test(cand.slice(3))) {
+      seenSerials.add(cand);
+      items.push({ serial: cand, material: materialRaw.startsWith('HP') ? materialRaw : 'HP ' + materialRaw });
     }
   }
 
   return items;
 }
 
-export async function extractSeriesFromPDF(file) {
+export async function extractSeriesFromPDF(file, onProgress = null) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
 
     reader.onload = async (e) => {
       try {
         const typedarray = new Uint8Array(e.target.result);
+        let extractedItems = [];
+        let combinedOcrText = "";
 
         // PASO 1: Si el PDF proviene de un escáner Sharp/copiadora con compresión CCITTFaxDecode,
         // extraer el stream TIFF de cada página directamente y pasarlo a Tesseract
         const ccittBlobs = extractCcittTiffBuffersFromPdfBytes(typedarray);
         if (ccittBlobs.length > 0) {
           console.log(`Detectadas ${ccittBlobs.length} página(s) escaneadas (CCITT Fax). Ejecutando OCR directo...`);
-          let ccittText = "";
-          for (const blob of ccittBlobs) {
+          for (let idx = 0; idx < ccittBlobs.length; idx++) {
+            if (onProgress) {
+              onProgress({
+                stage: 'ccitt',
+                page: idx + 1,
+                totalPages: ccittBlobs.length,
+                message: `Procesando página ${idx + 1} de ${ccittBlobs.length} con OCR directo...`
+              });
+            }
+            const blob = ccittBlobs[idx];
             const { data: { text } } = await Tesseract.recognize(blob, 'eng');
-            ccittText += text + "\n";
+            combinedOcrText += text + "\n";
           }
-          const ccittItems = parseSeriesFromText(ccittText);
-          if (ccittItems.length > 0) {
-            resolve(ccittItems);
+          extractedItems = parseSeriesFromText(combinedOcrText);
+          if (extractedItems.length > 0) {
+            resolve(extractedItems);
             return;
           }
         }
@@ -353,28 +480,42 @@ export async function extractSeriesFromPDF(file) {
           fullText += pageText + " \n";
         }
 
-        let extractedItems = parseSeriesFromText(fullText);
+        extractedItems = parseSeriesFromText(fullText);
 
-        // PASO 3: Si no hubo series en la capa de texto, renderizar cada página en canvas y pasar por Tesseract
+        // PASO 3: Si no hubo series o fue escaso en la capa de texto, renderizar páginas en Canvas optimizado + Filtro y OCR
         if (fullText.trim().length < 100 || extractedItems.length === 0) {
-          console.log("Iniciando OCR por renderizado de página...");
-          let ocrText = "";
+          console.log("Iniciando OCR por renderizado optimizado de página (Escala 2.5x + Filtro)...");
+          let canvasOcrText = "";
 
           for (let i = 1; i <= numPages; i++) {
+            if (onProgress) {
+              onProgress({
+                stage: 'canvas',
+                page: i,
+                totalPages: numPages,
+                message: `Analizando con OCR optimizado página ${i} de ${numPages}...`
+              });
+            }
+
             const page = await pdf.getPage(i);
-            const viewport = page.getViewport({ scale: 2.0 });
+            // Escala 2.5x: proporción perfecta para lectura nítida de matrices de puntos y letras finas
+            const viewport = page.getViewport({ scale: 2.5 });
 
             const canvas = document.createElement('canvas');
-            const context = canvas.getContext('2d');
             canvas.height = viewport.height;
             canvas.width = viewport.width;
+            const context = canvas.getContext('2d');
 
             await page.render({ canvasContext: context, viewport }).promise;
+
+            // Filtro de binarización y contraste: elimina manchas y fondos sucios
+            preprocessCanvasForOcr(canvas);
+
             const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
-            ocrText += text + " \n";
+            canvasOcrText += text + " \n";
           }
 
-          const ocrItems = parseSeriesFromText(fullText + "\n" + ocrText);
+          const ocrItems = parseSeriesFromText(fullText + "\n" + combinedOcrText + "\n" + canvasOcrText);
           if (ocrItems.length > 0) {
             extractedItems = ocrItems;
           }

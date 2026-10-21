@@ -19,6 +19,7 @@ export default function HomeView({
   onLayoutChange
 }) {
   const [isProcessingFile, setIsProcessingFile] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState('');
 
   // Modal para que el operador coloque obligatoriamente el consecutivo manual y contraseña de autorización
   const [pendingUploadData, setPendingUploadData] = useState(null);
@@ -121,7 +122,7 @@ export default function HomeView({
       for (const file of files) {
         let extracted = [];
         if (file.name.toLowerCase().endsWith('.pdf')) {
-          extracted = await extractSeriesFromPDF(file);
+          extracted = await extractSeriesFromPDF(file, (p) => setProcessingProgress(p.message));
         } else {
           extracted = await extractSeriesFromExcel(file);
         }
@@ -167,6 +168,7 @@ export default function HomeView({
       alert("Error al procesar el documento: " + error.message);
     } finally {
       setIsProcessingFile(false);
+      setProcessingProgress('');
       if (fileInputRef.current) fileInputRef.current.value = '';
       if (addMoreFilesInputRef.current) addMoreFilesInputRef.current.value = '';
     }
@@ -297,7 +299,7 @@ export default function HomeView({
           )}
           <div>
             <span className="text-sm font-semibold text-slate-800 group-hover:text-red-700 block">
-              {isProcessingFile ? 'Leyendo documento(s)...' : 'Subir Checklist de Recepción (1 o varios PDFs)'}
+              {isProcessingFile ? (processingProgress || 'Leyendo documento(s)...') : 'Subir Checklist de Recepción (1 o varios PDFs)'}
             </span>
             <span className="text-xs text-slate-500 block mt-0.5 font-normal">
               Selecciona uno o varios archivos para unirlos en un checklist
@@ -765,7 +767,7 @@ export default function HomeView({
                 className="w-full py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
               >
                 <span>➕</span>
-                <span>{isProcessingFile ? 'Leyendo documento...' : 'Agregar otro PDF / Documento a este mismo Checklist'}</span>
+                <span>{isProcessingFile ? (processingProgress || 'Leyendo documento...') : 'Agregar otro PDF / Documento a este mismo Checklist'}</span>
               </button>
             </div>
 
