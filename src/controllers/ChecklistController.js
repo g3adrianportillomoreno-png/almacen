@@ -63,6 +63,29 @@ export class ChecklistController {
   }
 
   /**
+   * Reconcilia una serie faltante con una lectura que había dado error por diferencia de OCR:
+   * - Corrige el número de serie en expected_series al valor real escaneado
+   * - La marca como escaneada / presente
+   * - La elimina de unexpected_logs
+   */
+  static async reconcileSimilarSerial(checklistId, expectedSerial, scannedRealSerial, rawUnexpectedValue, currentBatch) {
+    await InventoryRepository.reconcileSimilarSerial(
+      checklistId,
+      expectedSerial,
+      scannedRealSerial,
+      rawUnexpectedValue
+    );
+
+    const newCompletedCount = (currentBatch?.completed?.length || 0) + 1;
+    if (currentBatch && newCompletedCount >= (currentBatch.expectedSeries?.length || 0)) {
+      await InventoryRepository.markChecklistCompleted(checklistId);
+      return { isFullyCompleted: true };
+    }
+
+    return { isFullyCompleted: false };
+  }
+
+  /**
    * Elimina un checklist completo
    */
   static async removeChecklist(checklistId) {

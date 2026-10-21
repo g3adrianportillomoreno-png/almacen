@@ -212,7 +212,6 @@ function App() {
     const targetBatch = batches.find(b => b.id === targetBatchId) || activeBatch;
     if (!targetBatchId || !targetBatch) return;
 
-    // Asegurar que la fila exista en el mapa del almacén activo para que aparezca dibujada al instante con su rango numérico
     if (assignmentData?.warehouseRow) {
       WarehouseMapController.ensureRowExists(assignmentData.warehouseRow, assignmentData.warehouseName);
       handleLayoutChange();
@@ -285,6 +284,67 @@ function App() {
     );
 
     await ChecklistController.recordUnexpectedScan(targetBatchId, serial);
+  };
+
+  // Reconciliar una serie faltante con una lectura que dio error por diferencia de OCR
+  const handleReconcileSimilar = async (match, specificBatchId = null) => {
+    const targetBatchId = specificBatchId || activeBatchId;
+    const targetBatch = batches.find(b => b.id === targetBatchId) || activeBatch;
+    if (!targetBatchId || !targetBatch || !match) return;
+
+    const oldSerial = String(match.expectedSerial || '').trim().toUpperCase();
+    const realSerial = String(match.scannedSerial || '').trim().toUpperCase();
+    const rawUnexp = String(match.rawUnexpected || realSerial).trim().toUpperCase();
+
+    // Actualización optimista inmediata en pantalla
+    setBatches(prevBatches =>
+      prevBatches.map(batch => {
+        if (batch.id !== targetBatchId) return batch;
+
+        const updatedExpected = (batch.expectedSeries || []).map(item => {
+          if (item.serial === oldSerial) {
+            return {
+              ...item,
+              serial: realSerial,
+              isScanned: true
+            };
+          }
+          return item;
+        });
+
+        const baseCompleted = (batch.completed || []).filter(s => s !== oldSerial);
+        const newCompleted = baseCompleted.includes(realSerial)
+          ? baseCompleted
+          : [...baseCompleted, realSerial];
+
+        const newUnexpected = (batch.unexpectedLogs || []).filter(u => {
+          const val = typeof u === 'string' ? u.trim().toUpperCase() : String(u?.scannedValue || u?.scanned_value || '').trim().toUpperCase();
+          return val !== rawUnexp && val !== realSerial;
+        });
+
+        const isDone = newCompleted.length >= updatedExpected.length;
+
+        return {
+          ...batch,
+          expectedSeries: updatedExpected,
+          completed: newCompleted,
+          unexpectedLogs: newUnexpected,
+          status: isDone ? 'completed' : batch.status
+        };
+      })
+    );
+
+    try {
+      await ChecklistController.reconcileSimilarSerial(
+        targetBatchId,
+        oldSerial,
+        realSerial,
+        rawUnexp,
+        targetBatch
+      );
+    } catch (err) {
+      console.error('Error al reconciliar coincidencia:', err);
+    }
   };
 
   // Eliminar checklist
@@ -411,6 +471,7 @@ function App() {
         }}
         onCompleteTrailer={handleCompleteTrailer}
         onLogUnexpected={handleLogUnexpected}
+        onReconcileSimilar={handleReconcileSimilar}
         onAssignmentSaved={() => {
           fetchBatches(true);
           handleLayoutChange();
@@ -503,6 +564,7 @@ function App() {
                 batchDetails={activeBatch}
                 onCompleteTrailer={handleCompleteTrailer}
                 onLogUnexpected={handleLogUnexpected}
+                onReconcileSimilar={handleReconcileSimilar}
                 onFinishSession={handleFinishSession}
                 onForceFinish={handleForceFinishBatch}
                 availableRows={availableRows}

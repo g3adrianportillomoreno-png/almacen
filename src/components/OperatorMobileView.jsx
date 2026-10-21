@@ -1,9 +1,10 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import CameraScanner from './CameraScanner.jsx';
+import SerialSimilarityModal from './SerialSimilarityModal.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
-import { findSerialMatch } from '../utils/serialMatcher.js';
+import { findSerialMatch, findSimilarSerialMatches } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 import OfflineSyncBanner from './OfflineSyncBanner.jsx';
@@ -15,6 +16,7 @@ export default function OperatorMobileView({
   onRefreshData,
   onCompleteTrailer,
   onLogUnexpected,
+  onReconcileSimilar,
   onAssignmentSaved,
   onRequestAdminView,
   availableWarehouses = ['Almacén 1', 'Almacén 2'],
@@ -44,6 +46,7 @@ export default function OperatorMobileView({
   const [searchTableQuery, setSearchTableQuery] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [notFoundSerial, setNotFoundSerial] = useState('');
+  const [showSimilarityModal, setShowSimilarityModal] = useState(false);
 
   // Filtros de estado y documento para el checklist móvil
   const [checklistStatusFilter, setChecklistStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
@@ -70,6 +73,17 @@ export default function OperatorMobileView({
   const activeChecklist = useMemo(() => {
     return receptionBatches.find(b => String(b.id) === String(activeChecklistId));
   }, [receptionBatches, activeChecklistId]);
+
+  const activeChecklistMissing = useMemo(() => {
+    if (!activeChecklist?.expectedSeries) return [];
+    const comp = new Set(activeChecklist.completed || []);
+    return activeChecklist.expectedSeries.filter(item => !comp.has(item.serial));
+  }, [activeChecklist?.expectedSeries, activeChecklist?.completed]);
+
+  const activeChecklistSimilarMatches = useMemo(() => {
+    if (!activeChecklist) return [];
+    return findSimilarSerialMatches(activeChecklistMissing, activeChecklist.unexpectedLogs || []);
+  }, [activeChecklist, activeChecklistMissing]);
 
   // Documentos en el checklist activo del operador móvil
   const checklistDistinctDocs = useMemo(() => {
@@ -830,6 +844,22 @@ export default function OperatorMobileView({
                   </button>
                 </div>
 
+                {/* Botón de Coincidencias en Móvil */}
+                {activeChecklistMissing.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSimilarityModal(true)}
+                    className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-black py-2.5 px-3.5 rounded-2xl text-xs transition shadow-sm flex items-center justify-center gap-2 active:scale-98"
+                  >
+                    <span>🔍 Buscar Coincidencias (Faltantes vs Errores)</span>
+                    {activeChecklistSimilarMatches.length > 0 && (
+                      <span className="bg-slate-950 text-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full">
+                        {activeChecklistSimilarMatches.length}
+                      </span>
+                    )}
+                  </button>
+                )}
+
                 {/* Filtro por Documentos si hay más de 1 documento */}
                 {checklistDistinctDocs.length > 1 && (
                   <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-700/60">
@@ -947,6 +977,31 @@ export default function OperatorMobileView({
         )}
 
       </div>
+
+      {/* MODAL DE COINCIDENCIAS EN MÓVIL */}
+      {activeChecklist && (
+        <SerialSimilarityModal
+          isOpen={showSimilarityModal}
+          onClose={() => setShowSimilarityModal(false)}
+          batchDetails={activeChecklist}
+          onAcceptMatch={async (match) => {
+            if (onReconcileSimilar) {
+              soundEffects.playScanSuccess();
+              await onReconcileSimilar(match, activeChecklist.id);
+              setSuccessMessage(`✓ Serie corregida y verificada: ${match.scannedSerial}`);
+            }
+          }}
+          onAcceptAll={async (matchesList) => {
+            if (onReconcileSimilar && matchesList?.length) {
+              soundEffects.playScanSuccess();
+              for (const m of matchesList) {
+                await onReconcileSimilar(m, activeChecklist.id);
+              }
+              setSuccessMessage(`✓ ${matchesList.length} coincidencias corregidas y verificadas.`);
+            }
+          }}
+        />
+      )}
 
       {/* VENTANA MODAL MÓVIL: ¿DÓNDE LA QUIERES COLOCAR? */}
       {activePrinter && (

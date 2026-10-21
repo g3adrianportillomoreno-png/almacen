@@ -354,7 +354,6 @@ export class InventoryRepository {
           .eq('serial_number', serial);
 
         if (fbErr) {
-          // Si falló por red o error de servidor, encolar para sincronización garantizada
           OfflineSyncService.addToQueue('REGISTER_SCAN', {
             checklistId,
             serialNumber: serial,
@@ -595,6 +594,51 @@ export class InventoryRepository {
       if (error) throw error;
     } catch (e) {
       OfflineSyncService.addToQueue('LOG_UNEXPECTED', { checklistId, serialNumber: val });
+    }
+  }
+
+  /**
+   * Reconcilia una serie faltante con una lectura de error por diferencia de OCR:
+   * actualiza serial_number al valor real escaneado, lo marca is_scanned = true y limpia unexpected_logs.
+   */
+  static async reconcileSimilarSerial(checklistId, expectedSerial, scannedRealSerial, rawUnexpectedValue) {
+    const oldSerial = String(expectedSerial || '').trim().toUpperCase();
+    const realSerial = String(scannedRealSerial || '').trim().toUpperCase();
+    const rawUnexp = String(rawUnexpectedValue || realSerial).trim().toUpperCase();
+    const nowIso = new Date().toISOString();
+
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    const existing = cache.serials[oldSerial] || cache.serials[realSerial] || {};
+    cache.serials[realSerial] = {
+      ...existing,
+      isScanned: true,
+      warehouseRow: existing.warehouseRow || 'Sin Asignar',
+      status: existing.status || 'DISPONIBLE'
+    };
+    if (oldSerial !== realSerial) {
+      delete cache.serials[oldSerial];
+    }
+    this.saveMetadataCache(cache);
+
+    try {
+      await supabase
+        .from('expected_series')
+        .update({
+          serial_number: realSerial,
+          is_scanned: true,
+          scanned_at: nowIso
+        })
+        .eq('checklist_id', checklistId)
+        .eq('serial_number', oldSerial);
+
+      await supabase
+        .from('unexpected_logs')
+        .delete()
+        .eq('checklist_id', checklistId)
+        .in('scanned_value', [rawUnexp, realSerial]);
+    } catch (e) {
+      console.warn('Error al reconciliar serie similar en Supabase:', e);
     }
   }
 
@@ -928,17 +972,12 @@ export class InventoryRepository {
   }
 
   /**
-   * Actualiza el Inventario Maestro con purga de bajas por diferencia:
-   * 1. Registra las impresoras eliminadas en el historial de bajas (inventory_departures).
-   * 2. Las elimina de la base de datos activa (expected_series).
-   * 3. Actualiza o inserta las impresoras leídas del archivo.
+   * Actualiza el Inventario Maestro con purga de bajas por diferencia
    */
   static async updateMasterWithPurge(items = [], removedPrinters = []) {
-    // 1. Registrar en historial de bajas
     if (removedPrinters && removedPrinters.length > 0) {
       await this.logDepartures(removedPrinters, 'Baja por actualización de archivo maestro');
 
-      // 2. Eliminar de Supabase en chunks
       const removedSerials = removedPrinters.map(p => (p.serial || p).trim().toUpperCase());
       const cache = this.getMetadataCache();
       cache.serials = cache.serials || {};
@@ -959,7 +998,6 @@ export class InventoryRepository {
       }
     }
 
-    // 3. Reconciliar las impresoras del nuevo archivo
     const reconcileRes = await this.reconcileBatchPrinters(items);
 
     return {
@@ -989,7 +1027,6 @@ export class InventoryRepository {
       departure_date: nowIso
     }));
 
-    // Respaldo en localStorage
     try {
       const rawCache = localStorage.getItem('cdm_inventory_departures_v1');
       const currentList = rawCache ? JSON.parse(rawCache) : [];
@@ -999,7 +1036,6 @@ export class InventoryRepository {
       console.warn('Error guardando bajas en local storage:', e);
     }
 
-    // Guardar en Supabase en chunks
     const CHUNK = 80;
     for (let i = 0; i < rowsToInsert.length; i += CHUNK) {
       const chunk = rowsToInsert.slice(i, i + CHUNK);
@@ -1017,14 +1053,12 @@ export class InventoryRepository {
   static async fetchDeparturesHistory() {
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-    // 1. Purgar registros mayores a 30 días en Supabase
     try {
       await supabase.from('inventory_departures').delete().lt('departure_date', thirtyDaysAgo);
     } catch (e) {
       // Ignorar si la tabla aún no existe en Supabase
     }
 
-    // 2. Consultar historial de bajas de los últimos 30 días en Supabase
     try {
       const { data, error } = await supabase
         .from('inventory_departures')
@@ -1041,7 +1075,6 @@ export class InventoryRepository {
       console.warn('Consultando bajas desde respaldo local:', e.message);
     }
 
-    // 3. Respaldo en localStorage filtrando los últimos 30 días
     try {
       const rawCache = localStorage.getItem('cdm_inventory_departures_v1');
       if (rawCache) {

@@ -2,14 +2,16 @@ import { useState, useEffect, useMemo } from 'react';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 import OfflineSyncBanner from './OfflineSyncBanner';
+import SerialSimilarityModal from './SerialSimilarityModal';
 import { InventoryController } from '../controllers/InventoryController';
-import { findSerialMatch } from '../utils/serialMatcher';
+import { findSerialMatch, findSimilarSerialMatches } from '../utils/serialMatcher';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects';
 
 export default function ScanSessionView({ 
   batchDetails, 
   onCompleteTrailer, 
   onLogUnexpected, 
+  onReconcileSimilar,
   onFinishSession, 
   onForceFinish
 }) {
@@ -24,6 +26,7 @@ export default function ScanSessionView({
   const [lastScannedMaterial, setLastScannedMaterial] = useState('');
   const [useCamera, setUseCamera] = useState(false);
   const [manualInput, setManualInput] = useState('');
+  const [showSimilarityModal, setShowSimilarityModal] = useState(false);
 
   // Filtros de visualización
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
@@ -101,11 +104,34 @@ export default function ScanSessionView({
     return groups;
   }, [filteredSeries, distinctDocs, selectedDocFilter]);
 
-  // Totales
+  // Totales y coincidencias detectadas
   const total = batchDetails.expectedSeries.length;
   const escaneados = batchDetails.completed.length;
   const faltantes = total - escaneados;
-  const isFinished = batchDetails.status === 'completed' || (total > 0 && escaneados >= total);
+  const isFinished = batchDetails.status === 'completed' || batchDetails.status === 'closed' || (total > 0 && escaneados >= total);
+
+  const faltantesList = useMemo(() => {
+    return (batchDetails.expectedSeries || []).filter(item => !batchDetails.completed.includes(item.serial));
+  }, [batchDetails.expectedSeries, batchDetails.completed]);
+
+  const similarMatches = useMemo(() => {
+    return findSimilarSerialMatches(faltantesList, batchDetails.unexpectedLogs || []);
+  }, [faltantesList, batchDetails.unexpectedLogs]);
+
+  const handleAcceptMatch = async (match) => {
+    if (onReconcileSimilar) {
+      soundEffects.playScanSuccess();
+      await onReconcileSimilar(match, batchDetails.id);
+    }
+  };
+
+  const handleAcceptAllMatches = async (matchesList) => {
+    if (!onReconcileSimilar || !matchesList?.length) return;
+    soundEffects.playScanSuccess();
+    for (const m of matchesList) {
+      await onReconcileSimilar(m, batchDetails.id);
+    }
+  };
 
   // Proceso inmediato al escanear con pistola lectora, cámara o teclado:
   // Solo verifica si está en la lista o no, sin pedir ubicación física.
@@ -190,8 +216,6 @@ export default function ScanSessionView({
 
   // VISTA AL COMPLETAR EL CHECKLIST
   if (isFinished) {
-    const faltantesList = batchDetails.expectedSeries.filter(item => !batchDetails.completed.includes(item.serial));
-    
     return (
       <div className="flex flex-col gap-6 w-full animate-fade-in max-w-4xl mx-auto pb-12">
         <section className="bg-emerald-50/70 border border-emerald-200 p-8 rounded-2xl shadow-xs text-center flex flex-col items-center gap-4">
@@ -208,7 +232,23 @@ export default function ScanSessionView({
         </section>
 
         <div className="bg-white p-6 md:p-8 rounded-2xl shadow-xs border border-slate-200">
-          <h3 className="text-base font-bold text-slate-800 mb-5 border-b border-slate-100 pb-3">Resumen de Verificación de Equipos</h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 border-b border-slate-100 pb-3">
+            <h3 className="text-base font-bold text-slate-800">Resumen de Verificación de Equipos</h3>
+            {faltantesList.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowSimilarityModal(true)}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-4 py-2 rounded-xl text-xs transition shadow-xs flex items-center gap-2 cursor-pointer"
+              >
+                <span>🔍 Buscar Coincidencias (Faltantes vs Errores)</span>
+                {similarMatches.length > 0 && (
+                  <span className="bg-slate-900 text-amber-300 text-[10px] font-black px-2 py-0.5 rounded-full">
+                    {similarMatches.length} detectadas
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
           
           <div className="space-y-6">
             <div>
@@ -305,6 +345,14 @@ export default function ScanSessionView({
             </button>
           </div>
         </div>
+
+        <SerialSimilarityModal
+          isOpen={showSimilarityModal}
+          onClose={() => setShowSimilarityModal(false)}
+          batchDetails={batchDetails}
+          onAcceptMatch={handleAcceptMatch}
+          onAcceptAll={handleAcceptAllMatches}
+        />
       </div>
     );
   }
@@ -489,54 +537,72 @@ export default function ScanSessionView({
           </div>
         </div>
 
-        {/* Botones de Filtro de Estado: Todas / Faltan por Leer / Ya Leídas */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Filtrar:</span>
-          
-          <button
-            type="button"
-            onClick={() => setStatusFilter('ALL')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              statusFilter === 'ALL'
-                ? 'bg-slate-800 text-white shadow-xs'
-                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
-            }`}
-          >
-            <span>Todas</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'ALL' ? 'bg-slate-700 text-white' : 'bg-slate-200 text-slate-700'}`}>
-              {total}
-            </span>
-          </button>
+        {/* Botones de Filtro de Estado: Todas / Faltan por Leer / Ya Leídas + Botón de Coincidencias */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Filtrar:</span>
+            
+            <button
+              type="button"
+              onClick={() => setStatusFilter('ALL')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                statusFilter === 'ALL'
+                  ? 'bg-slate-800 text-white shadow-xs'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+              }`}
+            >
+              <span>Todas</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'ALL' ? 'bg-slate-700 text-white' : 'bg-slate-200 text-slate-700'}`}>
+                {total}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter('PENDING')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              statusFilter === 'PENDING'
-                ? 'bg-amber-600 text-white shadow-xs'
-                : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
-            }`}
-          >
-            <span>⏳ Faltan por Leer</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'PENDING' ? 'bg-amber-700 text-white' : 'bg-amber-200 text-amber-900'}`}>
-              {faltantes}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('PENDING')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                statusFilter === 'PENDING'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
+              }`}
+            >
+              <span>⏳ Faltan por Leer</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'PENDING' ? 'bg-amber-700 text-white' : 'bg-amber-200 text-amber-900'}`}>
+                {faltantes}
+              </span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setStatusFilter('SCANNED')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
-              statusFilter === 'SCANNED'
-                ? 'bg-emerald-600 text-white shadow-xs'
-                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
-            }`}
-          >
-            <span>✓ Ya Leídas</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'SCANNED' ? 'bg-emerald-700 text-white' : 'bg-emerald-200 text-emerald-900'}`}>
-              {escaneados}
-            </span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setStatusFilter('SCANNED')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                statusFilter === 'SCANNED'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+              }`}
+            >
+              <span>✓ Ya Leídas</span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'SCANNED' ? 'bg-emerald-700 text-white' : 'bg-emerald-200 text-emerald-900'}`}>
+                {escaneados}
+              </span>
+            </button>
+          </div>
+
+          {faltantes > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowSimilarityModal(true)}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-3.5 py-1.5 rounded-xl text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+              title="Comparar las series faltantes con las que dieron error de lectura"
+            >
+              <span>🔍 Coincidencias</span>
+              {similarMatches.length > 0 && (
+                <span className="bg-slate-900 text-amber-300 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                  {similarMatches.length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Separación y Filtros por Documento (si hay más de 1 documento en este checklist) */}
@@ -667,12 +733,26 @@ export default function ScanSessionView({
 
       </div>
 
-      {/* ACCIONES INFERIORES */}
+      {/* ACCIONES INFERIORES AL FINAL DEL CHECKLIST */}
       <div className="flex flex-wrap justify-between items-center gap-2 px-1">
         <button onClick={onFinishSession} className="text-slate-600 hover:text-slate-900 font-medium transition-colors text-xs flex items-center gap-1">
           &larr; Volver al Menú
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {faltantes > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowSimilarityModal(true)}
+              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black transition-colors text-xs px-3.5 py-1.5 rounded-lg shadow-2xs flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>🔍 Buscar Coincidencias (Faltantes vs Errores)</span>
+              {similarMatches.length > 0 && (
+                <span className="bg-slate-900 text-amber-300 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                  {similarMatches.length}
+                </span>
+              )}
+            </button>
+          )}
           <button 
             type="button"
             onClick={() => InventoryController.exportChecklistReportToExcel(batchDetails)}
@@ -691,6 +771,14 @@ export default function ScanSessionView({
           )}
         </div>
       </div>
+
+      <SerialSimilarityModal
+        isOpen={showSimilarityModal}
+        onClose={() => setShowSimilarityModal(false)}
+        batchDetails={batchDetails}
+        onAcceptMatch={handleAcceptMatch}
+        onAcceptAll={handleAcceptAllMatches}
+      />
     </div>
   );
 }
