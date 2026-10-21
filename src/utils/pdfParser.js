@@ -212,6 +212,10 @@ function parseSeriesFromText(rawText) {
       for (let t = 0; t < tokens.length; t++) {
         const cleanTok = tokens[t].replace(/[^A-Z0-9]/gi, '').toUpperCase();
         if (!cleanTok) continue;
+        // Ignorar palabras de encabezado o modelos que aparezcan antes de una fecha/pedimento
+        if (/^(MFC|HL|DCP|MXF|BMX|PAGINA|ANEXO|CLIENTE|FACTURA|EMBARQUE|FECHA|TOTAL|COLOR|LASER|INKJET)/i.test(cleanTok)) {
+          continue;
+        }
 
         if (cleanTok.length >= 13 && cleanTok.length <= 17) {
           if (temp) {
@@ -221,9 +225,12 @@ function parseSeriesFromText(rawText) {
             temp = '';
           }
           rawEntries.push({ rawSerial: cleanTok, pedimento: pedMatch ? pedMatch[1] : null });
-        } else if (cleanTok.length >= 5 && cleanTok.length <= 12) {
+        } else if (cleanTok.length >= 4 && cleanTok.length <= 12) {
           if (!temp) {
-            temp = cleanTok;
+            // El primer fragmento de una serie partida debe empezar con U (o caracter confundible por OCR con U seguido de dígitos)
+            if (/^[U0OVJ]\d{2,}/i.test(cleanTok)) {
+              temp = cleanTok;
+            }
           } else {
             const combined = temp + cleanTok;
             if (combined.length >= 13 && combined.length <= 17) {
@@ -233,7 +240,7 @@ function parseSeriesFromText(rawText) {
               if (temp.length >= 13 && temp.length <= 17) {
                 rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
               }
-              temp = cleanTok;
+              temp = /^[U0OVJ]\d{2,}/i.test(cleanTok) ? cleanTok : '';
             }
           }
         }
@@ -245,14 +252,13 @@ function parseSeriesFromText(rawText) {
     }
   }
 
-  // 2. Escáner global continuo (NO excluyente): Captura series Brother en páginas o renglones sin columna de pedimento
-  const brotherRegex = /\b([U0OVJE][A-Z0-9]{12,16})\b/gi;
-  let bMatch;
-  while ((bMatch = brotherRegex.exec(rawText)) !== null) {
-    const cand = bMatch[1].trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (cand.length >= 13 && cand.length <= 17 && /\d{4,}/.test(cand)) {
-      const alreadyIncluded = rawEntries.some(e => e.rawSerial === cand || e.rawSerial.includes(cand));
-      if (!alreadyIncluded) {
+  // 2. Solo si el documento NO tenía columnas de pedimento/fecha, buscar series que empiecen con U en el texto general
+  if (rawEntries.length === 0) {
+    const brotherRegex = /\b(U\d{4,5}[A-Z0-9]{8,10})\b/gi;
+    let bMatch;
+    while ((bMatch = brotherRegex.exec(rawText)) !== null) {
+      const cand = bMatch[1].trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (cand.length >= 13 && cand.length <= 16) {
         rawEntries.push({ rawSerial: cand, pedimento: null });
       }
     }
@@ -301,8 +307,8 @@ function parseSeriesFromText(rawText) {
   const normalizeBrotherSerial = (rawCandidate) => {
     let clean = rawCandidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
 
-    // Reparar 'U' inicial leída erróneamente por OCR
-    if (/^[0OVJEL]/.test(clean) && clean.length >= 14) {
+    // Reparar 'U' inicial solo cuando el OCR leyó '0', 'O', 'V' o 'J' seguido de los 4-5 dígitos del código de modelo Brother
+    if (/^[0OVJ]\d{4,5}/.test(clean) && clean.length >= 14) {
       clean = 'U' + clean.slice(1);
     }
 
@@ -396,37 +402,17 @@ function parseSeriesFromText(rawText) {
       }
     }
 
-    if (clean.startsWith('U') && clean.length >= 13 && clean.length <= 16) {
+    // Solo aceptar números de serie que empiecen estrictamente con 'U' y tengan estructura válida de serie (excluyendo modelos como MFCT4500DW, MFCL8970CDW o facturas MXF...)
+    if (
+      clean.startsWith('U') &&
+      clean.length >= 13 &&
+      clean.length <= 16 &&
+      /^U\d{4,5}[A-Z0-9]+$/.test(clean)
+    ) {
       if (!seenSerials.has(clean)) {
         seenSerials.add(clean);
         items.push({ serial: clean, material: materialRaw });
       }
-    }
-  }
-
-  // 6. Extracción para otras marcas (Sharp, HP, Ricoh, Canon, Lexmark):
-  // Formato Sharp: "Serial #..." o "Serial..." seguido del número
-  const sharpRegex = /(?:Serial\s*#?|S\/N\s*[:#]?|SERIE\s*[:#]?)\s*([A-Z0-9-]{6,16})/gi;
-  let sMatch;
-  while ((sMatch = sharpRegex.exec(rawText)) !== null) {
-    const serialString = sMatch[1].trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
-    if (serialString.length >= 6 && !seenSerials.has(serialString)) {
-      // Evitar confundir con números de pedimento o facturas
-      if (!/^\d{4}-\d{6,8}$/.test(serialString) && !/^MXF\d+$/.test(serialString)) {
-        seenSerials.add(serialString);
-        items.push({ serial: serialString, material: materialRaw });
-      }
-    }
-  }
-
-  // Formato HP estándar (10 caracteres: 3 letras de país + 7 alfanuméricos, ej. VNC3K04921, CNB8G12345)
-  const hpSerialRegex = /\b([A-Z]{3}[A-Z0-9]{7})\b/g;
-  let hpMatch;
-  while ((hpMatch = hpSerialRegex.exec(rawText)) !== null) {
-    const cand = hpMatch[1].toUpperCase();
-    if (!seenSerials.has(cand) && /[A-Z]/.test(cand.slice(0, 3)) && /\d/.test(cand.slice(3))) {
-      seenSerials.add(cand);
-      items.push({ serial: cand, material: materialRaw.startsWith('HP') ? materialRaw : 'HP ' + materialRaw });
     }
   }
 

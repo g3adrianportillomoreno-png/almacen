@@ -6,6 +6,8 @@ import { WarehouseMapController } from '../controllers/WarehouseMapController.js
 import { findSerialMatch } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
+import OfflineSyncBanner from './OfflineSyncBanner.jsx';
+import useOfflineSync from '../hooks/useOfflineSync.js';
 
 export default function OperatorMobileView({
   batches = [],
