@@ -335,6 +335,24 @@ export class InventoryController {
       ? 'COMPLETADO (100% Recibido)' 
       : (isClosedWithPending ? `CERRADO CON FALTANTES (${faltantes.length} faltantes)` : 'EN PROCESO / PENDIENTE');
 
+    // Desglose por Documento de Origen
+    const docMap = new Map();
+    for (const p of expected) {
+      const doc = p.documentName || batch.cleanName || batch.name || 'Documento Principal';
+      if (!docMap.has(doc)) {
+        docMap.set(doc, { total: 0, presentes: 0, faltantes: 0, items: [] });
+      }
+      const entry = docMap.get(doc);
+      entry.total++;
+      entry.items.push(p);
+      if (completedSet.has(String(p.serial).trim().toUpperCase())) {
+        entry.presentes++;
+      } else {
+        entry.faltantes++;
+      }
+    }
+    const hasMultipleDocs = docMap.size > 1;
+
     const wb = XLSX.utils.book_new();
 
     // 1. Hoja RESUMEN
@@ -348,21 +366,56 @@ export class InventoryController {
       { 'CONCEPTO': 'FALTANTES', 'DETALLE': faltantes.length },
       { 'CONCEPTO': 'ERRORES / FUERA DE LISTA', 'DETALLE': inesperadas.length }
     ];
+
+    if (hasMultipleDocs) {
+      resumenData.push({ 'CONCEPTO': '--- DESGLOSE POR DOCUMENTOS ---', 'DETALLE': `${docMap.size} documentos combinados en este checklist` });
+      let docNum = 1;
+      for (const [docName, stats] of docMap.entries()) {
+        resumenData.push({
+          'CONCEPTO': `DOC #${docNum}: ${docName}`,
+          'DETALLE': `${stats.presentes} de ${stats.total} leídas (${stats.faltantes} faltantes)`
+        });
+        docNum++;
+      }
+    }
+
     const wsResumen = XLSX.utils.json_to_sheet(resumenData);
-    wsResumen['!cols'] = [{ wch: 28 }, { wch: 45 }];
+    wsResumen['!cols'] = [{ wch: 32 }, { wch: 48 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
+    // Ordenar presentes y faltantes por documento para mantener separaciones claras
+    const sortedPresentes = [...presentes].sort((a, b) => {
+      const docA = a.documentName || '';
+      const docB = b.documentName || '';
+      if (docA !== docB) return docA.localeCompare(docB);
+      return a.serial.localeCompare(b.serial);
+    });
+
+    const sortedFaltantes = [...faltantes].sort((a, b) => {
+      const docA = a.documentName || '';
+      const docB = b.documentName || '';
+      if (docA !== docB) return docA.localeCompare(docB);
+      return a.serial.localeCompare(b.serial);
+    });
+
     // 2. Hoja PRESENTES (Equipos escaneados correctamente)
-    const dataPresentes = presentes.map((p, idx) => ({
-      'NO.': idx + 1,
-      'CLAVE': p.material || '',
-      'NUMERO DE SERIE': p.serial || '',
-      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-      'ALMACEN': p.warehouseName || 'Almacén 1',
-      'FILA': p.warehouseRow || '',
-      'ESPACIO': p.warehouseSpace || '',
-      'ESTADO': p.status || 'DISPONIBLE'
-    }));
+    const dataPresentes = sortedPresentes.map((p, idx) => {
+      const row = {
+        'NO.': idx + 1,
+        'CLAVE': p.material || '',
+        'NUMERO DE SERIE': p.serial || '',
+        'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+        'ALMACEN': p.warehouseName || 'Almacén 1',
+        'FILA': p.warehouseRow || '',
+        'ESPACIO': p.warehouseSpace || '',
+        'ESTADO': p.status || 'DISPONIBLE'
+      };
+      if (hasMultipleDocs) {
+        row['DOCUMENTO DE ORIGEN'] = p.documentName || 'Documento Principal';
+      }
+      return row;
+    });
+
     const wsPresentes = XLSX.utils.json_to_sheet(
       dataPresentes.length > 0 ? dataPresentes : [{
         'NO.': '',
@@ -372,7 +425,8 @@ export class InventoryController {
         'ALMACEN': '',
         'FILA': '',
         'ESPACIO': '',
-        'ESTADO': ''
+        'ESTADO': '',
+        ...(hasMultipleDocs ? { 'DOCUMENTO DE ORIGEN': '' } : {})
       }]
     );
     wsPresentes['!cols'] = [
@@ -383,25 +437,34 @@ export class InventoryController {
       { wch: 16 },
       { wch: 16 },
       { wch: 16 },
-      { wch: 16 }
+      { wch: 16 },
+      ...(hasMultipleDocs ? [{ wch: 32 }] : [])
     ];
     XLSX.utils.book_append_sheet(wb, wsPresentes, "PRESENTES");
 
     // 3. Hoja FALTANTES (Equipos no encontrados físicamente)
-    const dataFaltantes = faltantes.map((p, idx) => ({
-      'NO.': idx + 1,
-      'CLAVE': p.material || '',
-      'NUMERO DE SERIE': p.serial || '',
-      'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-      'ESTADO': 'FALTANTE / NO ESCANEADA'
-    }));
+    const dataFaltantes = sortedFaltantes.map((p, idx) => {
+      const row = {
+        'NO.': idx + 1,
+        'CLAVE': p.material || '',
+        'NUMERO DE SERIE': p.serial || '',
+        'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+        'ESTADO': 'FALTANTE / NO ESCANEADA'
+      };
+      if (hasMultipleDocs) {
+        row['DOCUMENTO DE ORIGEN'] = p.documentName || 'Documento Principal';
+      }
+      return row;
+    });
+
     const wsFaltantes = XLSX.utils.json_to_sheet(
       dataFaltantes.length > 0 ? dataFaltantes : [{
         'NO.': '',
         'CLAVE': '',
         'NUMERO DE SERIE': 'NINGUNA FALTANTE (COMPLETADO AL 100%)',
         'NUMERO DE EQUIPO': '',
-        'ESTADO': 'COMPLETO'
+        'ESTADO': 'COMPLETO',
+        ...(hasMultipleDocs ? { 'DOCUMENTO DE ORIGEN': '' } : {})
       }]
     );
     wsFaltantes['!cols'] = [
@@ -409,9 +472,34 @@ export class InventoryController {
       { wch: 25 },
       { wch: 22 },
       { wch: 20 },
-      { wch: 30 }
+      { wch: 30 },
+      ...(hasMultipleDocs ? [{ wch: 32 }] : [])
     ];
     XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES");
+
+    // Si hay más de un documento, generar pestañas separadas por cada documento
+    if (hasMultipleDocs) {
+      let docIndex = 1;
+      for (const [docName, stats] of docMap.entries()) {
+        const cleanDocTitle = docName.replace(/\.[^/.]+$/, '').replace(/[:*?/\\\[\]]/g, '_').slice(0, 18);
+        const sheetName = `DOC ${docIndex} - ${cleanDocTitle}`;
+        const docRows = stats.items.map((item, i) => {
+          const isDone = completedSet.has(String(item.serial).trim().toUpperCase());
+          return {
+            'NO.': i + 1,
+            'CLAVE': item.material || '',
+            'NUMERO DE SERIE': item.serial || '',
+            'ESTADO': isDone ? '✓ SÍ ESTÁ' : 'PENDIENTE / FALTANTE',
+            'UBICACION': isDone && item.warehouseRow ? `${item.warehouseName || 'Almacén 1'} → ${item.warehouseRow} [${item.warehouseSpace || 'Gral'}]` : 'Sin Ubicación'
+          };
+        });
+
+        const wsDoc = XLSX.utils.json_to_sheet(docRows);
+        wsDoc['!cols'] = [{ wch: 6 }, { wch: 25 }, { wch: 22 }, { wch: 24 }, { wch: 30 }];
+        XLSX.utils.book_append_sheet(wb, wsDoc, sheetName);
+        docIndex++;
+      }
+    }
 
     // 4. Hoja ERRORES E INCIDENCIAS (Lecturas fuera de lista o no esperadas)
     const dataErrores = inesperadas.map((serial, idx) => ({
@@ -440,4 +528,3 @@ export class InventoryController {
     XLSX.writeFile(wb, fileName);
   }
 }
-

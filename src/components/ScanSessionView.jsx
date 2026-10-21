@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 import { InventoryController } from '../controllers/InventoryController';
@@ -23,6 +23,82 @@ export default function ScanSessionView({
   const [lastScannedMaterial, setLastScannedMaterial] = useState('');
   const [useCamera, setUseCamera] = useState(false);
   const [manualInput, setManualInput] = useState('');
+
+  // Filtros de visualización
+  const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
+  const [selectedDocFilter, setSelectedDocFilter] = useState('ALL'); // 'ALL' | docName
+  const [searchFilter, setSearchFilter] = useState('');
+
+  // Documentos distintos presentes en este checklist
+  const distinctDocs = useMemo(() => {
+    const docs = [];
+    (batchDetails.expectedSeries || []).forEach(item => {
+      const doc = item.documentName ? item.documentName.trim() : '';
+      if (doc && !docs.includes(doc)) {
+        docs.push(doc);
+      }
+    });
+    return docs;
+  }, [batchDetails.expectedSeries]);
+
+  // Estadísticas globales y por documento
+  const docStats = useMemo(() => {
+    const stats = {};
+    (batchDetails.expectedSeries || []).forEach(item => {
+      const docKey = item.documentName?.trim() || 'General';
+      if (!stats[docKey]) {
+        stats[docKey] = { total: 0, scanned: 0, pending: 0 };
+      }
+      stats[docKey].total++;
+      const isPresent = batchDetails.completed.includes(item.serial);
+      if (isPresent) {
+        stats[docKey].scanned++;
+      } else {
+        stats[docKey].pending++;
+      }
+    });
+    return stats;
+  }, [batchDetails.expectedSeries, batchDetails.completed]);
+
+  // Series filtradas por estado, documento y búsqueda
+  const filteredSeries = useMemo(() => {
+    return (batchDetails.expectedSeries || []).filter(item => {
+      const isPresent = batchDetails.completed.includes(item.serial);
+
+      if (statusFilter === 'PENDING' && isPresent) return false;
+      if (statusFilter === 'SCANNED' && !isPresent) return false;
+
+      if (selectedDocFilter !== 'ALL') {
+        const itemDoc = item.documentName?.trim() || 'General';
+        if (itemDoc !== selectedDocFilter) return false;
+      }
+
+      if (searchFilter.trim()) {
+        const q = searchFilter.trim().toLowerCase();
+        const sMatch = (item.serial || '').toLowerCase().includes(q);
+        const mMatch = (item.material || '').toLowerCase().includes(q);
+        const dMatch = (item.documentName || '').toLowerCase().includes(q);
+        if (!sMatch && !mMatch && !dMatch) return false;
+      }
+
+      return true;
+    });
+  }, [batchDetails.expectedSeries, batchDetails.completed, statusFilter, selectedDocFilter, searchFilter]);
+
+  // Agrupación por documento para la vista en secciones
+  const groupedSeriesByDoc = useMemo(() => {
+    if (distinctDocs.length <= 1 || selectedDocFilter !== 'ALL') {
+      const key = selectedDocFilter === 'ALL' ? (distinctDocs[0] || 'General') : selectedDocFilter;
+      return { [key]: filteredSeries };
+    }
+    const groups = {};
+    filteredSeries.forEach(item => {
+      const docKey = item.documentName?.trim() || 'General';
+      if (!groups[docKey]) groups[docKey] = [];
+      groups[docKey].push(item);
+    });
+    return groups;
+  }, [filteredSeries, distinctDocs, selectedDocFilter]);
 
   // Totales
   const total = batchDetails.expectedSeries.length;
@@ -145,6 +221,11 @@ export default function ScanSessionView({
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-mono font-bold text-slate-800">{item.serial}</span>
+                        {item.documentName && distinctDocs.length > 1 && (
+                          <span className="text-[10px] bg-slate-200 text-slate-700 px-1.5 py-0.5 rounded font-medium truncate max-w-[140px]">
+                            📄 {item.documentName}
+                          </span>
+                        )}
                       </div>
                       <span className="text-slate-500 text-[11px] block mt-0.5">{item.material}</span>
                     </div>
@@ -166,8 +247,15 @@ export default function ScanSessionView({
                   {faltantesList.map((item, idx) => (
                     <div key={idx} className="bg-amber-50/60 p-2.5 rounded-lg border border-amber-200 flex justify-between items-center">
                       <div>
-                        <span className="font-mono font-semibold text-slate-800 block">{item.serial}</span>
-                        <span className="text-slate-500 text-[11px]">{item.material}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-semibold text-slate-800">{item.serial}</span>
+                          {item.documentName && distinctDocs.length > 1 && (
+                            <span className="text-[10px] bg-amber-200/80 text-amber-900 px-1.5 py-0.5 rounded font-medium truncate max-w-[140px]">
+                              📄 {item.documentName}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-slate-500 text-[11px] block mt-0.5">{item.material}</span>
                       </div>
                       <span className="bg-amber-100 text-amber-800 font-bold text-[10px] px-2 py-0.5 rounded border border-amber-300">
                         FALTA
@@ -361,42 +449,219 @@ export default function ScanSessionView({
         )}
       </section>
 
-      {/* LISTA EN TIEMPO REAL DE SERIES DEL CHECKLIST (SÍ ESTÁ / PENDIENTE) */}
-      <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200">
-        <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
-          <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
-            Estado de Series en este Checklist ({escaneados} de {total} verificadas)
-          </h3>
+      {/* LISTA EN TIEMPO REAL DE SERIES DEL CHECKLIST CON FILTROS Y SEPARACIÓN POR DOCUMENTO */}
+      <div className="bg-white p-5 rounded-2xl shadow-xs border border-slate-200 flex flex-col gap-4">
+        
+        {/* Cabecera de la lista con buscador */}
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 pb-3 border-b border-slate-100">
+          <div>
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+              <span>Listado de Series</span>
+              <span className="bg-slate-100 text-slate-600 font-bold text-[10px] px-2 py-0.5 rounded-full border border-slate-200">
+                {filteredSeries.length} mostradas
+              </span>
+            </h3>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              {escaneados} de {total} verificadas en total ({faltantes} pendientes)
+            </p>
+          </div>
+
+          <div className="w-full sm:w-auto relative min-w-[200px]">
+            <input
+              type="text"
+              value={searchFilter}
+              onChange={(e) => setSearchFilter(e.target.value)}
+              placeholder="Buscar serie, modelo o doc..."
+              className="w-full bg-slate-50 border border-slate-200 focus:border-red-500 focus:bg-white rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium outline-none transition"
+            />
+            {searchFilter && (
+              <button
+                type="button"
+                onClick={() => setSearchFilter('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1 text-xs">
-          {batchDetails.expectedSeries.map((item, idx) => {
-            const isPresent = batchDetails.completed.includes(item.serial);
-            return (
-              <div
-                key={idx}
-                className={`p-2.5 rounded-xl border flex items-center justify-between ${
-                  isPresent
-                    ? 'bg-emerald-50/70 border-emerald-300'
-                    : 'bg-slate-50 border-slate-200'
+
+        {/* Botones de Filtro de Estado: Todas / Faltan por Leer / Ya Leídas */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">Filtrar:</span>
+          
+          <button
+            type="button"
+            onClick={() => setStatusFilter('ALL')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'ALL'
+                ? 'bg-slate-800 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
+            }`}
+          >
+            <span>Todas</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'ALL' ? 'bg-slate-700 text-white' : 'bg-slate-200 text-slate-700'}`}>
+              {total}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('PENDING')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'PENDING'
+                ? 'bg-amber-600 text-white shadow-xs'
+                : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
+            }`}
+          >
+            <span>⏳ Faltan por Leer</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'PENDING' ? 'bg-amber-700 text-white' : 'bg-amber-200 text-amber-900'}`}>
+              {faltantes}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setStatusFilter('SCANNED')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              statusFilter === 'SCANNED'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+            }`}
+          >
+            <span>✓ Ya Leídas</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${statusFilter === 'SCANNED' ? 'bg-emerald-700 text-white' : 'bg-emerald-200 text-emerald-900'}`}>
+              {escaneados}
+            </span>
+          </button>
+        </div>
+
+        {/* Separación y Filtros por Documento (si hay más de 1 documento en este checklist) */}
+        {distinctDocs.length > 1 && (
+          <div className="flex flex-col gap-2 bg-slate-50/70 p-3 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-600 uppercase flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Documentos en este checklist ({distinctDocs.length})
+              </span>
+              <span className="text-[10px] text-slate-400">Clic en un documento para aislarlo</span>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setSelectedDocFilter('ALL')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                  selectedDocFilter === 'ALL'
+                    ? 'bg-slate-700 text-white font-bold shadow-2xs'
+                    : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
                 }`}
               >
-                <div className="min-w-0">
-                  <span className="font-mono font-bold text-slate-800 block truncate">{item.serial}</span>
-                  <span className="text-[10px] text-slate-500 block truncate">{item.material}</span>
+                Todos los Documentos
+              </button>
+
+              {distinctDocs.map((doc, idx) => {
+                const stats = docStats[doc] || { total: 0, scanned: 0, pending: 0 };
+                const isSelected = selectedDocFilter === doc;
+                return (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => setSelectedDocFilter(doc)}
+                    className={`px-2.5 py-1 rounded-lg text-xs transition flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-red-600 text-white font-bold shadow-2xs'
+                        : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    <span>📄 {doc}</span>
+                    <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-bold ${
+                      isSelected ? 'bg-red-700 text-white' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      {stats.scanned}/{stats.total}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* LISTADO DE SERIES AGRUPADO POR DOCUMENTO */}
+        <div className="max-h-80 overflow-y-auto pr-1 flex flex-col gap-4">
+          {Object.keys(groupedSeriesByDoc).length === 0 || filteredSeries.length === 0 ? (
+            <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+              <p className="text-xs font-bold text-slate-600">No hay series que coincidan con los filtros.</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">Prueba cambiando el estado o limpiando la búsqueda.</p>
+            </div>
+          ) : (
+            Object.entries(groupedSeriesByDoc).map(([docName, items]) => {
+              const stats = docStats[docName] || { total: items.length, scanned: 0, pending: items.length };
+              const showDocHeader = distinctDocs.length > 1 && selectedDocFilter === 'ALL';
+
+              return (
+                <div key={docName} className="flex flex-col gap-2">
+                  {/* Encabezado separador por documento */}
+                  {showDocHeader && (
+                    <div className="bg-slate-100/90 border border-slate-200 px-3 py-1.5 rounded-xl flex items-center justify-between sticky top-0 backdrop-blur-sm z-10">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                          📄 {docName}
+                        </span>
+                        <span className="text-[10px] font-semibold text-slate-500 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                          {stats.total} equipos
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2.5 text-[10px] font-bold">
+                        <span className="text-emerald-700">✓ {stats.scanned} leídas</span>
+                        <span className="text-amber-700">⏳ {stats.pending} faltan</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Grid de series del documento */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+                    {items.map((item, idx) => {
+                      const isPresent = batchDetails.completed.includes(item.serial);
+                      return (
+                        <div
+                          key={idx}
+                          className={`p-2.5 rounded-xl border flex items-center justify-between transition-all ${
+                            isPresent
+                              ? 'bg-emerald-50/70 border-emerald-300'
+                              : 'bg-slate-50 border-slate-200'
+                          }`}
+                        >
+                          <div className="min-w-0 pr-2">
+                            <span className="font-mono font-bold text-slate-800 block truncate">{item.serial}</span>
+                            <span className="text-[10px] text-slate-500 block truncate">{item.material || 'SIN MODELO'}</span>
+                            {item.documentName && distinctDocs.length > 1 && selectedDocFilter !== 'ALL' && (
+                              <span className="text-[9px] text-slate-400 block truncate mt-0.5">
+                                📄 {item.documentName}
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
+                              isPresent
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-200 text-slate-600'
+                            }`}
+                          >
+                            {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
-                    isPresent
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-200 text-slate-600'
-                  }`}
-                >
-                  {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
-                </span>
-              </div>
-            );
-          })}
+              );
+            })
+          )}
         </div>
+
       </div>
 
       {/* ACCIONES INFERIORES */}

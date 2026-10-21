@@ -132,7 +132,10 @@ export default function HomeView({
           const sUpper = String(item.serial || '').trim().toUpperCase();
           if (sUpper && !seenSerials.has(sUpper)) {
             seenSerials.add(sUpper);
-            combinedSeries.push(item);
+            combinedSeries.push({
+              ...item,
+              documentName: file.name
+            });
             addedFromFile++;
           }
         }

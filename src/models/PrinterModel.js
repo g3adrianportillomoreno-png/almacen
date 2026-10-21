@@ -47,7 +47,8 @@ export class PrinterModel {
     checklistName = '',
     checklistFolio = '',
     internalNumber = null,
-    assignedAt = null
+    assignedAt = null,
+    documentName = ''
   }) {
     this.id = id;
     this.serial = (serial || '').trim().toUpperCase();
@@ -68,6 +69,7 @@ export class PrinterModel {
       ? (isNaN(Number(internalNumber)) ? String(internalNumber) : Number(internalNumber))
       : null;
     this.assignedAt = assignedAt;
+    this.documentName = (documentName || '').trim();
   }
 
   get isAssigned() {
@@ -199,6 +201,7 @@ export class PrinterModel {
     const warehouseName = dbItem.warehouse_name || meta.warehouseName || 'Almacén 1';
     const warehouseSpace = dbItem.warehouse_space || meta.warehouseSpace || '';
     const assignedAt = dbItem.assigned_at || meta.assignedAt || null;
+    const docName = dbItem.document_name || meta.documentName || dbItem.documentName || '';
     const internalNum = dbItem.internal_number !== undefined && dbItem.internal_number !== null
       ? dbItem.internal_number
       : (meta.internalNumber ?? null);
@@ -224,7 +227,8 @@ export class PrinterModel {
       checklistName: checklistInfo?.name || meta.checklistName || 'Inventario General',
       checklistFolio: checklistInfo?.folio || meta.checklistFolio || 'SIN FOLIO',
       internalNumber: internalNum,
-      assignedAt: assignedAt
+      assignedAt: assignedAt,
+      documentName: docName
     });
   }
 }

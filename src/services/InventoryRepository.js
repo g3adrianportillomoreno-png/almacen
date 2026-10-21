@@ -195,10 +195,11 @@ export class InventoryRepository {
     cache.checklists[batchData.id] = { consecutive, folio };
     cache.serials = cache.serials || {};
     for (const s of series) {
-      if (s.internalNumber) {
+      if (s.internalNumber || s.documentName) {
         cache.serials[s.serial] = {
           ...(cache.serials[s.serial] || {}),
-          internalNumber: s.internalNumber
+          internalNumber: s.internalNumber,
+          documentName: s.documentName
         };
 
         // Reconciliación automática: actualizar el número de equipo en registros previos si ya existían
@@ -222,6 +223,7 @@ export class InventoryRepository {
       material_model: s.material,
       internal_number: s.internalNumber && !isNaN(Number(s.internalNumber)) ? Number(s.internalNumber) : null,
       system_status: s.systemStatus || 'Principal',
+      document_name: s.documentName || null,
       is_scanned: false
     }));
 

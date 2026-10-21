@@ -40,6 +40,10 @@ export default function OperatorMobileView({
   const [successMessage, setSuccessMessage] = useState('');
   const [notFoundSerial, setNotFoundSerial] = useState('');
 
+  // Filtros de estado y documento para el checklist móvil
+  const [checklistStatusFilter, setChecklistStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
+  const [checklistDocFilter, setChecklistDocFilter] = useState('ALL');
+
   // Formulario táctil de colocación física
   const [selectedWarehouse, setSelectedWarehouse] = useState(availableWarehouses[0] || 'Almacén 1');
   const [selectedRow, setSelectedRow] = useState(availableRows[0] || 'Fila 1');
@@ -61,6 +65,63 @@ export default function OperatorMobileView({
   const activeChecklist = useMemo(() => {
     return receptionBatches.find(b => b.id === activeChecklistId);
   }, [receptionBatches, activeChecklistId]);
+
+  // Documentos en el checklist activo del operador móvil
+  const checklistDistinctDocs = useMemo(() => {
+    if (!activeChecklist?.expectedSeries) return [];
+    const docs = [];
+    activeChecklist.expectedSeries.forEach(item => {
+      const doc = item.documentName?.trim();
+      if (doc && !docs.includes(doc)) docs.push(doc);
+    });
+    return docs;
+  }, [activeChecklist?.expectedSeries]);
+
+  const checklistDocStats = useMemo(() => {
+    if (!activeChecklist?.expectedSeries) return {};
+    const stats = {};
+    activeChecklist.expectedSeries.forEach(item => {
+      const docKey = item.documentName?.trim() || 'General';
+      if (!stats[docKey]) stats[docKey] = { total: 0, scanned: 0, pending: 0 };
+      stats[docKey].total++;
+      if (activeChecklist.completed.includes(item.serial)) {
+        stats[docKey].scanned++;
+      } else {
+        stats[docKey].pending++;
+      }
+    });
+    return stats;
+  }, [activeChecklist?.expectedSeries, activeChecklist?.completed]);
+
+  // Series filtradas para el checklist móvil
+  const filteredChecklistSeries = useMemo(() => {
+    if (!activeChecklist?.expectedSeries) return [];
+    return activeChecklist.expectedSeries.filter(item => {
+      const isPresent = activeChecklist.completed.includes(item.serial);
+      if (checklistStatusFilter === 'PENDING' && isPresent) return false;
+      if (checklistStatusFilter === 'SCANNED' && !isPresent) return false;
+      if (checklistDocFilter !== 'ALL') {
+        const itemDoc = item.documentName?.trim() || 'General';
+        if (itemDoc !== checklistDocFilter) return false;
+      }
+      return true;
+    });
+  }, [activeChecklist?.expectedSeries, activeChecklist?.completed, checklistStatusFilter, checklistDocFilter]);
+
+  // Agrupadas por documento
+  const groupedChecklistSeries = useMemo(() => {
+    if (checklistDistinctDocs.length <= 1 || checklistDocFilter !== 'ALL') {
+      const key = checklistDocFilter === 'ALL' ? (checklistDistinctDocs[0] || 'General') : checklistDocFilter;
+      return { [key]: filteredChecklistSeries };
+    }
+    const groups = {};
+    filteredChecklistSeries.forEach(item => {
+      const docKey = item.documentName?.trim() || 'General';
+      if (!groups[docKey]) groups[docKey] = [];
+      groups[docKey].push(item);
+    });
+    return groups;
+  }, [filteredChecklistSeries, checklistDistinctDocs, checklistDocFilter]);
 
   const activeMlBatch = useMemo(() => {
     return mlBatches.find(b => String(b.id) === String(activeMlBatchId));
@@ -671,42 +732,171 @@ export default function OperatorMobileView({
               </div>
             ) : (
               <div className="bg-slate-800/60 rounded-3xl p-4 border border-slate-700/80 flex flex-col gap-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <h3 className="text-xs font-bold text-white uppercase tracking-wide">
                       Series del Checklist ({activeChecklist.completed.length} / {activeChecklist.expectedSeries.length})
                     </h3>
                     <p className="text-[10px] text-slate-400">Escaneo rápido: solo marca si está o no está</p>
                   </div>
+                  <span className="text-[10px] bg-slate-900/90 text-slate-300 font-bold px-2 py-0.5 rounded-full border border-slate-700 self-start sm:self-auto">
+                    {filteredChecklistSeries.length} mostradas
+                  </span>
                 </div>
-                <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
-                  {activeChecklist.expectedSeries.map((item, idx) => {
-                    const isPresent = activeChecklist.completed.includes(item.serial);
-                    return (
-                      <div
-                        key={idx}
-                        className={`p-3 rounded-2xl border flex items-center justify-between ${
-                          isPresent
-                            ? 'bg-emerald-950/50 border-emerald-700/80'
-                            : 'bg-slate-900 border-slate-700/80'
+
+                {/* Filtro de Estado para Operador Móvil: Todas / Faltan / Leídas */}
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                  <button
+                    type="button"
+                    onClick={() => setChecklistStatusFilter('ALL')}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition flex items-center gap-1 shrink-0 ${
+                      checklistStatusFilter === 'ALL'
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'bg-slate-900/80 text-slate-400 hover:text-white border border-slate-700/60'
+                    }`}
+                  >
+                    <span>Todas</span>
+                    <span className={`text-[9px] px-1 py-0.2 rounded-full font-bold ${checklistStatusFilter === 'ALL' ? 'bg-slate-200 text-slate-900' : 'bg-slate-800 text-slate-400'}`}>
+                      {activeChecklist.expectedSeries.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setChecklistStatusFilter('PENDING')}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition flex items-center gap-1 shrink-0 ${
+                      checklistStatusFilter === 'PENDING'
+                        ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
+                        : 'bg-amber-950/40 text-amber-300 hover:bg-amber-900/50 border border-amber-800/60'
+                    }`}
+                  >
+                    <span>⏳ Faltan</span>
+                    <span className={`text-[9px] px-1 py-0.2 rounded-full font-bold ${checklistStatusFilter === 'PENDING' ? 'bg-amber-600 text-white' : 'bg-amber-900/80 text-amber-200'}`}>
+                      {activeChecklist.expectedSeries.length - activeChecklist.completed.length}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setChecklistStatusFilter('SCANNED')}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition flex items-center gap-1 shrink-0 ${
+                      checklistStatusFilter === 'SCANNED'
+                        ? 'bg-emerald-500 text-slate-950 font-black shadow-xs'
+                        : 'bg-emerald-950/40 text-emerald-300 hover:bg-emerald-900/50 border border-emerald-800/60'
+                    }`}
+                  >
+                    <span>✓ Leídas</span>
+                    <span className={`text-[9px] px-1 py-0.2 rounded-full font-bold ${checklistStatusFilter === 'SCANNED' ? 'bg-emerald-600 text-white' : 'bg-emerald-900/80 text-emerald-200'}`}>
+                      {activeChecklist.completed.length}
+                    </span>
+                  </button>
+                </div>
+
+                {/* Filtro por Documentos si hay más de 1 documento */}
+                {checklistDistinctDocs.length > 1 && (
+                  <div className="flex flex-col gap-1.5 pt-1 border-t border-slate-700/60">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">
+                      Separación por Documento ({checklistDistinctDocs.length}):
+                    </span>
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setChecklistDocFilter('ALL')}
+                        className={`px-2 py-0.5 rounded-lg text-[10px] font-semibold transition shrink-0 ${
+                          checklistDocFilter === 'ALL'
+                            ? 'bg-red-600 text-white font-bold'
+                            : 'bg-slate-900/90 text-slate-400 hover:text-white border border-slate-700'
                         }`}
                       >
-                        <div>
-                          <span className="font-mono font-bold text-white text-xs block">{item.serial}</span>
-                          <span className="text-[11px] text-slate-400 block mt-0.5">{item.material}</span>
+                        Todos
+                      </button>
+                      {checklistDistinctDocs.map((doc, idx) => {
+                        const stats = checklistDocStats[doc] || { total: 0, scanned: 0 };
+                        const isSel = checklistDocFilter === doc;
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setChecklistDocFilter(doc)}
+                            className={`px-2 py-0.5 rounded-lg text-[10px] font-medium transition flex items-center gap-1 shrink-0 ${
+                              isSel
+                                ? 'bg-red-600 text-white font-bold'
+                                : 'bg-slate-900/90 text-slate-300 hover:text-white border border-slate-700'
+                            }`}
+                          >
+                            <span className="truncate max-w-[110px]">📄 {doc}</span>
+                            <span className={`text-[9px] px-1 rounded ${isSel ? 'bg-red-700 text-white' : 'bg-slate-800 text-slate-400'}`}>
+                              {stats.scanned}/{stats.total}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Listado de series con separadores por documento */}
+                <div className="flex flex-col gap-3 max-h-80 overflow-y-auto pr-1 mt-1">
+                  {filteredChecklistSeries.length === 0 ? (
+                    <div className="text-center py-6 bg-slate-900/40 rounded-2xl border border-dashed border-slate-700">
+                      <p className="text-xs text-slate-400 font-medium">No hay series con este filtro.</p>
+                    </div>
+                  ) : (
+                    Object.entries(groupedChecklistSeries).map(([docName, items]) => {
+                      const showHeader = checklistDistinctDocs.length > 1 && checklistDocFilter === 'ALL';
+                      const stats = checklistDocStats[docName] || { total: items.length, scanned: 0, pending: items.length };
+                      return (
+                        <div key={docName} className="flex flex-col gap-1.5">
+                          {showHeader && (
+                            <div className="bg-slate-900/90 px-2.5 py-1 rounded-xl border border-slate-700 flex items-center justify-between sticky top-0 backdrop-blur-sm z-10">
+                              <span className="text-[11px] font-bold text-slate-300 truncate max-w-[180px]">
+                                📄 {docName}
+                              </span>
+                              <div className="flex items-center gap-1.5 text-[9px] font-bold">
+                                <span className="text-emerald-400">✓ {stats.scanned}</span>
+                                <span className="text-amber-400">⏳ {stats.pending}</span>
+                              </div>
+                            </div>
+                          )}
+
+                          {items.map((item, idx) => {
+                            const isPresent = activeChecklist.completed.includes(item.serial);
+                            return (
+                              <div
+                                key={idx}
+                                className={`p-3 rounded-2xl border flex items-center justify-between ${
+                                  isPresent
+                                    ? 'bg-emerald-950/50 border-emerald-700/80'
+                                    : 'bg-slate-900 border-slate-700/80'
+                                }`}
+                              >
+                                <div className="min-w-0 pr-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono font-bold text-white text-xs block">{item.serial}</span>
+                                    {item.documentName && checklistDistinctDocs.length > 1 && checklistDocFilter !== 'ALL' && (
+                                      <span className="text-[9px] bg-slate-800 text-slate-400 px-1 py-0.2 rounded truncate max-w-[100px]">
+                                        📄 {item.documentName}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[11px] text-slate-400 block mt-0.5 truncate">{item.material || 'SIN MODELO'}</span>
+                                </div>
+                                <span
+                                  className={`text-[10px] font-bold px-2.5 py-1 rounded-xl border shrink-0 ${
+                                    isPresent
+                                      ? 'bg-emerald-600 text-white border-emerald-500'
+                                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                                  }`}
+                                >
+                                  {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <span
-                          className={`text-[10px] font-bold px-2.5 py-1 rounded-xl border ${
-                            isPresent
-                              ? 'bg-emerald-600 text-white border-emerald-500'
-                              : 'bg-slate-800 text-slate-400 border-slate-700'
-                          }`}
-                        >
-                          {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
-                        </span>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
