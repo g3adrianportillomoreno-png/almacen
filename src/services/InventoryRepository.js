@@ -266,7 +266,6 @@ export class InventoryRepository {
     try {
       await insertInChunks(seriesToInsert, false);
     } catch {
-      // Fallback si la columna system_status o internal_number aún no existen en Supabase
       try {
         const fallbackWithInternal = series.map(s => ({
           checklist_id: batchData.id,
@@ -533,7 +532,6 @@ export class InventoryRepository {
         .eq('serial_number', serial);
 
       if (error) {
-        // Fallback si aún no existe la columna system_status en Supabase
         const { error: fbErr } = await supabase
           .from('expected_series')
           .update({
@@ -701,7 +699,6 @@ export class InventoryRepository {
         localStorage.setItem(MAP_KEY, JSON.stringify(data));
       }
       
-      // Intentar guardar en Supabase si la tabla warehouse_map_config existe
       supabase
         .from('warehouse_map_config')
         .upsert({ id: 'default_layout', layout: data, updated_at: new Date().toISOString() })
@@ -766,7 +763,6 @@ export class InventoryRepository {
         return { isUpdate: true };
       }
 
-      // Si no existía en Supabase, creamos o usamos el lote de Inventario Maestro
       let defaultBatchId = null;
       const { data: generalBatch } = await supabase
         .from('checklists')
@@ -814,7 +810,9 @@ export class InventoryRepository {
 
   /**
    * Reconciliación e importación ultrarrápida por lotes masivos (Batching).
-   * Procesa cientos de filas en bloques de alta velocidad (menos de 1 segundo).
+   * Blindado: Si una serie ya existe en Supabase, consulta su ubicación en la nube (warehouse_name,
+   * warehouse_row, warehouse_space, internal_number, printer_status) para que NUNCA se borre el espacio
+   * asignado desde celulares u otras computadoras cuando el Excel nuevo no trae ubicación.
    */
   static async reconcileBatchPrinters(items = []) {
     if (!items || items.length === 0) return { updated: 0, added: 0, total: 0 };
@@ -848,7 +846,7 @@ export class InventoryRepository {
       console.warn('Error obteniendo lote maestro para batch:', e);
     }
 
-    // 2. Procesar caché local de metadatos en un solo paso en memoria
+    // 2. Preparar lista única de ítems entrantes del archivo Excel
     const cache = this.getMetadataCache();
     cache.serials = cache.serials || {};
 
@@ -860,47 +858,24 @@ export class InventoryRepository {
       if (!serialUpper || serialsSet.has(serialUpper)) continue;
       serialsSet.add(serialUpper);
 
-      const existing = cache.serials[serialUpper];
-      const finalInternal = (item.internalNumber !== undefined && item.internalNumber !== null && String(item.internalNumber).trim() !== '')
-        ? item.internalNumber
-        : (existing?.internalNumber ?? null);
+      const hasExplicitInternal = item.internalNumber !== undefined && item.internalNumber !== null && String(item.internalNumber).trim() !== '';
+      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '');
+      const hasExplicitRow = Boolean(item.warehouseRow && String(item.warehouseRow).trim() !== '' && String(item.warehouseRow).trim() !== 'Sin Asignar');
+      const hasExplicitSpace = Boolean(item.warehouseSpace !== null && item.warehouseSpace !== undefined && String(item.warehouseSpace).trim() !== '');
+      const hasExplicitSystemStatus = Boolean(item.systemStatus && String(item.systemStatus).trim() !== '');
 
-      const finalWh = item.warehouseName || existing?.warehouseName || 'Almacén 1';
-      const finalRow = item.warehouseRow || existing?.warehouseRow || 'Sin Asignar';
-      const finalSpace = item.warehouseSpace !== null && item.warehouseSpace !== undefined && String(item.warehouseSpace).trim() !== ''
-        ? String(item.warehouseSpace).trim()
-        : (existing?.warehouseSpace || '');
-      const finalSystemStatus = item.systemStatus || existing?.systemStatus || 'Principal';
-
-      cache.serials[serialUpper] = {
-        ...(existing || {}),
-        material: item.material || existing?.material || 'Sin Modelo',
-        warehouseName: finalWh,
-        warehouseRow: finalRow,
-        warehouseSpace: finalSpace,
-        internalNumber: finalInternal,
-        systemStatus: finalSystemStatus,
-        isScanned: true,
-        status: existing?.status || 'DISPONIBLE',
-        assignedAt: new Date().toISOString()
-      };
-
-      const numVal = !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
       cleanItems.push({
         serialUpper,
-        material: item.material || existing?.material || 'Sin Modelo',
-        numVal,
-        finalWh,
-        finalRow,
-        finalSpace,
-        finalSystemStatus
+        rawMaterial: item.material,
+        rawInternal: hasExplicitInternal ? item.internalNumber : null,
+        rawWh: hasExplicitWh ? String(item.warehouseName).trim() : null,
+        rawRow: hasExplicitRow ? String(item.warehouseRow).trim() : null,
+        rawSpace: hasExplicitSpace ? String(item.warehouseSpace).trim() : null,
+        rawSystemStatus: hasExplicitSystemStatus ? String(item.systemStatus).trim() : null
       });
     }
 
-    // Guardar caché local una sola vez para toda la tanda
-    this.saveMetadataCache(cache);
-
-    // 3. Sincronizar con Supabase en chunks de 80 registros
+    // 3. Sincronizar con Supabase en chunks de 80 registros preservando siempre los espacios existentes en la nube
     let updated = 0;
     let added = 0;
     const CHUNK_SIZE = 80;
@@ -912,26 +887,88 @@ export class InventoryRepository {
       try {
         const { data: existingDbRows } = await supabase
           .from('expected_series')
-          .select('id, serial_number')
+          .select('id, serial_number, material_model, internal_number, warehouse_name, warehouse_row, warehouse_space, printer_status')
           .in('serial_number', chunkSerials);
 
-        const existingDbSerials = new Set((existingDbRows || []).map(r => r.serial_number));
+        // Mapear el mejor registro existente en Supabase por cada número de serie (priorizando el que ya tenga ubicación)
+        const dbRowBySerial = {};
+        for (const r of (existingDbRows || [])) {
+          const sKey = (r.serial_number || '').trim().toUpperCase();
+          if (!dbRowBySerial[sKey] || (r.warehouse_space && !dbRowBySerial[sKey].warehouse_space)) {
+            dbRowBySerial[sKey] = r;
+          }
+        }
 
         const toInsert = [];
         const toUpdatePromises = [];
 
         for (const c of chunk) {
-          const encodedStatus = `DISPONIBLE|${c.finalSystemStatus}`;
-          if (existingDbSerials.has(c.serialUpper)) {
+          const dbRow = dbRowBySerial[c.serialUpper];
+          const localCached = cache.serials[c.serialUpper] || {};
+
+          // Extraer estado operativo e inventario previos desde la nube
+          let dbOpStatus = null;
+          let dbSysStatus = null;
+          if (dbRow?.printer_status) {
+            const parts = String(dbRow.printer_status).split('|');
+            dbOpStatus = parts[0] || null;
+            dbSysStatus = parts[1] || null;
+          }
+
+          const finalMaterial = (c.rawMaterial && c.rawMaterial !== 'Sin Modelo' && c.rawMaterial !== 'MODELO GENERAL')
+            ? c.rawMaterial
+            : (dbRow?.material_model || localCached.material || 'Sin Modelo');
+
+          const finalInternal = c.rawInternal !== null
+            ? c.rawInternal
+            : (dbRow?.internal_number ?? localCached.internalNumber ?? null);
+
+          const finalWh = c.rawWh
+            || dbRow?.warehouse_name
+            || localCached.warehouseName
+            || 'Almacén 1';
+
+          const dbRowHasValidRow = dbRow?.warehouse_row && dbRow.warehouse_row !== 'Sin Asignar';
+          const localHasValidRow = localCached.warehouseRow && localCached.warehouseRow !== 'Sin Asignar';
+          const finalRow = c.rawRow
+            || (dbRowHasValidRow ? dbRow.warehouse_row : null)
+            || (localHasValidRow ? localCached.warehouseRow : null)
+            || 'Sin Asignar';
+
+          const finalSpace = c.rawSpace !== null
+            ? c.rawSpace
+            : (dbRow?.warehouse_space || localCached.warehouseSpace || '');
+
+          const finalOpStatus = dbOpStatus || localCached.status || 'DISPONIBLE';
+          const finalSystemStatus = c.rawSystemStatus || dbSysStatus || localCached.systemStatus || 'Principal';
+          const encodedStatus = `${finalOpStatus}|${finalSystemStatus}`;
+          const numVal = finalInternal !== null && !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
+
+          // Actualizar caché local con la fusión nube + Excel
+          cache.serials[c.serialUpper] = {
+            ...localCached,
+            material: finalMaterial,
+            warehouseName: finalWh,
+            warehouseRow: finalRow,
+            warehouseSpace: finalSpace,
+            internalNumber: finalInternal,
+            systemStatus: finalSystemStatus,
+            isScanned: true,
+            status: finalOpStatus,
+            assignedAt: localCached.assignedAt || new Date().toISOString()
+          };
+
+          if (dbRow) {
             updated++;
             toUpdatePromises.push(
               supabase
                 .from('expected_series')
                 .update({
-                  internal_number: c.numVal,
-                  warehouse_name: c.finalWh,
-                  warehouse_row: c.finalRow,
-                  warehouse_space: c.finalSpace,
+                  material_model: finalMaterial,
+                  internal_number: numVal,
+                  warehouse_name: finalWh,
+                  warehouse_row: finalRow,
+                  warehouse_space: finalSpace,
                   printer_status: encodedStatus,
                   is_scanned: true
                 })
@@ -943,11 +980,11 @@ export class InventoryRepository {
               toInsert.push({
                 checklist_id: defaultBatchId,
                 serial_number: c.serialUpper,
-                material_model: c.material,
-                internal_number: c.numVal,
-                warehouse_name: c.finalWh,
-                warehouse_row: c.finalRow,
-                warehouse_space: c.finalSpace,
+                material_model: finalMaterial,
+                internal_number: numVal,
+                warehouse_name: finalWh,
+                warehouse_row: finalRow,
+                warehouse_space: finalSpace,
                 printer_status: encodedStatus,
                 is_scanned: true
               });
@@ -968,11 +1005,16 @@ export class InventoryRepository {
       }
     }
 
+    this.saveMetadataCache(cache);
     return { updated, added, total: cleanItems.length };
   }
 
   /**
-   * Actualiza el Inventario Maestro con purga de bajas por diferencia
+   * Actualiza el Inventario Maestro con purga de bajas por diferencia:
+   * 1. Protege cualquier Checklist de recepción que esté actualmente pendiente ('pending') para no borrarle equipos sin escanear.
+   * 2. Registra las impresoras eliminadas en el historial de bajas (inventory_departures).
+   * 3. Las elimina de la base de datos activa (expected_series) excepto si pertenecen a un checklist pendiente.
+   * 4. Actualiza o inserta las impresoras leídas del archivo conservando siempre su Almacén, Fila y Espacio.
    */
   static async updateMasterWithPurge(items = [], removedPrinters = []) {
     if (removedPrinters && removedPrinters.length > 0) {
@@ -987,11 +1029,37 @@ export class InventoryRepository {
       }
       this.saveMetadataCache(cache);
 
+      // Identificar checklists completados/cerrados/maestro donde sí se debe aplicar la baja
+      let deletableChecklistIds = null;
+      try {
+        const { data: allChecklists } = await supabase
+          .from('checklists')
+          .select('id, status, name');
+        if (allChecklists && allChecklists.length > 0) {
+          deletableChecklistIds = allChecklists
+            .filter(ch => ch.status === 'completed' || ch.status === 'closed' || ch.name === 'Inventario Maestro')
+            .map(ch => ch.id);
+        }
+      } catch (e) {
+        console.warn('No se pudo filtrar checklists pendientes antes de purga:', e);
+      }
+
       const CHUNK_SIZE = 100;
       for (let i = 0; i < removedSerials.length; i += CHUNK_SIZE) {
         const chunk = removedSerials.slice(i, i + CHUNK_SIZE);
         try {
-          await supabase.from('expected_series').delete().in('serial_number', chunk);
+          if (deletableChecklistIds && deletableChecklistIds.length > 0) {
+            await supabase
+              .from('expected_series')
+              .delete()
+              .in('serial_number', chunk)
+              .in('checklist_id', deletableChecklistIds);
+          } else {
+            await supabase
+              .from('expected_series')
+              .delete()
+              .in('serial_number', chunk);
+          }
         } catch (e) {
           console.warn('Error eliminando bajas de expected_series:', e);
         }

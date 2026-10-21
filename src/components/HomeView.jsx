@@ -25,6 +25,13 @@ export default function HomeView({
   const [manualConsecutiveInput, setManualConsecutiveInput] = useState('');
   const [uploadPasswordInput, setUploadPasswordInput] = useState('');
 
+  // Estados de la Vista Previa Editable de Series antes de guardar el Checklist
+  const [showSeriesPreview, setShowSeriesPreview] = useState(false);
+  const [previewFilterMode, setPreviewFilterMode] = useState('ALL'); // 'ALL' | 'REPAIRED'
+  const [previewSearch, setPreviewSearch] = useState('');
+  const [newManualSerial, setNewManualSerial] = useState('');
+  const [newManualMaterial, setNewManualMaterial] = useState('');
+
   // Modal de seguridad para borrar lote con contraseña
   const [deleteModalBatch, setDeleteModalBatch] = useState(null);
   const [deletePasswordInput, setDeletePasswordInput] = useState('');
@@ -106,6 +113,86 @@ export default function HomeView({
     return { total, consultas, bajas };
   }, [allPrinters]);
 
+  // Conteo de series auto-corregidas por OCR en la subida pendiente
+  const repairedSeriesCount = useMemo(() => {
+    if (!pendingUploadData?.series) return 0;
+    return pendingUploadData.series.filter(s => Boolean(s.repairedFrom)).length;
+  }, [pendingUploadData?.series]);
+
+  // Series mostradas en la vista previa editable
+  const filteredPreviewSeries = useMemo(() => {
+    if (!pendingUploadData?.series) return [];
+    return pendingUploadData.series
+      .map((item, idx) => ({ ...item, originalIndex: idx }))
+      .filter(item => {
+        if (previewFilterMode === 'REPAIRED' && !item.repairedFrom) return false;
+        if (previewSearch.trim()) {
+          const q = previewSearch.trim().toLowerCase();
+          const sMatch = (item.serial || '').toLowerCase().includes(q);
+          const rMatch = (item.repairedFrom || '').toLowerCase().includes(q);
+          const dMatch = (item.documentName || '').toLowerCase().includes(q);
+          if (!sMatch && !rMatch && !dMatch) return false;
+        }
+        return true;
+      });
+  }, [pendingUploadData?.series, previewFilterMode, previewSearch]);
+
+  // Editar una serie en la vista previa antes de crear el checklist
+  const handleUpdatePreviewSerial = (index, newValue) => {
+    if (!pendingUploadData) return;
+    const cleanVal = String(newValue || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    setPendingUploadData(prev => {
+      const nextSeries = [...prev.series];
+      nextSeries[index] = {
+        ...nextSeries[index],
+        serial: cleanVal
+      };
+      return { ...prev, series: nextSeries };
+    });
+  };
+
+  // Eliminar una serie de la vista previa antes de crear el checklist
+  const handleRemovePreviewSerial = (index) => {
+    if (!pendingUploadData) return;
+    setPendingUploadData(prev => {
+      const nextSeries = prev.series.filter((_, idx) => idx !== index);
+      return { ...prev, series: nextSeries };
+    });
+  };
+
+  // Agregar manualmente una serie que faltara en el PDF
+  const handleAddManualPreviewSerial = () => {
+    if (!pendingUploadData) return;
+    const cleanSerial = newManualSerial.trim().toUpperCase().replace(/[^A-Z0-9-]/g, '');
+    if (!cleanSerial) return;
+
+    const alreadyExists = pendingUploadData.series.some(s => s.serial.toUpperCase() === cleanSerial);
+    if (alreadyExists) {
+      alert(`La serie ${cleanSerial} ya está en la lista de este checklist.`);
+      return;
+    }
+
+    const defaultModel = newManualMaterial.trim().toUpperCase()
+      || pendingUploadData.series[0]?.material
+      || 'MODELO GENERAL';
+
+    const defaultDoc = pendingUploadData.files?.[0]?.name || 'Manual';
+
+    setPendingUploadData(prev => ({
+      ...prev,
+      series: [
+        {
+          serial: cleanSerial,
+          material: defaultModel,
+          documentName: defaultDoc,
+          repairedFrom: 'AGREGADA MANUAL'
+        },
+        ...prev.series
+      ]
+    }));
+    setNewManualSerial('');
+  };
+
   // Procesa uno o varios archivos (PDF / Excel) y devuelve sus series combinadas sin duplicados
   const processUploadedFiles = async (fileList, existingData = null) => {
     const files = Array.from(fileList || []);
@@ -128,10 +215,12 @@ export default function HomeView({
         }
 
         let addedFromFile = 0;
+        let repairedInFile = 0;
         for (const item of extracted) {
           const sUpper = String(item.serial || '').trim().toUpperCase();
           if (sUpper && !seenSerials.has(sUpper)) {
             seenSerials.add(sUpper);
+            if (item.repairedFrom) repairedInFile++;
             combinedSeries.push({
               ...item,
               documentName: file.name
@@ -143,7 +232,8 @@ export default function HomeView({
         fileSummaries.push({
           name: file.name,
           count: extracted.length,
-          addedCount: addedFromFile
+          addedCount: addedFromFile,
+          repairedCount: repairedInFile
         });
       }
 
@@ -160,6 +250,9 @@ export default function HomeView({
       if (!existingData) {
         setManualConsecutiveInput('');
         setUploadPasswordInput('');
+        setShowSeriesPreview(false);
+        setPreviewFilterMode('ALL');
+        setPreviewSearch('');
       }
 
       setPendingUploadData({
@@ -202,11 +295,18 @@ export default function HomeView({
       return;
     }
 
-    onCreateBatch(pendingUploadData.fileName, pendingUploadData.series, trimmedConsecutive);
+    const validSeries = pendingUploadData.series.filter(s => Boolean(s.serial && s.serial.trim()));
+    if (validSeries.length === 0) {
+      alert("No hay series válidas para guardar.");
+      return;
+    }
+
+    onCreateBatch(pendingUploadData.fileName, validSeries, trimmedConsecutive);
     setPendingUploadData(null);
     setManualConsecutiveInput('');
     setUploadPasswordInput('');
   };
+
   const handleRequestDelete = (batch) => {
     setDeleteModalBatch(batch);
     setDeletePasswordInput('');
@@ -719,60 +819,204 @@ export default function HomeView({
 
       </div>
 
-      {/* MODAL OBLIGATORIO: CONSECUTIVO MANUAL Y CONTRASEÑA QWERTY AL SUBIR DOCUMENTO */}
+      {/* MODAL OBLIGATORIO: CONSECUTIVO MANUAL, VISTA PREVIA EDITABLE Y CONTRASEÑA QWERTY AL SUBIR DOCUMENTO */}
       {pendingUploadData && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
           <form 
             onSubmit={handleConfirmCreateBatch}
-            className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 animate-fade-in-up flex flex-col gap-4"
+            className="bg-white rounded-2xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 animate-fade-in-up flex flex-col gap-4 max-h-[92vh] overflow-y-auto"
           >
-            <div className="w-12 h-12 bg-red-50 text-red-600 rounded-xl flex items-center justify-center mx-auto">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-              </svg>
-            </div>
-            
-            <div className="text-center">
-              <h3 className="text-base font-bold text-slate-800">
-                Registrar Consecutivo de Inventario
-              </h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Documento: <span className="font-semibold text-slate-700">{pendingUploadData.fileName}</span>
-              </p>
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 bg-red-50 text-red-600 rounded-xl flex items-center justify-center shrink-0">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-800">
+                  Registrar Consecutivo de Inventario
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Documento: <span className="font-semibold text-slate-700">{pendingUploadData.fileName}</span>
+                </p>
+              </div>
             </div>
 
-            {/* AVISO DESTACADO DE IMPRESORAS DETECTADAS Y LISTA DE DOCUMENTOS */}
-            <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3 rounded-xl flex flex-col gap-2">
-              <div className="flex items-center justify-center gap-2 text-center">
-                <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span className="text-xs font-semibold">
-                  Total acumulado: <strong className="text-sm font-bold text-emerald-700">{pendingUploadData.series.length} impresoras</strong> ({pendingUploadData.files?.length || 1} documento{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
-                </span>
+            {/* AVISO DESTACADO DE IMPRESORAS DETECTADAS, REPARACIONES OCR Y LISTA DE DOCUMENTOS */}
+            <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3.5 rounded-xl flex flex-col gap-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="text-xs font-semibold">
+                    Total detectado: <strong className="text-sm font-black text-emerald-700">{pendingUploadData.series.length} impresoras</strong> ({pendingUploadData.files?.length || 1} doc{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
+                  </span>
+                </div>
+
+                {repairedSeriesCount > 0 && (
+                  <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                    ✨ {repairedSeriesCount} corregida{repairedSeriesCount > 1 ? 's' : ''} por OCR
+                  </span>
+                )}
               </div>
 
               {pendingUploadData.files && pendingUploadData.files.length > 0 && (
-                <div className="bg-white/80 rounded-lg p-2 border border-emerald-200/80 max-h-28 overflow-y-auto flex flex-col gap-1 text-[11px]">
+                <div className="bg-white/90 rounded-lg p-2 border border-emerald-200/80 max-h-28 overflow-y-auto flex flex-col gap-1 text-[11px]">
                   {pendingUploadData.files.map((f, i) => (
                     <div key={i} className="flex justify-between items-center text-slate-700 px-1">
-                      <span className="truncate font-medium max-w-[230px]">{i + 1}. {f.name}</span>
-                      <span className="font-bold text-emerald-700 shrink-0">+{f.addedCount} series</span>
+                      <span className="truncate font-medium max-w-[240px]">{i + 1}. {f.name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {f.repairedCount > 0 && (
+                          <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
+                            ✨ {f.repairedCount} reparadas
+                          </span>
+                        )}
+                        <span className="font-bold text-emerald-700">+{f.addedCount} series</span>
+                      </div>
                     </div>
                   ))}
                 </div>
               )}
 
-              <button
-                type="button"
-                disabled={isProcessingFile}
-                onClick={() => addMoreFilesInputRef.current?.click()}
-                className="w-full py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
-              >
-                <span>➕</span>
-                <span>{isProcessingFile ? (processingProgress || 'Leyendo documento...') : 'Agregar otro PDF / Documento a este mismo Checklist'}</span>
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  disabled={isProcessingFile}
+                  onClick={() => addMoreFilesInputRef.current?.click()}
+                  className="py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <span>➕</span>
+                  <span>{isProcessingFile ? (processingProgress || 'Leyendo...') : 'Agregar otro PDF / Doc'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowSeriesPreview(!showSeriesPreview)}
+                  className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                >
+                  <span>👁️</span>
+                  <span>{showSeriesPreview ? 'Ocultar Vista Previa' : `Revisar / Editar Series (${pendingUploadData.series.length})`}</span>
+                </button>
+              </div>
             </div>
+
+            {/* SECCIÓN DESPLEGABLE: VISTA PREVIA EDITABLE DE SERIES ANTES DE GUARDAR */}
+            {showSeriesPreview && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-col gap-3 animate-fade-in">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewFilterMode('ALL')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                        previewFilterMode === 'ALL'
+                          ? 'bg-slate-800 text-white'
+                          : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      Todas ({pendingUploadData.series.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewFilterMode('REPAIRED')}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition ${
+                        previewFilterMode === 'REPAIRED'
+                          ? 'bg-amber-500 text-slate-950 font-black'
+                          : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                      }`}
+                    >
+                      ✨ Corregidas por OCR ({repairedSeriesCount})
+                    </button>
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Buscar serie..."
+                    value={previewSearch}
+                    onChange={(e) => setPreviewSearch(e.target.value)}
+                    className="bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-800 uppercase outline-none w-40"
+                  />
+                </div>
+
+                {/* Agregar serie manual en caso de que falte alguna en el documento */}
+                <div className="flex flex-wrap items-center gap-1.5 bg-white p-2 rounded-lg border border-slate-200">
+                  <input
+                    type="text"
+                    placeholder="AGREGAR SERIE MANUAL (EJ: U66653...)"
+                    value={newManualSerial}
+                    onChange={(e) => setNewManualSerial(e.target.value)}
+                    className="flex-1 min-w-[160px] bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-mono font-bold text-slate-800 uppercase outline-none"
+                  />
+                  <input
+                    type="text"
+                    placeholder="MODELO (OPCIONAL)"
+                    value={newManualMaterial}
+                    onChange={(e) => setNewManualMaterial(e.target.value)}
+                    className="w-32 bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 uppercase outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddManualPreviewSerial}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1 rounded-lg text-xs transition cursor-pointer"
+                  >
+                    + Agregar
+                  </button>
+                </div>
+
+                {/* Lista editable de series */}
+                <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1">
+                  {filteredPreviewSeries.length === 0 ? (
+                    <p className="text-xs text-slate-400 text-center py-4">
+                      No hay series que coincidan con este filtro.
+                    </p>
+                  ) : (
+                    filteredPreviewSeries.map((item) => (
+                      <div
+                        key={item.originalIndex}
+                        className={`p-2 rounded-lg border flex items-center justify-between gap-2 text-xs ${
+                          item.repairedFrom
+                            ? 'bg-amber-50/70 border-amber-300'
+                            : 'bg-white border-slate-200'
+                        }`}
+                      >
+                        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-slate-400 w-6">
+                              #{item.originalIndex + 1}
+                            </span>
+                            <input
+                              type="text"
+                              value={item.serial}
+                              onChange={(e) => handleUpdatePreviewSerial(item.originalIndex, e.target.value)}
+                              className="font-mono font-bold text-slate-900 bg-transparent border-b border-transparent focus:border-red-500 focus:bg-white px-1 py-0.5 rounded outline-none uppercase w-44"
+                              title="Haz clic para editar manualmente este número de serie"
+                            />
+                            <span className="text-[10px] text-slate-500 truncate">
+                              {item.material}
+                            </span>
+                          </div>
+                          {item.repairedFrom && (
+                            <span className="text-[10px] text-amber-800 font-semibold pl-7">
+                              ✨ OCR original: <span className="font-mono line-through">{item.repairedFrom}</span> ➔ <span className="font-mono font-bold text-emerald-800">{item.serial}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePreviewSerial(item.originalIndex)}
+                          className="text-slate-400 hover:text-rose-600 px-1.5 py-0.5 rounded font-bold text-xs"
+                          title="Quitar esta serie del checklist"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
 
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-3">
               <div>
@@ -817,7 +1061,7 @@ export default function HomeView({
                 type="submit"
                 className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-xs transition shadow-xs"
               >
-                Guardar Checklist
+                Guardar Checklist ({pendingUploadData.series.length})
               </button>
             </div>
           </form>
