@@ -64,7 +64,29 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
           }
         }
         
-        setStatus('Apuntando al Código QR...');
+        setStatus('Apuntando al Código QR / Barras...');
+
+        // Instanciar BarcodeDetector una sola vez fuera del ciclo para no saturar el procesador del celular
+        let nativeDetector = null;
+        if ('BarcodeDetector' in window) {
+          try {
+            let formats = ['qr_code', 'data_matrix', 'code_128', 'code_39', 'ean_13', 'ean_8', 'itf', 'codabar'];
+            if (typeof window.BarcodeDetector.getSupportedFormats === 'function') {
+              const supported = await window.BarcodeDetector.getSupportedFormats();
+              if (supported && supported.length > 0) {
+                const filtered = formats.filter(f => supported.includes(f));
+                if (filtered.length > 0) formats = filtered;
+              }
+            }
+            nativeDetector = new window.BarcodeDetector({ formats });
+          } catch {
+            try {
+              nativeDetector = new window.BarcodeDetector();
+            } catch {
+              nativeDetector = null;
+            }
+          }
+        }
 
         const tick = async () => {
           if (!isActive || !videoRef.current || !canvasRef.current) return;
@@ -75,27 +97,28 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
             try {
               let qrText = null;
 
-              // Intentar usar la API Nativa (súper rápida y precisa en móviles)
-              if ('BarcodeDetector' in window) {
-                const barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code', 'data_matrix'] });
-                const barcodes = await barcodeDetector.detect(video);
+              // 1. Intentar usar la API Nativa (soporta QR y códigos de barras 1D sin bloquear el hilo principal)
+              if (nativeDetector) {
+                const barcodes = await nativeDetector.detect(video);
                 if (barcodes.length > 0) {
                   qrText = barcodes[0].rawValue;
                 }
               }
 
-              // Si la API nativa no está o no detectó nada, usar jsQR como fallback
+              // 2. Fallback ligero con jsQR (escalado a máx 640px para no congelar celulares)
               if (!qrText) {
                 const canvas = canvasRef.current;
                 const context = canvas.getContext('2d', { willReadFrequently: true });
-                
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                
-                context.drawImage(video, 0, 0, canvas.width, canvas.height);
-                
-                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-                
+                const scale = Math.min(1, 640 / video.videoWidth);
+                const targetW = Math.round(video.videoWidth * scale);
+                const targetH = Math.round(video.videoHeight * scale);
+
+                if (canvas.width !== targetW) canvas.width = targetW;
+                if (canvas.height !== targetH) canvas.height = targetH;
+
+                context.drawImage(video, 0, 0, targetW, targetH);
+                const imageData = context.getImageData(0, 0, targetW, targetH);
+
                 const code = jsQR(imageData.data, imageData.width, imageData.height, {
                   inversionAttempts: "dontInvert",
                 });
@@ -120,7 +143,7 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
                 
                 setTimeout(() => {
                   onScan(extractedSerie);
-                }, 500);
+                }, 300);
                 return; 
               }
             } catch (err) {
@@ -129,11 +152,11 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
           }
           
           if (isActive) {
-            requestAnimId = requestAnimationFrame(tick);
+            requestAnimId = setTimeout(tick, 140);
           }
         };
 
-        requestAnimId = requestAnimationFrame(tick);
+        requestAnimId = setTimeout(tick, 140);
 
       } catch (err) {
         console.error("Error iniciando cámara:", err);
@@ -145,7 +168,7 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
 
     return () => {
       isActive = false;
-      if (requestAnimId) cancelAnimationFrame(requestAnimId);
+      if (requestAnimId) clearTimeout(requestAnimId);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach(track => track.stop());
       }

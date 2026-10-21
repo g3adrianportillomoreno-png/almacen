@@ -40,7 +40,7 @@ function App() {
   }); // 'masterInventory', 'home', 'scan', 'equipmentReading', 'modelSearch', 'warehouseMap', 'operator'
 
   const [activeBatchId, setActiveBatchId] = useState(null);
-  const [batches, setBatches] = useState([]);
+  const [batches, setBatches] = useState(() => ChecklistController.getCachedChecklistsSync());
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
 
@@ -116,20 +116,6 @@ function App() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'checklists' },
-        () => {
-          triggerDebouncedRefresh();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mercadolibre_batches' },
-        () => {
-          triggerDebouncedRefresh();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'mercadolibre_items' },
         () => {
           triggerDebouncedRefresh();
         }
@@ -413,19 +399,16 @@ function App() {
     }
   };
 
-  // Si la vista es Modo Operador Móvil, renderizamos su pantalla táctil dedicada
+  // Si la vista es Modo Operador Móvil, renderizamos su pantalla táctil dedicada inmediatamente sin bloqueo
   if (view === 'operator') {
-    if (loading && batches.length === 0) {
-      return (
-        <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-300">
-          <div className="w-12 h-12 border-4 border-slate-800 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-          <p className="text-sm font-semibold tracking-wide">Iniciando Modo Operador...</p>
-        </div>
-      );
-    }
     return (
       <OperatorMobileView 
         batches={batches}
+        isLoading={loading}
+        onRefreshData={() => {
+          fetchBatches();
+          fetchMlBatches();
+        }}
         onCompleteTrailer={handleCompleteTrailer}
         onLogUnexpected={handleLogUnexpected}
         onAssignmentSaved={() => {

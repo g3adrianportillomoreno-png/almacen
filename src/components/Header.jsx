@@ -69,7 +69,7 @@ export default function Header({
               </button>
             </div>
           ) : (
-            <div className="flex items-center bg-red-800/80 p-1 rounded-xl text-xs sm:text-sm font-semibold gap-1">
+            <div className="flex flex-wrap items-center bg-red-800/80 p-1 rounded-xl text-xs sm:text-sm font-semibold gap-1">
               {/* PESTAÑA 1: INVENTARIO MAESTRO (TABLA PRINCIPAL) */}
               <button
                 onClick={() => setView('masterInventory')}

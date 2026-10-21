@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo } from 'react';
 import { extractSeriesFromExcel } from '../utils/excelParser';
-import { extractSeriesFromPDF } from '../utils/pdfParser';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import WarehouseMapView from './WarehouseMapView.jsx';
@@ -122,6 +121,7 @@ export default function HomeView({
       for (const file of files) {
         let extracted = [];
         if (file.name.toLowerCase().endsWith('.pdf')) {
+          const { extractSeriesFromPDF } = await import('../utils/pdfParser.js');
           extracted = await extractSeriesFromPDF(file, (p) => setProcessingProgress(p.message));
         } else {
           extracted = await extractSeriesFromExcel(file);

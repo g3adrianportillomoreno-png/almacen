@@ -11,6 +11,8 @@ import useOfflineSync from '../hooks/useOfflineSync.js';
 
 export default function OperatorMobileView({
   batches = [],
+  isLoading = false,
+  onRefreshData,
   onCompleteTrailer,
   onLogUnexpected,
   onAssignmentSaved,
@@ -66,7 +68,7 @@ export default function OperatorMobileView({
   }, [batches]);
 
   const activeChecklist = useMemo(() => {
-    return receptionBatches.find(b => b.id === activeChecklistId);
+    return receptionBatches.find(b => String(b.id) === String(activeChecklistId));
   }, [receptionBatches, activeChecklistId]);
 
   // Documentos en el checklist activo del operador móvil
@@ -417,6 +419,18 @@ export default function OperatorMobileView({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Botón de recargar datos */}
+          {onRefreshData && (
+            <button
+              type="button"
+              onClick={onRefreshData}
+              className="p-1.5 px-2.5 rounded-xl border bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700 text-xs font-bold transition active:scale-95 flex items-center gap-1"
+              title="Actualizar checklists e inventario"
+            >
+              <span className={isLoading ? 'animate-spin inline-block' : ''}>🔄</span>
+            </button>
+          )}
+
           {/* Botón de alternar audio */}
           <button
             type="button"
@@ -433,6 +447,7 @@ export default function OperatorMobileView({
 
           {/* Botón para regresar a modo oficina (con contraseña) */}
           <button
+            type="button"
             onClick={onRequestAdminView}
             className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center gap-1.5 transition active:scale-95"
             title="Acceso protegido a pantalla de oficina / computadora"
@@ -444,6 +459,8 @@ export default function OperatorMobileView({
           </button>
         </div>
       </header>
+
+      <OfflineSyncBanner className="mx-3 mt-2.5" />
 
       {/* MENSAJE DE ÉXITO O ALERTA */}
       {successMessage && (
@@ -654,7 +671,6 @@ export default function OperatorMobileView({
                 <input
                   type="text"
                   ref={scanInputRef}
-                  autoFocus
                   placeholder="ESCANEAR O ESCRIBIR SERIE..."
                   value={scanInput}
                   onChange={(e) => setScanInput(e.target.value)}
@@ -667,6 +683,7 @@ export default function OperatorMobileView({
                   className="flex-1 bg-slate-950 border-2 border-slate-600 focus:border-emerald-500 rounded-2xl px-4 py-3 text-sm font-mono font-bold text-white uppercase outline-none placeholder-slate-500"
                 />
                 <button
+                  type="button"
                   onClick={() => handleProcessScan(scanInput)}
                   className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 rounded-2xl text-xs transition active:scale-95"
                 >
@@ -902,15 +919,19 @@ export default function OperatorMobileView({
                                   </div>
                                   <span className="text-[11px] text-slate-400 block mt-0.5 truncate">{item.material || 'SIN MODELO'}</span>
                                 </div>
-                                <span
-                                  className={`text-[10px] font-bold px-2.5 py-1 rounded-xl border shrink-0 ${
-                                    isPresent
-                                      ? 'bg-emerald-600 text-white border-emerald-500'
-                                      : 'bg-slate-800 text-slate-400 border-slate-700'
-                                  }`}
-                                >
-                                  {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
-                                </span>
+                                  {isPresent ? (
+                                    <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl border shrink-0 bg-emerald-600 text-white border-emerald-500">
+                                      ✓ SÍ ESTÁ
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleProcessScan(item.serial)}
+                                      className="text-[10px] font-bold px-2.5 py-1.5 rounded-xl border shrink-0 bg-slate-800 hover:bg-emerald-700 text-slate-300 hover:text-white border-slate-600 active:scale-95 transition"
+                                    >
+                                      Marcar ✓
+                                    </button>
+                                  )}
                               </div>
                             );
                           })}

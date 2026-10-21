@@ -7,6 +7,13 @@ import { ChecklistModel } from '../models/ChecklistModel.js';
  */
 export class ChecklistController {
   /**
+   * Obtiene instantáneamente los lotes en caché local (0ms de espera al abrir el celular)
+   */
+  static getCachedChecklistsSync() {
+    return InventoryRepository.getCachedChecklistsSync();
+  }
+
+  /**
    * Obtiene todos los lotes actualizados
    */
   static async getChecklists() {

@@ -55,21 +55,11 @@ export class InventoryRepository {
     while (hasMore) {
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
-      let queryRes = await supabase
+      const { data, error } = await supabase
         .from('expected_series')
-        .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at, system_status')
+        .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at')
         .order('id', { ascending: true })
         .range(from, to);
-
-      if (queryRes.error) {
-        queryRes = await supabase
-          .from('expected_series')
-          .select('id, checklist_id, serial_number, material_model, is_scanned, scanned_at, warehouse_name, warehouse_row, warehouse_space, internal_number, printer_status, assigned_at')
-          .order('id', { ascending: true })
-          .range(from, to);
-      }
-
-      const { data, error } = queryRes;
 
       if (error) {
         console.error('Error paginando expected_series desde Supabase:', error);
@@ -88,6 +78,20 @@ export class InventoryRepository {
       }
     }
     return allSeries;
+  }
+
+  /**
+   * Obtiene instantáneamente los checklists desde el snapshot local (para carga en 0ms en celular)
+   */
+  static getCachedChecklistsSync() {
+    try {
+      const snapshot = OfflineSyncService.getChecklistsSnapshot();
+      if (!snapshot || snapshot.length === 0) return [];
+      const metadataCache = this.getMetadataCache();
+      return snapshot.map((fullBatch, index) => ChecklistModel.fromDb(fullBatch, index, metadataCache));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -136,8 +140,10 @@ export class InventoryRepository {
         expected_series: seriesByChecklist[dbBatch.id] || []
       }));
 
-      // Guardar snapshot de respaldo offline para el celular
-      OfflineSyncService.saveChecklistsSnapshot(fullBatchesRaw);
+      // Guardar snapshot de respaldo offline para el celular de forma diferida para no bloquear el hilo principal
+      setTimeout(() => {
+        OfflineSyncService.saveChecklistsSnapshot(fullBatchesRaw);
+      }, 50);
 
       return fullBatchesRaw.map((fullBatch, index) => {
         return ChecklistModel.fromDb(fullBatch, index, metadataCache);

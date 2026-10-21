@@ -138,17 +138,26 @@ export class MercadoLibreRepository {
     });
   }
 
+  static useFallbackCloudTables = true;
+
   /**
    * Carga todos los lotes de Mercado Libre (sincronizados en la nube entre PC y Celular)
    */
   static async fetchAllBatches() {
     try {
+      if (this.useFallbackCloudTables) {
+        const cloudFallbackModels = await this.fetchFromFallbackCloudTables();
+        this.saveLocalCache(cloudFallbackModels);
+        return cloudFallbackModels;
+      }
+
       const { data: batchesData, error: batchError } = await supabase
         .from('mercadolibre_batches')
         .select('*')
         .order('created_at', { ascending: false });
 
       if (batchError) {
+        this.useFallbackCloudTables = true;
         // Si las tablas mercadolibre_* aún no existen en Supabase, usar las tablas existentes en la nube
         const cloudFallbackModels = await this.fetchFromFallbackCloudTables();
         this.saveLocalCache(cloudFallbackModels);
