@@ -9,6 +9,8 @@ import { MercadoLibreController } from './controllers/MercadoLibreController';
 
 // Componentes y Vistas
 import Header from './components/Header';
+import OfflineSyncBanner from './components/OfflineSyncBanner';
+import { OfflineSyncService } from './services/OfflineSyncService';
 import HomeView from './components/HomeView';
 import ScanSessionView from './components/ScanSessionView';
 import ModelSearchView from './components/ModelSearchView';
@@ -138,6 +140,16 @@ function App() {
       if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
+  }, [fetchBatches, fetchMlBatches, handleLayoutChange]);
+
+  // Sincronización automática de lotes tras flush de cola offline
+  useEffect(() => {
+    const unsubscribe = OfflineSyncService.onSyncComplete(() => {
+      fetchBatches(true);
+      fetchMlBatches();
+      handleLayoutChange();
+    });
+    return () => unsubscribe();
   }, [fetchBatches, fetchMlBatches, handleLayoutChange]);
 
   // Lote activo en escaneo
@@ -452,6 +464,7 @@ function App() {
 
       {/* Contenido Principal a Pantalla Completa */}
       <main className="flex-1 flex flex-col w-full max-w-[1920px] mx-auto px-3 sm:px-6 lg:px-8 py-4">
+        <OfflineSyncBanner className="mb-3" />
         {errorMessage && (
           <div className="mb-4 bg-rose-50 border border-rose-200 text-rose-700 p-3.5 rounded-xl flex justify-between items-center text-xs font-medium">
             <div className="flex items-center gap-2">

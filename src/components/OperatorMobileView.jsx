@@ -22,6 +22,7 @@ export default function OperatorMobileView({
   onForceFinishMlBatch
 }) {
   const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
+  const { isOnline, pendingCount, isSyncing, syncNow } = useOfflineSync();
 
   // Pestaña activa del operador: 'reading' (Lectura libre / Ubicar), 'checklists' (Lotes) o 'mercadolibre'
   const [operatorTab, setOperatorTab] = useState('reading');
@@ -355,6 +356,7 @@ export default function OperatorMobileView({
             </span>
           </div>
         </header>
+      <OfflineSyncBanner className="mx-3 mt-2.5" />
         <div className="flex-1">
           <MercadoLibreScanView
             batchDetails={activeMlBatch}
@@ -388,10 +390,27 @@ export default function OperatorMobileView({
           </div>
           <div>
             <h1 className="text-sm font-bold text-white tracking-wide leading-none">MODO OPERADOR</h1>
-            <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1 mt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              En Línea (Tiempo Real)
-            </span>
+            {!isOnline ? (
+              <span className="text-[10px] text-amber-400 font-bold flex items-center gap-1 mt-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                Modo Offline (Sin Wi-Fi)
+              </span>
+            ) : pendingCount > 0 ? (
+              <button
+                type="button"
+                onClick={syncNow}
+                disabled={isSyncing}
+                className="text-[10px] text-amber-300 font-bold flex items-center gap-1 mt-0.5 hover:underline"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                {isSyncing ? 'Subiendo datos...' : `${pendingCount} pendientes (Subir)`}
+              </button>
+            ) : (
+              <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1 mt-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                En Línea (Tiempo Real)
+              </span>
+            )}
           </div>
         </div>
 

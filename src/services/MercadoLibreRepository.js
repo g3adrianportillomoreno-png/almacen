@@ -1,4 +1,5 @@
 import { supabase } from '../utils/supabaseClient.js';
+import { OfflineSyncService } from './OfflineSyncService.js';
 import { MercadoLibreBatchModel, MercadoLibreItemModel } from '../models/MercadoLibreModel.js';
 
 const STORAGE_KEY = 'cdm_mercadolibre_cache_v1';
@@ -374,29 +375,53 @@ export class MercadoLibreRepository {
     const idStr = String(itemId || '');
 
     if (!idStr.startsWith('local_item_')) {
-      try {
-        const { error } = await supabase
-          .from('mercadolibre_items')
-          .update({
-            is_scanned: true,
-            scanned_at: scannedAt,
-            scanned_with: scannedWith
-          })
-          .eq('id', itemId);
-
-        if (error) {
-          // Respaldo en tabla expected_series
-          await supabase
-            .from('expected_series')
+      if (!OfflineSyncService.isOnline()) {
+        OfflineSyncService.addToQueue('ML_REGISTER_SCAN', {
+          batchId,
+          itemId,
+          scannedAt,
+          scannedWith
+        });
+      } else {
+        try {
+          const { error } = await supabase
+            .from('mercadolibre_items')
             .update({
               is_scanned: true,
               scanned_at: scannedAt,
-              warehouse_space: scannedWith
+              scanned_with: scannedWith
             })
             .eq('id', itemId);
+
+          if (error) {
+            // Respaldo en tabla expected_series
+            const { error: fbErr } = await supabase
+              .from('expected_series')
+              .update({
+                is_scanned: true,
+                scanned_at: scannedAt,
+                warehouse_space: scannedWith
+              })
+              .eq('id', itemId);
+
+            if (fbErr) {
+              OfflineSyncService.addToQueue('ML_REGISTER_SCAN', {
+                batchId,
+                itemId,
+                scannedAt,
+                scannedWith
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("Error actualizando escaneo en Supabase. Encolando offline:", err);
+          OfflineSyncService.addToQueue('ML_REGISTER_SCAN', {
+            batchId,
+            itemId,
+            scannedAt,
+            scannedWith
+          });
         }
-      } catch (err) {
-        console.warn("Error actualizando escaneo en Supabase:", err);
       }
     }
 
@@ -422,24 +447,31 @@ export class MercadoLibreRepository {
     const bIdStr = String(batchId || '');
 
     if (!bIdStr.startsWith('ml_local_')) {
-      try {
-        const { error } = await supabase
-          .from('mercadolibre_unexpected')
-          .insert({
-            batch_id: batchId,
-            scanned_value: trimmed
-          });
-
-        if (error) {
-          await supabase
-            .from('unexpected_logs')
+      if (!OfflineSyncService.isOnline()) {
+        OfflineSyncService.addToQueue('ML_LOG_UNEXPECTED', { batchId, value: trimmed });
+      } else {
+        try {
+          const { error } = await supabase
+            .from('mercadolibre_unexpected')
             .insert({
-              checklist_id: batchId,
+              batch_id: batchId,
               scanned_value: trimmed
             });
+
+          if (error) {
+            const { error: fbErr } = await supabase
+              .from('unexpected_logs')
+              .insert({
+                checklist_id: batchId,
+                scanned_value: trimmed
+              });
+            if (fbErr) {
+              OfflineSyncService.addToQueue('ML_LOG_UNEXPECTED', { batchId, value: trimmed });
+            }
+          }
+        } catch (err) {
+          OfflineSyncService.addToQueue('ML_LOG_UNEXPECTED', { batchId, value: trimmed });
         }
-      } catch (err) {
-        console.warn("Error guardando inesperado en Supabase:", err);
       }
     }
 

@@ -172,6 +172,7 @@ export class InventoryController {
     }));
 
     const wb = XLSX.utils.book_new();
+
     const ws = XLSX.utils.json_to_sheet(dataRows);
 
     ws['!cols'] = [
@@ -282,6 +283,8 @@ export class InventoryController {
     }));
 
     const wb = XLSX.utils.book_new();
+
+
     const ws = XLSX.utils.json_to_sheet(dataRows);
     ws['!cols'] = [
       { wch: 6 },
@@ -335,6 +338,8 @@ export class InventoryController {
       ? 'COMPLETADO (100% Recibido)' 
       : (isClosedWithPending ? `CERRADO CON FALTANTES (${faltantes.length} faltantes)` : 'EN PROCESO / PENDIENTE');
 
+    const wb = XLSX.utils.book_new();
+
     // Desglose por Documento de Origen
     const docMap = new Map();
     for (const p of expected) {
@@ -352,8 +357,6 @@ export class InventoryController {
       }
     }
     const hasMultipleDocs = docMap.size > 1;
-
-    const wb = XLSX.utils.book_new();
 
     // 1. Hoja RESUMEN
     const resumenData = [

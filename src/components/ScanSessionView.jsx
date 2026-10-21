@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
+import OfflineSyncBanner from './OfflineSyncBanner';
 import { InventoryController } from '../controllers/InventoryController';
 import { findSerialMatch } from '../utils/serialMatcher';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects';
@@ -353,6 +354,8 @@ export default function ScanSessionView({
           </div>
         </div>
       </div>
+
+      <OfflineSyncBanner className="w-full" />
 
       {/* Barra de progreso del Checklist */}
       <div className="w-full bg-slate-200 rounded-full h-2">

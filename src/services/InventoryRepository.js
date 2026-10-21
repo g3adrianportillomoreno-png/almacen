@@ -1,4 +1,5 @@
 import { supabase } from '../utils/supabaseClient.js';
+import { OfflineSyncService } from './OfflineSyncService.js';
 import { ChecklistModel } from '../models/ChecklistModel.js';
 import { WarehouseMapModel } from '../models/WarehouseMapModel.js';
 
@@ -94,49 +95,64 @@ export class InventoryRepository {
    * Carga la totalidad de las series sin límite de 1000 registros.
    */
   static async fetchAllChecklists() {
-    // 1. Obtener la lista de checklists con sus logs inesperados
-    const { data: checklistsData, error: checklistsError } = await supabase
-      .from('checklists')
-      .select(`
-        id, name, created_at, status,
-        unexpected_logs (id, scanned_value, created_at)
-      `)
-      .order('created_at', { ascending: false });
-
-    if (checklistsError) {
-      console.error('Error al obtener checklists desde Supabase:', checklistsError);
-      throw checklistsError;
-    }
-
-    // 2. Obtener todas las series esperadas con paginación completa (superando el límite de 1000)
-    const allExpectedSeries = await this.fetchAllExpectedSeries();
-
-    // 3. Agrupar las series esperadas por su checklist_id
-    const seriesByChecklist = {};
-    for (const item of allExpectedSeries) {
-      if (!seriesByChecklist[item.checklist_id]) {
-        seriesByChecklist[item.checklist_id] = [];
-      }
-      seriesByChecklist[item.checklist_id].push(item);
-    }
-
     const metadataCache = this.getMetadataCache();
 
-    // 4. Mapear cada registro de BD al modelo ChecklistModel inyectando sus series completas
-    // Excluir lotes de Mercado Libre que usan la tabla checklists como respaldo en la nube
-    const validChecklists = (checklistsData || []).filter(dbBatch => {
-      const nm = (dbBatch.name || '').trim().toUpperCase();
-      const fl = (dbBatch.folio || '').trim().toUpperCase();
-      return !nm.startsWith('[ML-') && !fl.startsWith('ML-');
-    });
+    try {
+      // 1. Obtener la lista de checklists con sus logs inesperados
+      const { data: checklistsData, error: checklistsError } = await supabase
+        .from('checklists')
+        .select(`
+          id, name, created_at, status,
+          unexpected_logs (id, scanned_value, created_at)
+        `)
+        .order('created_at', { ascending: false });
 
-    return validChecklists.map((dbBatch, index) => {
-      const fullBatch = {
+      if (checklistsError) {
+        throw checklistsError;
+      }
+
+      // 2. Obtener todas las series esperadas con paginación completa (superando el límite de 1000)
+      const allExpectedSeries = await this.fetchAllExpectedSeries();
+
+      // 3. Agrupar las series esperadas por su checklist_id
+      const seriesByChecklist = {};
+      for (const item of allExpectedSeries) {
+        if (!seriesByChecklist[item.checklist_id]) {
+          seriesByChecklist[item.checklist_id] = [];
+        }
+        seriesByChecklist[item.checklist_id].push(item);
+      }
+
+      // 4. Mapear cada registro de BD al modelo ChecklistModel inyectando sus series completas
+      // Excluir lotes de Mercado Libre que usan la tabla checklists como respaldo en la nube
+      const validChecklists = (checklistsData || []).filter(dbBatch => {
+        const nm = (dbBatch.name || '').trim().toUpperCase();
+        const fl = (dbBatch.folio || '').trim().toUpperCase();
+        return !nm.startsWith('[ML-') && !fl.startsWith('ML-');
+      });
+
+      const fullBatchesRaw = validChecklists.map(dbBatch => ({
         ...dbBatch,
         expected_series: seriesByChecklist[dbBatch.id] || []
-      };
-      return ChecklistModel.fromDb(fullBatch, index, metadataCache);
-    });
+      }));
+
+      // Guardar snapshot de respaldo offline para el celular
+      OfflineSyncService.saveChecklistsSnapshot(fullBatchesRaw);
+
+      return fullBatchesRaw.map((fullBatch, index) => {
+        return ChecklistModel.fromDb(fullBatch, index, metadataCache);
+      });
+    } catch (err) {
+      console.warn('Advertencia cargando checklists desde Supabase (posible desconexión):', err.message);
+      const snapshot = OfflineSyncService.getChecklistsSnapshot();
+      if (snapshot && snapshot.length > 0) {
+        console.log('📶 Modo fuera de línea: usando snapshot local de checklists');
+        return snapshot.map((fullBatch, index) => {
+          return ChecklistModel.fromDb(fullBatch, index, metadataCache);
+        });
+      }
+      throw err;
+    }
   }
 
   /**
@@ -278,8 +294,9 @@ export class InventoryRepository {
     cache.serials = cache.serials || {};
     const existing = cache.serials[serial] || {};
     const row = warehouseRow || existing.warehouseRow || 'Sin Asignar';
+    const nowIso = new Date().toISOString();
 
-    // 1. Guardar en caché local
+    // 1. Guardar inmediatamente en caché local de este dispositivo (0ms de latencia)
     cache.serials[serial] = {
       ...existing,
       isScanned: true,
@@ -289,11 +306,23 @@ export class InventoryRepository {
     };
     this.saveMetadataCache(cache);
 
-    // 2. Actualizar en Supabase
+    // 2. Si no hay conexión a internet, encolar de inmediato para sincronizar al volver el Wi-Fi
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('REGISTER_SCAN', {
+        checklistId,
+        serialNumber: serial,
+        warehouseRow: row,
+        internalNumber,
+        scannedAt: nowIso
+      });
+      return;
+    }
+
+    // 3. Si hay conexión, intentar actualizar en Supabase
     const numVal = internalNumber !== null && internalNumber !== undefined && !isNaN(Number(internalNumber)) ? Number(internalNumber) : null;
     const updatePayload = {
       is_scanned: true,
-      scanned_at: new Date().toISOString(),
+      scanned_at: nowIso,
       warehouse_row: row
     };
     if (numVal !== null) {
@@ -308,25 +337,36 @@ export class InventoryRepository {
         .eq('serial_number', serial);
 
       if (fullError) {
-        await supabase
+        const { error: fbErr } = await supabase
           .from('expected_series')
           .update({
             is_scanned: true,
-            scanned_at: new Date().toISOString(),
+            scanned_at: nowIso,
             warehouse_row: row
           })
           .eq('checklist_id', checklistId)
           .eq('serial_number', serial);
+
+        if (fbErr) {
+          // Si falló por red o error de servidor, encolar para sincronización garantizada
+          OfflineSyncService.addToQueue('REGISTER_SCAN', {
+            checklistId,
+            serialNumber: serial,
+            warehouseRow: row,
+            internalNumber,
+            scannedAt: nowIso
+          });
+        }
       }
-    } catch {
-      await supabase
-        .from('expected_series')
-        .update({
-          is_scanned: true,
-          scanned_at: new Date().toISOString()
-        })
-        .eq('checklist_id', checklistId)
-        .eq('serial_number', serial);
+    } catch (networkErr) {
+      console.warn('Fallo de red al registrar escaneo. Guardando en cola offline:', networkErr);
+      OfflineSyncService.addToQueue('REGISTER_SCAN', {
+        checklistId,
+        serialNumber: serial,
+        warehouseRow: row,
+        internalNumber,
+        scannedAt: nowIso
+      });
     }
   }
 
@@ -453,6 +493,22 @@ export class InventoryRepository {
     };
     this.saveMetadataCache(cache);
 
+    const nowIso = new Date().toISOString();
+
+    // Si está offline, guardar en la cola para sincronizar al volver el Wi-Fi
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('ASSIGN_LOCATION', {
+        serialNumber: serial,
+        warehouseName: finalWh,
+        warehouseRow: finalRow,
+        warehouseSpace: finalSpace,
+        internalNumber: finalInternal,
+        systemStatus: finalSystemStatus,
+        scannedAt: nowIso
+      });
+      return cache.serials[serial];
+    }
+
     // Intentar actualizar en Supabase
     try {
       const numVal = !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
@@ -467,13 +523,13 @@ export class InventoryRepository {
           printer_status: encodedStatus,
           system_status: finalSystemStatus,
           is_scanned: true,
-          scanned_at: new Date().toISOString()
+          scanned_at: nowIso
         })
         .eq('serial_number', serial);
 
       if (error) {
-        // Fallback si aún no existe la columna system_status en Supabase (guarda el Estado dentro de printer_status)
-        await supabase
+        // Fallback si aún no existe la columna system_status en Supabase
+        const { error: fbErr } = await supabase
           .from('expected_series')
           .update({
             warehouse_name: finalWh,
@@ -482,12 +538,33 @@ export class InventoryRepository {
             internal_number: numVal,
             printer_status: encodedStatus,
             is_scanned: true,
-            scanned_at: new Date().toISOString()
+            scanned_at: nowIso
           })
           .eq('serial_number', serial);
+
+        if (fbErr) {
+          OfflineSyncService.addToQueue('ASSIGN_LOCATION', {
+            serialNumber: serial,
+            warehouseName: finalWh,
+            warehouseRow: finalRow,
+            warehouseSpace: finalSpace,
+            internalNumber: finalInternal,
+            systemStatus: finalSystemStatus,
+            scannedAt: nowIso
+          });
+        }
       }
     } catch (e) {
-      console.warn('Persistencia en base de datos tolerante a fallos:', e);
+      console.warn('Fallo de red en asignación. Guardando en cola offline:', e);
+      OfflineSyncService.addToQueue('ASSIGN_LOCATION', {
+        serialNumber: serial,
+        warehouseName: finalWh,
+        warehouseRow: finalRow,
+        warehouseSpace: finalSpace,
+        internalNumber: finalInternal,
+        systemStatus: finalSystemStatus,
+        scannedAt: nowIso
+      });
     }
 
     return cache.serials[serial];
@@ -497,22 +574,41 @@ export class InventoryRepository {
    * Registra una serie inesperada / no registrada en el lote
    */
   static async logUnexpectedScan(checklistId, serialNumber) {
-    await supabase
-      .from('unexpected_logs')
-      .insert({
-        checklist_id: checklistId,
-        scanned_value: serialNumber.trim().toUpperCase()
-      });
+    const val = serialNumber.trim().toUpperCase();
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('LOG_UNEXPECTED', { checklistId, serialNumber: val });
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('unexpected_logs')
+        .insert({
+          checklist_id: checklistId,
+          scanned_value: val
+        });
+      if (error) throw error;
+    } catch (e) {
+      OfflineSyncService.addToQueue('LOG_UNEXPECTED', { checklistId, serialNumber: val });
+    }
   }
 
   /**
    * Marca un checklist como completado
    */
   static async markChecklistCompleted(checklistId) {
-    await supabase
-      .from('checklists')
-      .update({ status: 'completed' })
-      .eq('id', checklistId);
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('MARK_CHECKLIST_COMPLETED', { checklistId });
+      return;
+    }
+    try {
+      const { error } = await supabase
+        .from('checklists')
+        .update({ status: 'completed' })
+        .eq('id', checklistId);
+      if (error) throw error;
+    } catch (e) {
+      OfflineSyncService.addToQueue('MARK_CHECKLIST_COMPLETED', { checklistId });
+    }
   }
 
   /**
