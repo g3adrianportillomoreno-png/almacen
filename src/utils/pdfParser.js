@@ -5,18 +5,22 @@ import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 /**
- * Preprocesa un Canvas de HTML5 aumentando el contraste y eliminando ruido de fondo
- * (sombras de escáner, manchas de fotocopiadora, fondo grisáceo).
- * Deja el texto en negro puro y el fondo en blanco puro para que Tesseract alcance 99%+ de precisión.
+ * Preprocesa un Canvas de HTML5 aumentando el contraste, eliminando ruido de fondo
+ * (sombras de escáner, manchas de fotocopiadora, fondo grisáceo) y aplicando cierre morfológico
+ * de 1px para reconectar trazos finos cortados en dígitos escaneados por fax (ej. 6->3, 9->2).
  */
 function preprocessCanvasForOcr(canvas) {
   try {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const width = canvas.width;
+    const height = canvas.height;
+    const imgData = ctx.getImageData(0, 0, width, height);
     const data = imgData.data;
 
-    for (let i = 0; i < data.length; i += 4) {
+    // Paso 1: Binarización adaptativa y limpieza de fondo grisáceo
+    const grayBuf = new Uint8Array(width * height);
+    for (let i = 0, p = 0; i < data.length; i += 4, p++) {
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
@@ -24,10 +28,33 @@ function preprocessCanvasForOcr(canvas) {
       const gray = (r * 299 + g * 587 + b * 114) / 1000;
 
       // Umbral adaptativo: fondo claro/gris a blanco puro (255), trazo oscuro a negro puro (0)
-      const clean = gray > 180 ? 255 : (gray < 115 ? 0 : Math.max(0, (gray - 60) * 1.6));
+      const clean = gray > 185 ? 255 : (gray < 125 ? 0 : Math.max(0, Math.min(255, Math.round((gray - 65) * 1.7))));
+      grayBuf[p] = clean;
       data[i] = clean;
       data[i + 1] = clean;
       data[i + 2] = clean;
+    }
+
+    // Paso 2: Cierre morfológico ligero (1px) para reconectar trazos finos cortados en dígitos (ej. 6->3, 9->2)
+    for (let y = 1; y < height - 1; y++) {
+      const rowOffset = y * width;
+      for (let x = 1; x < width - 1; x++) {
+        const idx = rowOffset + x;
+        let val = grayBuf[idx];
+        if (val > 128) {
+          const left = grayBuf[idx - 1] < 80;
+          const right = grayBuf[idx + 1] < 80;
+          const top = grayBuf[idx - width] < 80;
+          const bottom = grayBuf[idx + width] < 80;
+          if ((left && right) || (top && bottom)) {
+            val = 0;
+            const rgbaIdx = idx * 4;
+            data[rgbaIdx] = 0;
+            data[rgbaIdx + 1] = 0;
+            data[rgbaIdx + 2] = 0;
+          }
+        }
+      }
     }
     ctx.putImageData(imgData, 0, 0);
   } catch (e) {
@@ -37,7 +64,8 @@ function preprocessCanvasForOcr(canvas) {
 
 /**
  * Extrae directamente imágenes CCITTFaxDecode (Group 4) de PDFs escaneados en fotocopiadoras (Sharp, Ricoh, Brother)
- * y las empaqueta en buffers TIFF en memoria para que Tesseract las lea al instante sin depender de pdfjs canvas/WASM.
+ * y las empaqueta en buffers TIFF en memoria con metadatos de resolución 300 DPI para que Tesseract/Leptonica
+ * escale los trazos finos de forma óptima sin depender de pdfjs canvas/WASM.
  */
 function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
   const tiffBuffers = [];
@@ -85,10 +113,11 @@ function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
 
     const ccittData = uint8Array.subarray(dataStart, dataEnd);
     if (ccittData.length > 100) {
-      const numTags = 8;
+      const numTags = 11;
       const ifdOffset = 8;
       const ifdSize = 2 + numTags * 12 + 4;
-      const pixelOffset = ifdOffset + ifdSize;
+      const resOffset = ifdOffset + ifdSize; // 16 bytes para XResolution y YResolution (300/1 DPI)
+      const pixelOffset = resOffset + 16;
       const tiff = new Uint8Array(pixelOffset + ccittData.length);
       const view = new DataView(tiff.buffer);
 
@@ -118,7 +147,16 @@ function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
       writeTag(273, 4, 1, pixelOffset);       // StripOffsets
       writeTag(278, 4, 1, height);            // RowsPerStrip
       writeTag(279, 4, 1, ccittData.length);  // StripByteCounts
+      writeTag(282, 5, 1, resOffset);         // XResolution (300 DPI)
+      writeTag(283, 5, 1, resOffset + 8);     // YResolution (300 DPI)
+      writeTag(296, 3, 1, 2);                 // ResolutionUnit = 2 (Inch)
       view.setUint32(pos, 0, true);           // Next IFD = 0
+
+      // Escribir RATIONAL 300/1 para XResolution y YResolution
+      view.setUint32(resOffset, 300, true);
+      view.setUint32(resOffset + 4, 1, true);
+      view.setUint32(resOffset + 8, 300, true);
+      view.setUint32(resOffset + 12, 1, true);
 
       tiff.set(ccittData, pixelOffset);
       tiffBuffers.push(new Blob([tiff], { type: 'image/tiff' }));
@@ -132,16 +170,17 @@ function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
 
 /**
  * Analiza el texto extraído (ya sea de capa nativa o de OCR) y devuelve la lista [{ serial, material }]
- * Motor Inteligente de Corrección Estructural Multi-Marca:
+ * Motor Inteligente de Corrección Estructural y Consenso Estadístico de Lote:
  * 1. Resuelve saltos de espacio del OCR a mitad de la serie (ej. "U65160C6HT 66699").
  * 2. Soporta múltiples series en un mismo renglón antes del pedimento.
- * 3. Corrige caracteres fantasma por manchas de escáner en series de 16 o 17 caracteres.
+ * 3. Corrige caracteres fantasma por manchas de escáner en series de 16 o 17 caracteres,
+ *    distinguiendo si el carácter fantasma está en el prefijo (pos 0..8) o en el sufijo numérico (pos 9..15, ej. U66653F6N6492812 -> U66653F6N649812).
  * 4. Corrige confusión T/7, O/0, I/1, S/5, G/6, B/8, Z/2 en las posiciones estrictamente numéricas.
  * 5. Reconstruye el mes Brother en la posición 6 (letras A..M, ej. '0'->'D', '8'->'B').
- * 6. Valida y sincroniza el prefijo de 9 caracteres por Pedimento y Modelo dominante del lote.
- * 7. Extrae series de otras marcas (Sharp, HP, Ricoh, Canon, Kyocera, Lexmark) y detecta modelos.
+ * 6. Repara dígitos de secuencia aislados por rotura de trazo en fax (ej. 350226 -> 650226, 642806 -> 649806)
+ *    mediante análisis de clústeres de sub-prefijos y proximidad de vecinos en el lote.
  */
-function parseSeriesFromText(rawText) {
+export function parseSeriesFromText(rawText) {
   const items = [];
   const seenSerials = new Set();
 
@@ -265,11 +304,14 @@ function parseSeriesFromText(rawText) {
   }
 
   // 3. Análisis de consenso del lote:
-  // Determina el código de modelo Brother dominante (5 dígitos en pos 1..5), letra de planta (pos 8)
-  // y relación Pedimento -> Prefijo de 9 caracteres
+  // Determina el código de modelo Brother dominante (5 dígitos en pos 1..5), letra de planta (pos 8),
+  // relación Pedimento -> Prefijo de 9 caracteres, y clústeres de secuencias numéricas de 6 dígitos
   const model5Counts = {};
   const plantCounts = {};
   const pedimentoToPrefix9 = {};
+  const seq3Counts = {};
+  const seq4Counts = {};
+  const validSeq6Set = new Set();
 
   for (const entry of rawEntries) {
     const c = entry.rawSerial;
@@ -277,8 +319,16 @@ function parseSeriesFromText(rawText) {
       const m5 = c.slice(1, 6);
       const plant = c[8];
       const prefix9 = c.slice(0, 9);
+      const seq6 = c.slice(9, 15);
+      const s3 = seq6.slice(0, 3);
+      const s4 = seq6.slice(0, 4);
+
       model5Counts[m5] = (model5Counts[m5] || 0) + 1;
       plantCounts[plant] = (plantCounts[plant] || 0) + 1;
+      seq3Counts[s3] = (seq3Counts[s3] || 0) + 1;
+      seq4Counts[s4] = (seq4Counts[s4] || 0) + 1;
+      validSeq6Set.add(seq6);
+
       if (entry.pedimento) {
         pedimentoToPrefix9[entry.pedimento] = prefix9;
       }
@@ -303,6 +353,8 @@ function parseSeriesFromText(rawText) {
     }
   }
 
+  const validSeq6Nums = Array.from(validSeq6Set).map((s) => parseInt(s, 10));
+
   // 4. Reparador Maestro de Series Brother (Normaliza a 15 caracteres exactos)
   const normalizeBrotherSerial = (rawCandidate) => {
     let clean = rawCandidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
@@ -314,40 +366,103 @@ function parseSeriesFromText(rawText) {
 
     // CASO A: 16 o 17 caracteres (el escáner insertó caracteres o manchas fantasma)
     if ((clean.length === 16 || clean.length === 17) && clean.startsWith('U')) {
-      const last6 = clean.slice(-6).split('').map(fixDigit).join('');
-      if (/^\d{6}$/.test(last6)) {
-        const prefixPart = clean.slice(0, clean.length - 6);
-        let bestCandidate = null;
+      // Subcaso A1: Verificar primero si los primeros 9 caracteres YA forman un prefijo Brother válido
+      // (ej. U66653F6N6492812 donde 'U66653F6N' es válido y el carácter fantasma '2' está en los últimos 7 dígitos '6492812')
+      const pDigits9 = clean.slice(1, 6).split('').map(fixDigit).join('');
+      let mChar9 = clean[6];
+      if (mChar9 === '0' || mChar9 === 'O') mChar9 = 'D';
+      if (mChar9 === '8') mChar9 = 'B';
+      if (mChar9 === '6') mChar9 = 'G';
+      const yDigit9 = fixDigit(clean[7]);
+      let plChar9 = clean[8];
+      if (dominantPlant && !/[A-Z]/.test(plChar9)) {
+        plChar9 = dominantPlant;
+      }
 
-        // Probar remover cada posición sobrante para alcanzar los 9 caracteres de prefijo
-        for (let removeIdx = prefixPart.length - 1; removeIdx >= 1; removeIdx--) {
-          const candidate9 = prefixPart.slice(0, removeIdx) + prefixPart.slice(removeIdx + 1);
-          if (candidate9.length !== 9) continue;
+      const isPrefix9Valid =
+        /^\d{5}$/.test(pDigits9) &&
+        /[A-Z]/.test(mChar9) &&
+        /^\d$/.test(yDigit9) &&
+        /[A-Z]/.test(plChar9) &&
+        (!dominantModel5 || pDigits9 === dominantModel5);
 
-          const pDigits = candidate9.slice(1, 6).split('').map(fixDigit).join('');
-          let monthChar = candidate9[6];
-          if (monthChar === '0' || monthChar === 'O') monthChar = 'D';
-          if (monthChar === '8') monthChar = 'B';
-          if (monthChar === '6') monthChar = 'G';
+      const suffixRaw = clean.slice(9).split('').map(fixDigit).join('');
 
-          const yearDigit = fixDigit(candidate9[7]);
-          let plantChar = candidate9[8];
-          if (dominantPlant && !/[A-Z]/.test(plantChar)) {
-            plantChar = dominantPlant;
+      if (isPrefix9Valid && /^\d{7,8}$/.test(suffixRaw)) {
+        const validPrefix9 = 'U' + pDigits9 + mChar9 + yDigit9 + plChar9;
+        let bestSuffix6 = null;
+        let bestScore = -Infinity;
+
+        const testSuffix6 = (cand6) => {
+          if (cand6.length !== 6 || !/^\d{6}$/.test(cand6)) return;
+          const s4 = cand6.slice(0, 4);
+          const s3 = cand6.slice(0, 3);
+          let score = (seq4Counts[s4] || 0) * 100 + (seq3Counts[s3] || 0) * 20;
+          const cNum = parseInt(cand6, 10);
+          let minDist = Infinity;
+          for (const n of validSeq6Nums) {
+            const d = Math.abs(cNum - n);
+            if (d > 0 && d < minDist) minDist = d;
           }
+          if (minDist <= 25) score += 60 - minDist;
+          if (validSeq6Set.has(cand6)) score -= 80; // Evitar colisión con otra serie ya existente
+          if (score > bestScore) {
+            bestScore = score;
+            bestSuffix6 = cand6;
+          }
+        };
 
-          if (/^\d{5}$/.test(pDigits) && /[A-Z]/.test(monthChar) && /^\d$/.test(yearDigit) && /[A-Z]/.test(plantChar)) {
-            const built = 'U' + pDigits + monthChar + yearDigit + plantChar + last6;
-            if (!bestCandidate) bestCandidate = built;
-            if (dominantModel5 && pDigits === dominantModel5 && (!dominantPlant || plantChar === dominantPlant)) {
-              bestCandidate = built;
-              break;
+        if (suffixRaw.length === 7) {
+          for (let rm = 0; rm < 7; rm++) {
+            testSuffix6(suffixRaw.slice(0, rm) + suffixRaw.slice(rm + 1));
+          }
+        } else if (suffixRaw.length === 8) {
+          for (let rm1 = 0; rm1 < 8; rm1++) {
+            for (let rm2 = rm1 + 1; rm2 < 8; rm2++) {
+              testSuffix6(suffixRaw.slice(0, rm1) + suffixRaw.slice(rm1 + 1, rm2) + suffixRaw.slice(rm2 + 1));
             }
           }
         }
 
-        if (bestCandidate) {
-          clean = bestCandidate;
+        if (bestSuffix6) {
+          clean = validPrefix9 + bestSuffix6;
+        }
+      } else {
+        // Subcaso A2: El carácter fantasma está en el prefijo (los últimos 6 dígitos son la secuencia)
+        const last6 = clean.slice(-6).split('').map(fixDigit).join('');
+        if (/^\d{6}$/.test(last6)) {
+          const prefixPart = clean.slice(0, clean.length - 6);
+          let bestCandidate = null;
+
+          for (let removeIdx = prefixPart.length - 1; removeIdx >= 1; removeIdx--) {
+            const candidate9 = prefixPart.slice(0, removeIdx) + prefixPart.slice(removeIdx + 1);
+            if (candidate9.length !== 9) continue;
+
+            const pDigits = candidate9.slice(1, 6).split('').map(fixDigit).join('');
+            let monthChar = candidate9[6];
+            if (monthChar === '0' || monthChar === 'O') monthChar = 'D';
+            if (monthChar === '8') monthChar = 'B';
+            if (monthChar === '6') monthChar = 'G';
+
+            const yearDigit = fixDigit(candidate9[7]);
+            let plantChar = candidate9[8];
+            if (dominantPlant && !/[A-Z]/.test(plantChar)) {
+              plantChar = dominantPlant;
+            }
+
+            if (/^\d{5}$/.test(pDigits) && /[A-Z]/.test(monthChar) && /^\d$/.test(yearDigit) && /[A-Z]/.test(plantChar)) {
+              const built = 'U' + pDigits + monthChar + yearDigit + plantChar + last6;
+              if (!bestCandidate) bestCandidate = built;
+              if (dominantModel5 && pDigits === dominantModel5 && (!dominantPlant || plantChar === dominantPlant)) {
+                bestCandidate = built;
+                break;
+              }
+            }
+          }
+
+          if (bestCandidate) {
+            clean = bestCandidate;
+          }
         }
       }
     }
@@ -402,7 +517,7 @@ function parseSeriesFromText(rawText) {
       }
     }
 
-    // Solo aceptar números de serie que empiecen estrictamente con 'U' y tengan estructura válida de serie (excluyendo modelos como MFCT4500DW, MFCL8970CDW o facturas MXF...)
+    // Solo aceptar números de serie que empiecen estrictamente con 'U' y tengan estructura válida de serie
     if (
       clean.startsWith('U') &&
       clean.length >= 13 &&
@@ -412,6 +527,113 @@ function parseSeriesFromText(rawText) {
       if (!seenSerials.has(clean)) {
         seenSerials.add(clean);
         items.push({ serial: clean, material: materialRaw });
+      }
+    }
+  }
+
+  // 6. Reparación Estadística de Clústeres de Secuencia (Outliers en los primeros 3 dígitos del consecutivo)
+  // Ejemplo real: En un lote de 96 equipos 'U66653F6N' cuyos consecutivos son '649xxx' (35 eq) y '650xxx' (58 eq),
+  // si el OCR leyó '350226' (en vez de '650226'), '642806' (en vez de '649806') o '492812' (en vez de '649812'),
+  // detectamos que '350', '642' o '492' tienen frecuencia 1 y están aislados, y los reparamos al clúster con vecinos contiguos.
+  const byPrefix9 = {};
+  for (let idx = 0; idx < items.length; idx++) {
+    const s = items[idx].serial;
+    if (s.length === 15 && /^U\d{5}[A-Z]\d[A-Z]\d{6}$/.test(s)) {
+      const p9 = s.slice(0, 9);
+      if (!byPrefix9[p9]) byPrefix9[p9] = [];
+      byPrefix9[p9].push(idx);
+    }
+  }
+
+  for (const [p9, indices] of Object.entries(byPrefix9)) {
+    if (indices.length < 4) continue;
+
+    const groupSeq3Counts = {};
+    const groupSeq4Counts = {};
+    const groupNums = [];
+
+    for (const i of indices) {
+      const seq6 = items[i].serial.slice(9, 15);
+      const s3 = seq6.slice(0, 3);
+      const s4 = seq6.slice(0, 4);
+      groupSeq3Counts[s3] = (groupSeq3Counts[s3] || 0) + 1;
+      groupSeq4Counts[s4] = (groupSeq4Counts[s4] || 0) + 1;
+      groupNums.push({ idx: i, num: parseInt(seq6, 10), seq6 });
+    }
+
+    const majorSeq3List = Object.entries(groupSeq3Counts)
+      .filter(([, cnt]) => cnt >= 2)
+      .map(([s3]) => s3);
+
+    if (majorSeq3List.length === 0) continue;
+
+    for (const i of indices) {
+      const currentSerial = items[i].serial;
+      const seq6 = currentSerial.slice(9, 15);
+      const s3 = seq6.slice(0, 3);
+      if (groupSeq3Counts[s3] > 1) continue; // Pertenece a un clúster válido
+
+      const currentNum = parseInt(seq6, 10);
+      let minDistSelf = Infinity;
+      for (const gn of groupNums) {
+        if (gn.idx === i) continue;
+        const d = Math.abs(currentNum - gn.num);
+        if (d < minDistSelf) minDistSelf = d;
+      }
+
+      // Solo reparar si está numéricamente aislado (> 100 de distancia a cualquier otro equipo del mismo prefijo)
+      if (minDistSelf <= 100) continue;
+
+      const candidateSeq6Set = new Set();
+
+      for (const majS3 of majorSeq3List) {
+        // Caso 1: Sustitución de 1 dígito en los primeros 3 dígitos del consecutivo (ej. 350->650, 642->649)
+        let diffs = 0;
+        for (let k = 0; k < 3; k++) {
+          if (s3[k] !== majS3[k]) diffs++;
+        }
+        if (diffs === 1) {
+          candidateSeq6Set.add(majS3 + seq6.slice(3));
+        }
+
+        // Caso 2: Desplazamiento por pérdida del primer dígito e inserción fantasma (ej. 492812 -> 6 + 492812 sin '2' -> 649812)
+        if (majS3.slice(1) === s3.slice(0, 2)) {
+          const expanded7 = majS3[0] + seq6;
+          for (let rm = 2; rm < 7; rm++) {
+            const rebuilt6 = expanded7.slice(0, rm) + expanded7.slice(rm + 1);
+            if (rebuilt6.startsWith(majS3)) {
+              candidateSeq6Set.add(rebuilt6);
+            }
+          }
+        }
+      }
+
+      let bestReplacementSerial = null;
+      let bestMinDist = Infinity;
+
+      for (const candSeq6 of candidateSeq6Set) {
+        const candSerial = p9 + candSeq6;
+        if (seenSerials.has(candSerial)) continue;
+
+        const candNum = parseInt(candSeq6, 10);
+        let minDist = Infinity;
+        for (const gn of groupNums) {
+          if (gn.idx === i) continue;
+          const d = Math.abs(candNum - gn.num);
+          if (d < minDist) minDist = d;
+        }
+
+        // Si el candidato cae dentro del bloque secuencial del lote (vecino a <= 60 números de distancia)
+        if (minDist <= 60 && minDist < bestMinDist) {
+          bestMinDist = minDist;
+          bestReplacementSerial = candSerial;
+        }
+      }
+
+      if (bestReplacementSerial) {
+        seenSerials.delete(currentSerial);
+        seenSerials.add(bestReplacementSerial);
+        items[i].serial = bestReplacementSerial;
       }
     }
   }
@@ -494,7 +716,7 @@ export async function extractSeriesFromPDF(file, onProgress = null) {
 
             await page.render({ canvasContext: context, viewport }).promise;
 
-            // Filtro de binarización y contraste: elimina manchas y fondos sucios
+            // Filtro de binarización, contraste y cierre morfológico
             preprocessCanvasForOcr(canvas);
 
             const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
