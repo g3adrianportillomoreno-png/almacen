@@ -1207,4 +1207,460 @@ export class InventoryRepository {
       console.error('Error depurando checklists:', e);
     }
   }
+
+  /**
+   * Fusiona dos o más checklists existentes en un solo checklist destino (`targetChecklistId`):
+   * - Combina todas las series esperadas sin duplicados (modo 'UNION') o actualiza la lista base conservando todo lo escaneado (modo 'BASE_LIST').
+   * - Conserva el 100% de las lecturas ya verificadas (`is_scanned = true`), filas, espacios y números internos de cualquiera de los checklists.
+   * - Cruza automáticamente las lecturas en `unexpected_logs` (errores escaneados): si una serie que había dado error en un checklist
+   *   sí existe en las series esperadas del otro checklist, pasa automáticamente a VERIFICADA (`is_scanned = true`) y se limpia del log de errores.
+   */
+  static async mergeChecklists({
+    targetChecklistId,
+    sourceChecklistIds = [],
+    mode = 'UNION',
+    baseListChecklistId = null,
+    deleteSources = true
+  }) {
+    const cleanSources = (sourceChecklistIds || []).filter(id => id && String(id) !== String(targetChecklistId));
+    if (!targetChecklistId || cleanSources.length === 0) {
+      throw new Error('Selecciona al menos dos checklists para fusionar.');
+    }
+
+    const allIds = [targetChecklistId, ...cleanSources];
+    const nowIso = new Date().toISOString();
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+
+    // 1. Obtener todas las series esperadas y todos los logs de error de los checklists seleccionados
+    const { data: dbSeries, error: seriesErr } = await supabase
+      .from('expected_series')
+      .select('*')
+      .in('checklist_id', allIds);
+
+    if (seriesErr) {
+      throw new Error(`Error leyendo series para fusionar: ${seriesErr.message}`);
+    }
+
+    const { data: dbUnexpected } = await supabase
+      .from('unexpected_logs')
+      .select('*')
+      .in('checklist_id', allIds);
+
+    // 2. Mapear errores escaneados (unexpected_logs) para cruce automático de correspondencias
+    const unexpectedBySerial = new Map();
+    const rawUnexpectedList = [];
+    for (const log of (dbUnexpected || [])) {
+      const rawVal = String(log.scanned_value || '').trim().toUpperCase();
+      if (!rawVal) continue;
+      const parts = rawVal.split('|');
+      const cleanSerial = parts[0].trim();
+      const extraRow = parts[1] ? parts[1].trim() : null;
+      if (cleanSerial && !unexpectedBySerial.has(cleanSerial)) {
+        unexpectedBySerial.set(cleanSerial, {
+          rawVal,
+          cleanSerial,
+          extraRow,
+          createdAt: log.created_at || nowIso
+        });
+      }
+      rawUnexpectedList.push({ ...log, cleanSerial, rawVal });
+    }
+
+    // 3. Consolidar el estado de cada número de serie entre todos los checklists seleccionados
+    const consolidatedBySerial = new Map();
+    const targetExistingBySerial = new Map();
+    const effectiveBaseId = baseListChecklistId || targetChecklistId;
+    const baseChecklistSerials = new Set();
+
+    for (const row of (dbSeries || [])) {
+      const serial = String(row.serial_number || '').trim().toUpperCase();
+      if (!serial) continue;
+
+      if (String(row.checklist_id) === String(targetChecklistId)) {
+        targetExistingBySerial.set(serial, row);
+      }
+      if (String(row.checklist_id) === String(effectiveBaseId)) {
+        baseChecklistSerials.add(serial);
+      }
+
+      const prev = consolidatedBySerial.get(serial);
+      const localMeta = cache.serials[serial] || {};
+      const rowScanned = Boolean(row.is_scanned || localMeta.isScanned);
+      const rowHasValidRow = row.warehouse_row && row.warehouse_row !== 'Sin Asignar';
+      const prevHasValidRow = prev?.warehouse_row && prev.warehouse_row !== 'Sin Asignar';
+
+      consolidatedBySerial.set(serial, {
+        serial_number: serial,
+        material_model:
+          (row.material_model && row.material_model !== 'Sin Modelo' && row.material_model !== 'MODELO GENERAL'
+            ? row.material_model
+            : null) ||
+          prev?.material_model ||
+          row.material_model ||
+          localMeta.material ||
+          'MODELO GENERAL',
+        is_scanned: Boolean(prev?.is_scanned || rowScanned),
+        scanned_at: prev?.scanned_at || row.scanned_at || (rowScanned ? nowIso : null),
+        warehouse_name: prev?.warehouse_name || row.warehouse_name || localMeta.warehouseName || 'Almacén 1',
+        warehouse_row:
+          (prevHasValidRow ? prev.warehouse_row : null) ||
+          (rowHasValidRow ? row.warehouse_row : null) ||
+          localMeta.warehouseRow ||
+          prev?.warehouse_row ||
+          row.warehouse_row ||
+          'Sin Asignar',
+        warehouse_space: prev?.warehouse_space || row.warehouse_space || localMeta.warehouseSpace || '',
+        internal_number: prev?.internal_number ?? row.internal_number ?? localMeta.internalNumber ?? null,
+        printer_status: prev?.printer_status || row.printer_status || 'DISPONIBLE|Principal',
+        document_name: prev?.document_name || row.document_name || localMeta.documentName || null
+      });
+    }
+
+    // 4. Determinar qué series formarán parte del checklist fusionado y cruzar con unexpected_logs
+    const finalMergedMap = new Map();
+    let autoMatchedFromErrors = 0;
+    const matchedErrorSerials = new Set();
+
+    for (const [serial, info] of consolidatedBySerial.entries()) {
+      if (mode === 'BASE_LIST' && !baseChecklistSerials.has(serial) && !info.is_scanned) {
+        continue;
+      }
+
+      const mergedInfo = { ...info };
+
+      // Si no estaba marcada como escaneada pero el operador ya la había escaneado y estaba en unexpected_logs,
+      // marcarla automáticamente como escaneada/verificada (correspondencia encontrada)
+      if (unexpectedBySerial.has(serial)) {
+        const unexp = unexpectedBySerial.get(serial);
+        if (!mergedInfo.is_scanned) {
+          mergedInfo.is_scanned = true;
+          mergedInfo.scanned_at = unexp.createdAt || nowIso;
+          if ((!mergedInfo.warehouse_row || mergedInfo.warehouse_row === 'Sin Asignar') && unexp.extraRow) {
+            mergedInfo.warehouse_row = unexp.extraRow;
+          }
+          autoMatchedFromErrors++;
+        }
+        matchedErrorSerials.add(serial);
+      }
+
+      finalMergedMap.set(serial, mergedInfo);
+
+      // Actualizar caché local si está escaneada
+      if (mergedInfo.is_scanned) {
+        cache.serials[serial] = {
+          ...(cache.serials[serial] || {}),
+          material: mergedInfo.material_model,
+          isScanned: true,
+          warehouseName: mergedInfo.warehouse_name,
+          warehouseRow: mergedInfo.warehouse_row,
+          warehouseSpace: mergedInfo.warehouse_space,
+          internalNumber: mergedInfo.internal_number,
+          status: (mergedInfo.printer_status || 'DISPONIBLE').split('|')[0] || 'DISPONIBLE'
+        };
+      }
+    }
+
+    this.saveMetadataCache(cache);
+
+    // 5. Aplicar actualizaciones e inserciones en el checklist destino (`targetChecklistId`)
+    const toInsert = [];
+    const toUpdatePromises = [];
+
+    for (const [serial, mergedInfo] of finalMergedMap.entries()) {
+      const existingTargetRow = targetExistingBySerial.get(serial);
+      if (existingTargetRow) {
+        if (
+          Boolean(existingTargetRow.is_scanned) !== Boolean(mergedInfo.is_scanned) ||
+          existingTargetRow.warehouse_row !== mergedInfo.warehouse_row ||
+          existingTargetRow.warehouse_space !== mergedInfo.warehouse_space ||
+          existingTargetRow.internal_number !== mergedInfo.internal_number
+        ) {
+          toUpdatePromises.push(
+            supabase
+              .from('expected_series')
+              .update({
+                is_scanned: mergedInfo.is_scanned,
+                scanned_at: mergedInfo.scanned_at,
+                warehouse_name: mergedInfo.warehouse_name,
+                warehouse_row: mergedInfo.warehouse_row,
+                warehouse_space: mergedInfo.warehouse_space,
+                internal_number: mergedInfo.internal_number
+              })
+              .eq('id', existingTargetRow.id)
+          );
+        }
+      } else {
+        toInsert.push({
+          checklist_id: targetChecklistId,
+          serial_number: serial,
+          material_model: mergedInfo.material_model,
+          is_scanned: mergedInfo.is_scanned,
+          scanned_at: mergedInfo.scanned_at,
+          warehouse_name: mergedInfo.warehouse_name,
+          warehouse_row: mergedInfo.warehouse_row,
+          warehouse_space: mergedInfo.warehouse_space,
+          internal_number: mergedInfo.internal_number
+        });
+      }
+    }
+
+    // Si en modo BASE_LIST quedaron filas no escaneadas en targetChecklistId que no están en finalMergedMap, removerlas
+    if (mode === 'BASE_LIST') {
+      const idsToDeleteFromTarget = [];
+      for (const [serial, row] of targetExistingBySerial.entries()) {
+        if (!finalMergedMap.has(serial) && !row.is_scanned) {
+          idsToDeleteFromTarget.push(row.id);
+        }
+      }
+      if (idsToDeleteFromTarget.length > 0) {
+        await supabase.from('expected_series').delete().in('id', idsToDeleteFromTarget);
+      }
+    }
+
+    if (toUpdatePromises.length > 0) {
+      const CHUNK = 50;
+      for (let i = 0; i < toUpdatePromises.length; i += CHUNK) {
+        await Promise.allSettled(toUpdatePromises.slice(i, i + CHUNK));
+      }
+    }
+
+    if (toInsert.length > 0) {
+      const CHUNK = 400;
+      for (let i = 0; i < toInsert.length; i += CHUNK) {
+        const chunk = toInsert.slice(i, i + CHUNK);
+        const { error: insErr } = await supabase.from('expected_series').insert(chunk);
+        if (insErr) {
+          const fallbackChunk = chunk.map(item => ({
+            checklist_id: item.checklist_id,
+            serial_number: item.serial_number,
+            material_model: item.material_model,
+            is_scanned: item.is_scanned,
+            scanned_at: item.scanned_at,
+            warehouse_row: item.warehouse_row
+          }));
+          await supabase.from('expected_series').insert(fallbackChunk);
+        }
+      }
+    }
+
+    // 6. Sincronizar unexpected_logs: conservar solo los que NO hicieron match con ninguna serie esperada
+    const remainingUnexpectedValues = [];
+    const seenRemainingUnexp = new Set();
+    for (const u of rawUnexpectedList) {
+      if (!matchedErrorSerials.has(u.cleanSerial) && !finalMergedMap.has(u.cleanSerial)) {
+        if (!seenRemainingUnexp.has(u.rawVal)) {
+          seenRemainingUnexp.add(u.rawVal);
+          remainingUnexpectedValues.push({
+            checklist_id: targetChecklistId,
+            scanned_value: u.rawVal
+          });
+        }
+      }
+    }
+
+    try {
+      await supabase.from('unexpected_logs').delete().in('checklist_id', allIds);
+      if (remainingUnexpectedValues.length > 0) {
+        await supabase.from('unexpected_logs').insert(remainingUnexpectedValues);
+      }
+    } catch (e) {
+      console.warn('Advertencia actualizando unexpected_logs tras fusión:', e);
+    }
+
+    // 7. Eliminar los checklists origen absorbidos para evitar duplicidad
+    if (deleteSources && cleanSources.length > 0) {
+      try {
+        await supabase.from('expected_series').delete().in('checklist_id', cleanSources);
+        await supabase.from('checklists').delete().in('id', cleanSources);
+      } catch (e) {
+        console.warn('Advertencia eliminando checklists origen tras fusión:', e);
+      }
+    }
+
+    // 8. Actualizar estado del checklist destino según su avance
+    let totalScanned = 0;
+    for (const info of finalMergedMap.values()) {
+      if (info.is_scanned) totalScanned++;
+    }
+    const newStatus = finalMergedMap.size > 0 && totalScanned >= finalMergedMap.size ? 'completed' : 'pending';
+    try {
+      await supabase.from('checklists').update({ status: newStatus }).eq('id', targetChecklistId);
+    } catch (e) {
+      console.warn('No se pudo actualizar estado del checklist fusionado:', e);
+    }
+
+    return {
+      targetChecklistId,
+      totalSeries: finalMergedMap.size,
+      totalScanned,
+      autoMatchedFromErrors,
+      remainingErrors: remainingUnexpectedValues.length
+    };
+  }
+
+  /**
+   * Fusiona una lista de series recién leídas de un archivo PDF/Excel directamente dentro de un checklist existente en curso,
+   * conservando todo lo escaneado y cruzando automáticamente las lecturas que estaban en error (`unexpected_logs`).
+   */
+  static async mergeSeriesIntoChecklist(targetChecklistId, newSeries = [], mode = 'UNION') {
+    if (!targetChecklistId || !newSeries || newSeries.length === 0) {
+      throw new Error('Datos insuficientes para fusionar con el checklist.');
+    }
+
+    const nowIso = new Date().toISOString();
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+
+    const { data: existingRows, error: exErr } = await supabase
+      .from('expected_series')
+      .select('*')
+      .eq('checklist_id', targetChecklistId);
+
+    if (exErr) {
+      throw new Error(`Error consultando el checklist destino: ${exErr.message}`);
+    }
+
+    const { data: dbUnexpected } = await supabase
+      .from('unexpected_logs')
+      .select('*')
+      .eq('checklist_id', targetChecklistId);
+
+    const unexpectedBySerial = new Map();
+    for (const log of (dbUnexpected || [])) {
+      const rawVal = String(log.scanned_value || '').trim().toUpperCase();
+      if (!rawVal) continue;
+      const parts = rawVal.split('|');
+      const cleanSerial = parts[0].trim();
+      const extraRow = parts[1] ? parts[1].trim() : null;
+      if (cleanSerial && !unexpectedBySerial.has(cleanSerial)) {
+        unexpectedBySerial.set(cleanSerial, {
+          rawVal,
+          cleanSerial,
+          extraRow,
+          createdAt: log.created_at || nowIso
+        });
+      }
+    }
+
+    const existingMap = new Map();
+    for (const row of (existingRows || [])) {
+      const s = String(row.serial_number || '').trim().toUpperCase();
+      if (s) existingMap.set(s, row);
+    }
+
+    const incomingMap = new Map();
+    for (const item of newSeries) {
+      const s = String(item.serial || '').trim().toUpperCase();
+      if (s && !incomingMap.has(s)) {
+        incomingMap.set(s, item);
+      }
+    }
+
+    const toInsert = [];
+    const toUpdatePromises = [];
+    const matchedErrorSerials = new Set();
+    let autoMatchedFromErrors = 0;
+
+    // Procesar todas las series del nuevo documento
+    for (const [serial, item] of incomingMap.entries()) {
+      const existingRow = existingMap.get(serial);
+      const unexp = unexpectedBySerial.get(serial);
+
+      if (existingRow) {
+        if (!existingRow.is_scanned && unexp) {
+          autoMatchedFromErrors++;
+          matchedErrorSerials.add(serial);
+          toUpdatePromises.push(
+            supabase
+              .from('expected_series')
+              .update({
+                is_scanned: true,
+                scanned_at: unexp.createdAt || nowIso,
+                warehouse_row: existingRow.warehouse_row && existingRow.warehouse_row !== 'Sin Asignar'
+                  ? existingRow.warehouse_row
+                  : (unexp.extraRow || 'Sin Asignar')
+              })
+              .eq('id', existingRow.id)
+          );
+        }
+      } else {
+        const isMatchedError = Boolean(unexp);
+        if (isMatchedError) {
+          autoMatchedFromErrors++;
+          matchedErrorSerials.add(serial);
+        }
+        toInsert.push({
+          checklist_id: targetChecklistId,
+          serial_number: serial,
+          material_model: item.material || 'MODELO GENERAL',
+          is_scanned: isMatchedError,
+          scanned_at: isMatchedError ? (unexp.createdAt || nowIso) : null,
+          warehouse_row: isMatchedError && unexp.extraRow ? unexp.extraRow : 'Sin Asignar'
+        });
+      }
+    }
+
+    // Si algún registro existente en el checklist ya había sido escaneado en unexpected_logs (por si acaso)
+    for (const [serial, existingRow] of existingMap.entries()) {
+      if (!existingRow.is_scanned && unexpectedBySerial.has(serial) && !matchedErrorSerials.has(serial)) {
+        const unexp = unexpectedBySerial.get(serial);
+        autoMatchedFromErrors++;
+        matchedErrorSerials.add(serial);
+        toUpdatePromises.push(
+          supabase
+            .from('expected_series')
+            .update({
+              is_scanned: true,
+              scanned_at: unexp.createdAt || nowIso
+            })
+            .eq('id', existingRow.id)
+        );
+      }
+    }
+
+    // Si el modo es BASE_LIST (actualizar lista con el nuevo PDF), eliminar las series no escaneadas que no vengan en el nuevo PDF
+    if (mode === 'BASE_LIST') {
+      const idsToRemove = [];
+      for (const [serial, existingRow] of existingMap.entries()) {
+        if (!incomingMap.has(serial) && !existingRow.is_scanned && !matchedErrorSerials.has(serial)) {
+          idsToRemove.push(existingRow.id);
+        }
+      }
+      if (idsToRemove.length > 0) {
+        await supabase.from('expected_series').delete().in('id', idsToRemove);
+      }
+    }
+
+    if (toUpdatePromises.length > 0) {
+      await Promise.allSettled(toUpdatePromises);
+    }
+
+    if (toInsert.length > 0) {
+      const CHUNK = 400;
+      for (let i = 0; i < toInsert.length; i += CHUNK) {
+        await supabase.from('expected_series').insert(toInsert.slice(i, i + CHUNK));
+      }
+    }
+
+    if (matchedErrorSerials.size > 0) {
+      const rawValsToDelete = [];
+      for (const s of matchedErrorSerials) {
+        const u = unexpectedBySerial.get(s);
+        if (u) rawValsToDelete.push(u.rawVal);
+        rawValsToDelete.push(s);
+      }
+      await supabase
+        .from('unexpected_logs')
+        .delete()
+        .eq('checklist_id', targetChecklistId)
+        .in('scanned_value', rawValsToDelete);
+    }
+
+    return {
+      targetChecklistId,
+      addedCount: toInsert.length,
+      autoMatchedFromErrors
+    };
+  }
 }

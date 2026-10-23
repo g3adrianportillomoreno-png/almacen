@@ -86,6 +86,20 @@ export class ChecklistController {
   }
 
   /**
+   * Fusiona dos o más checklists existentes conservando lecturas verificadas y cruzando errores (unexpected_logs)
+   */
+  static async mergeChecklists(options) {
+    return await InventoryRepository.mergeChecklists(options);
+  }
+
+  /**
+   * Fusiona las series recién extraídas de un documento directamente dentro de un checklist existente en curso
+   */
+  static async mergeSeriesIntoChecklist(targetChecklistId, newSeries, mode = 'UNION') {
+    return await InventoryRepository.mergeSeriesIntoChecklist(targetChecklistId, newSeries, mode);
+  }
+
+  /**
    * Elimina un checklist completo
    */
   static async removeChecklist(checklistId) {
@@ -99,3 +113,4 @@ export class ChecklistController {
     await InventoryRepository.markChecklistCompleted(checklistId);
   }
 }
+

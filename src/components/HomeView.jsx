@@ -1,6 +1,7 @@
 import { useState, useRef, useMemo } from 'react';
 import { extractSeriesFromExcel } from '../utils/excelParser';
 import { InventoryController } from '../controllers/InventoryController.js';
+import { ChecklistController } from '../controllers/ChecklistController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import WarehouseMapView from './WarehouseMapView.jsx';
 import WarehouseAssignmentView from './WarehouseAssignmentView.jsx';
@@ -24,6 +25,9 @@ export default function HomeView({
   const [pendingUploadData, setPendingUploadData] = useState(null);
   const [manualConsecutiveInput, setManualConsecutiveInput] = useState('');
   const [uploadPasswordInput, setUploadPasswordInput] = useState('');
+  const [uploadSaveMode, setUploadSaveMode] = useState('NEW'); // 'NEW' | 'MERGE_EXISTING'
+  const [uploadMergeTargetId, setUploadMergeTargetId] = useState('');
+  const [uploadMergeListMode, setUploadMergeListMode] = useState('UNION'); // 'UNION' | 'BASE_LIST'
 
   // Estados de la Vista Previa Editable de Series antes de guardar el Checklist
   const [showSeriesPreview, setShowSeriesPreview] = useState(false);
@@ -31,6 +35,15 @@ export default function HomeView({
   const [previewSearch, setPreviewSearch] = useState('');
   const [newManualSerial, setNewManualSerial] = useState('');
   const [newManualMaterial, setNewManualMaterial] = useState('');
+
+  // Modal para Fusionar Checklists existentes y cruzar correspondencias automáticamente
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [selectedMergeBatchIds, setSelectedMergeBatchIds] = useState([]);
+  const [mergeTargetBatchId, setMergeTargetBatchId] = useState('');
+  const [mergeMode, setMergeMode] = useState('UNION'); // 'UNION' | 'BASE_LIST'
+  const [mergeBaseListBatchId, setMergeBaseListBatchId] = useState('');
+  const [mergePasswordInput, setMergePasswordInput] = useState('');
+  const [isMergingChecklists, setIsMergingChecklists] = useState(false);
 
   // Modal de seguridad para borrar lote con contraseña
   const [deleteModalBatch, setDeleteModalBatch] = useState(null);
@@ -250,6 +263,9 @@ export default function HomeView({
       if (!existingData) {
         setManualConsecutiveInput('');
         setUploadPasswordInput('');
+        setUploadSaveMode('NEW');
+        setUploadMergeTargetId(receptionBatches[0]?.id ? String(receptionBatches[0].id) : '');
+        setUploadMergeListMode('UNION');
         setShowSeriesPreview(false);
         setPreviewFilterMode('ALL');
         setPreviewSearch('');
@@ -280,18 +296,12 @@ export default function HomeView({
     await processUploadedFiles(e.target.files, pendingUploadData);
   };
 
-  const handleConfirmCreateBatch = (e) => {
+  const handleConfirmCreateBatch = async (e) => {
     e.preventDefault();
     if (!pendingUploadData) return;
 
     if (uploadPasswordInput.trim() !== 'QWERTY') {
       alert("Contraseña incorrecta. Se requiere autorización para subir documentos.");
-      return;
-    }
-
-    const trimmedConsecutive = manualConsecutiveInput.trim();
-    if (!trimmedConsecutive) {
-      alert("Por favor ingresa el número consecutivo de inventario para este checklist.");
       return;
     }
 
@@ -301,10 +311,168 @@ export default function HomeView({
       return;
     }
 
+    if (uploadSaveMode === 'MERGE_EXISTING') {
+      if (!uploadMergeTargetId) {
+        alert("Selecciona el checklist con el que deseas fusionar estas series.");
+        return;
+      }
+      try {
+        setIsProcessingFile(true);
+        const res = await ChecklistController.mergeSeriesIntoChecklist(
+          uploadMergeTargetId,
+          validSeries,
+          uploadMergeListMode
+        );
+        setPendingUploadData(null);
+        setManualConsecutiveInput('');
+        setUploadPasswordInput('');
+        if (onStatusChange) await onStatusChange();
+        if (res.autoMatchedFromErrors > 0) {
+          alert(`¡Checklist fusionado con éxito! Se agregaron ${res.addedCount} series nuevas y ${res.autoMatchedFromErrors} lectura(s) que estaban en error pasaron automáticamente a VERIFICADAS.`);
+        }
+        onSelectBatch(Number(uploadMergeTargetId) || uploadMergeTargetId);
+      } catch (err) {
+        alert("Error al fusionar con el checklist: " + err.message);
+      } finally {
+        setIsProcessingFile(false);
+      }
+      return;
+    }
+
+    const trimmedConsecutive = manualConsecutiveInput.trim();
+    if (!trimmedConsecutive) {
+      alert("Por favor ingresa el número consecutivo de inventario para este checklist.");
+      return;
+    }
+
     onCreateBatch(pendingUploadData.fileName, validSeries, trimmedConsecutive);
     setPendingUploadData(null);
     setManualConsecutiveInput('');
     setUploadPasswordInput('');
+  };
+
+  // Abrir el modal de Fusión de Checklists
+  const handleOpenMergeModal = () => {
+    const defaultSelected = receptionBatches.slice(0, 2).map(b => String(b.id));
+    setSelectedMergeBatchIds(defaultSelected);
+
+    // Sugerir como checklist destino el que tenga más escaneos realizados para no mover a los operadores de sesión
+    const sortedByScanned = [...receptionBatches].sort((a, b) => (b.completed?.length || 0) - (a.completed?.length || 0));
+    const bestTarget = sortedByScanned[0]?.id ? String(sortedByScanned[0].id) : (defaultSelected[0] || '');
+    setMergeTargetBatchId(bestTarget);
+    setMergeBaseListBatchId(defaultSelected[0] || bestTarget);
+    setMergeMode('UNION');
+    setMergePasswordInput('');
+    setShowMergeModal(true);
+  };
+
+  const handleToggleMergeBatch = (batchIdStr) => {
+    setSelectedMergeBatchIds(prev => {
+      const exists = prev.includes(batchIdStr);
+      const next = exists ? prev.filter(id => id !== batchIdStr) : [...prev, batchIdStr];
+      if (next.length > 0 && !next.includes(String(mergeTargetBatchId))) {
+        setMergeTargetBatchId(next[0]);
+      }
+      if (next.length > 0 && !next.includes(String(mergeBaseListBatchId))) {
+        setMergeBaseListBatchId(next[0]);
+      }
+      return next;
+    });
+  };
+
+  // Vista previa en tiempo real de lo que ocurrirá al fusionar los checklists seleccionados
+  const mergePreviewStats = useMemo(() => {
+    const selectedBatches = receptionBatches.filter(b => selectedMergeBatchIds.includes(String(b.id)));
+    if (selectedBatches.length < 2) return null;
+
+    const allSerialsSet = new Set();
+    const scannedSerialsSet = new Set();
+    const unexpectedSerialsSet = new Set();
+    const baseBatch = selectedBatches.find(b => String(b.id) === String(mergeBaseListBatchId)) || selectedBatches[0];
+    const baseSerialsSet = new Set((baseBatch?.expectedSeries || []).map(s => String(s.serial || '').trim().toUpperCase()));
+
+    for (const b of selectedBatches) {
+      for (const s of (b.expectedSeries || [])) {
+        const clean = String(s.serial || '').trim().toUpperCase();
+        if (!clean) continue;
+        allSerialsSet.add(clean);
+        if (s.isScanned || (b.completed || []).includes(clean)) {
+          scannedSerialsSet.add(clean);
+        }
+      }
+      for (const u of (b.unexpectedLogs || [])) {
+        const raw = typeof u === 'string' ? u : (u?.scannedValue || u?.scanned_value || '');
+        const cleanU = String(raw || '').split('|')[0].trim().toUpperCase();
+        if (cleanU) unexpectedSerialsSet.add(cleanU);
+      }
+    }
+
+    const effectiveExpectedSet = new Set();
+    for (const s of allSerialsSet) {
+      if (mergeMode === 'BASE_LIST' && !baseSerialsSet.has(s) && !scannedSerialsSet.has(s)) {
+        continue;
+      }
+      effectiveExpectedSet.add(s);
+    }
+
+    const autoMatchedErrors = [];
+    for (const errSerial of unexpectedSerialsSet) {
+      if (effectiveExpectedSet.has(errSerial) && !scannedSerialsSet.has(errSerial)) {
+        autoMatchedErrors.push(errSerial);
+      }
+    }
+
+    return {
+      totalSeries: effectiveExpectedSet.size,
+      alreadyScanned: scannedSerialsSet.size,
+      autoMatchedErrors,
+      totalVerifiedAfterMerge: scannedSerialsSet.size + autoMatchedErrors.length,
+      pendingAfterMerge: Math.max(0, effectiveExpectedSet.size - (scannedSerialsSet.size + autoMatchedErrors.length))
+    };
+  }, [receptionBatches, selectedMergeBatchIds, mergeMode, mergeBaseListBatchId]);
+
+  const handleConfirmMergeChecklists = async (e) => {
+    e.preventDefault();
+    if (selectedMergeBatchIds.length < 2) {
+      alert("Selecciona al menos 2 checklists para fusionar.");
+      return;
+    }
+    if (mergePasswordInput.trim() !== 'QWERTY') {
+      alert("Contraseña incorrecta. Ingresa la clave de autorización (QWERTY).");
+      return;
+    }
+
+    const targetId = mergeTargetBatchId && selectedMergeBatchIds.includes(String(mergeTargetBatchId))
+      ? mergeTargetBatchId
+      : selectedMergeBatchIds[0];
+    const sourceIds = selectedMergeBatchIds.filter(id => String(id) !== String(targetId));
+
+    try {
+      setIsMergingChecklists(true);
+      const res = await ChecklistController.mergeChecklists({
+        targetChecklistId: targetId,
+        sourceChecklistIds: sourceIds,
+        mode: mergeMode,
+        baseListChecklistId: mergeMode === 'BASE_LIST' ? (mergeBaseListBatchId || targetId) : targetId,
+        deleteSources: true
+      });
+      setShowMergeModal(false);
+      setMergePasswordInput('');
+      if (onStatusChange) await onStatusChange();
+      alert(
+        `¡Checklists fusionados correctamente!\n` +
+        `• Total en checklist combinado: ${res.totalSeries} equipos\n` +
+        `• Equipos verificados: ${res.totalScanned}\n` +
+        (res.autoMatchedFromErrors > 0
+          ? `• ✨ Correspondencias automáticas desde errores: ${res.autoMatchedFromErrors} serie(s) pasaron a VERIFICADAS.`
+          : '')
+      );
+      onSelectBatch(Number(targetId) || targetId);
+    } catch (err) {
+      alert("Error al fusionar checklists: " + err.message);
+    } finally {
+      setIsMergingChecklists(false);
+    }
   };
 
   const handleRequestDelete = (batch) => {
@@ -645,7 +813,19 @@ export default function HomeView({
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {receptionBatches.length >= 2 && (
+                  <button
+                    type="button"
+                    onClick={handleOpenMergeModal}
+                    className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1 rounded-lg transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                    title="Fusionar 2 o más checklists conservando lo ya escaneado y cruzando correspondencias de errores"
+                  >
+                    <span>🔗</span>
+                    <span>Fusionar Checklists</span>
+                  </button>
+                )}
+
                 {completedBatches.length > 0 && (
                   <button
                     type="button"
@@ -1019,20 +1199,108 @@ export default function HomeView({
             )}
 
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Número Consecutivo de Checklist (Ingreso Manual):
-                </label>
-                <input
-                  type="text"
-                  required
-                  autoFocus
-                  placeholder="EJ: 001, 105, 2026-A..."
-                  value={manualConsecutiveInput}
-                  onChange={(e) => setManualConsecutiveInput(e.target.value)}
-                  className="w-full border border-slate-300 focus:border-red-600 focus:ring-2 focus:ring-red-100 rounded-xl px-3 py-2 text-center text-sm font-bold text-slate-800 uppercase"
-                />
-              </div>
+              {receptionBatches.length > 0 && (
+                <div className="flex flex-col gap-2 pb-2 border-b border-slate-200">
+                  <label className="block text-xs font-bold text-slate-700 uppercase">
+                    ¿Cómo deseas guardar estas series?
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUploadSaveMode('NEW')}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition text-left ${
+                        uploadSaveMode === 'NEW'
+                          ? 'bg-red-600 text-white border-red-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      ➕ Crear Nuevo Checklist
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUploadSaveMode('MERGE_EXISTING');
+                        if (!uploadMergeTargetId && receptionBatches[0]) {
+                          setUploadMergeTargetId(String(receptionBatches[0].id));
+                        }
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition text-left ${
+                        uploadSaveMode === 'MERGE_EXISTING'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                      }`}
+                    >
+                      🔗 Fusionar con Checklist en Curso
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {uploadSaveMode === 'NEW' ? (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Número Consecutivo de Checklist (Ingreso Manual):
+                  </label>
+                  <input
+                    type="text"
+                    required={uploadSaveMode === 'NEW'}
+                    autoFocus
+                    placeholder="EJ: 001, 105, 2026-A..."
+                    value={manualConsecutiveInput}
+                    onChange={(e) => setManualConsecutiveInput(e.target.value)}
+                    className="w-full border border-slate-300 focus:border-red-600 focus:ring-2 focus:ring-red-100 rounded-xl px-3 py-2 text-center text-sm font-bold text-slate-800 uppercase"
+                  />
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2.5 bg-indigo-50/70 border border-indigo-200 p-3 rounded-xl">
+                  <div>
+                    <label className="block text-xs font-bold text-indigo-950 uppercase mb-1">
+                      Selecciona el Checklist en Curso para Fusionar:
+                    </label>
+                    <select
+                      value={uploadMergeTargetId}
+                      onChange={(e) => setUploadMergeTargetId(e.target.value)}
+                      className="w-full bg-white border border-indigo-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none"
+                    >
+                      {receptionBatches.map((b) => (
+                        <option key={b.id} value={String(b.id)}>
+                          {b.folio} — {b.cleanName || b.name} ({b.completed?.length || 0}/{b.expectedSeries?.length || 0} escaneadas{(b.unexpectedLogs?.length || 0) > 0 ? `, ${b.unexpectedLogs.length} en error` : ''})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[11px] font-bold text-indigo-900 uppercase">
+                      Modo de fusión:
+                    </span>
+                    <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="uploadMergeListMode"
+                        checked={uploadMergeListMode === 'UNION'}
+                        onChange={() => setUploadMergeListMode('UNION')}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <strong>Combinar todas las series (Unión):</strong> Conserva lo ya escaneado, agrega las series faltantes y valida automáticamente las que habían dado error.
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="uploadMergeListMode"
+                        checked={uploadMergeListMode === 'BASE_LIST'}
+                        onChange={() => setUploadMergeListMode('BASE_LIST')}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <strong>Reemplazar lista base con este documento:</strong> Usa las {pendingUploadData.series.length} series de este PDF pero conserva todo lo ya escaneado y cruza los errores.
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
@@ -1059,9 +1327,255 @@ export default function HomeView({
               </button>
               <button
                 type="submit"
-                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-xs transition shadow-xs"
+                disabled={isProcessingFile}
+                className={`flex-1 py-2.5 px-4 rounded-xl text-white font-bold text-xs transition shadow-xs ${
+                  uploadSaveMode === 'MERGE_EXISTING'
+                    ? 'bg-indigo-600 hover:bg-indigo-700'
+                    : 'bg-red-600 hover:bg-red-700'
+                }`}
               >
-                Guardar Checklist ({pendingUploadData.series.length})
+                {uploadSaveMode === 'MERGE_EXISTING'
+                  ? `🔗 Fusionar con Checklist (${pendingUploadData.series.length})`
+                  : `Guardar Checklist (${pendingUploadData.series.length})`}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* MODAL PARA FUSIONAR 2 O MÁS CHECKLISTS EXISTENTES Y CRUZAR CORRESPONDENCIAS */}
+      {showMergeModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <form
+            onSubmit={handleConfirmMergeChecklists}
+            className="bg-white rounded-2xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 animate-fade-in-up flex flex-col gap-4 max-h-[92vh] overflow-y-auto"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center shrink-0 font-bold text-lg">
+                  🔗
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-800">
+                    Fusionar Checklists y Cruzar Correspondencias
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Combina checklists sin perder el avance escaneado y valida automáticamente lecturas en error.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMergeModal(false)}
+                className="text-slate-400 hover:text-slate-700 text-sm font-bold px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 1. SELECCIÓN DE CHECKLISTS A FUSIONAR */}
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold text-slate-700 uppercase">
+                1. Selecciona los Checklists que deseas combinar ({selectedMergeBatchIds.length} seleccionados):
+              </label>
+              <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                {receptionBatches.map((b) => {
+                  const idStr = String(b.id);
+                  const isChecked = selectedMergeBatchIds.includes(idStr);
+                  const scannedCnt = b.completed?.length || 0;
+                  const totalCnt = b.expectedSeries?.length || 0;
+                  const errCnt = b.unexpectedLogs?.length || 0;
+
+                  return (
+                    <label
+                      key={b.id}
+                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 cursor-pointer transition ${
+                        isChecked
+                          ? 'bg-indigo-50/70 border-indigo-400 shadow-2xs'
+                          : 'bg-white border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleToggleMergeBatch(idStr)}
+                          className="w-4 h-4 accent-indigo-600 rounded shrink-0"
+                        />
+                        <span className="bg-slate-800 text-white font-bold text-[11px] px-2 py-0.5 rounded shrink-0">
+                          {b.folio}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800 truncate">
+                            {b.cleanName || b.name}
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            {b.date}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 text-[11px]">
+                        <span className="bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-md border border-emerald-200">
+                          ✓ {scannedCnt}/{totalCnt}
+                        </span>
+                        {errCnt > 0 && (
+                          <span className="bg-rose-100 text-rose-800 font-bold px-2 py-0.5 rounded-md border border-rose-200">
+                            ⚠ {errCnt} error{errCnt > 1 ? 'es' : ''}
+                          </span>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 2. SELECCIÓN DEL CHECKLIST DESTINO Y MODO DE COMBINACIÓN */}
+            {selectedMergeBatchIds.length >= 2 && (
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-col gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    2. Conservar Folio / Sesión Activa de:
+                  </label>
+                  <select
+                    value={mergeTargetBatchId}
+                    onChange={(e) => setMergeTargetBatchId(e.target.value)}
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none"
+                  >
+                    {receptionBatches
+                      .filter(b => selectedMergeBatchIds.includes(String(b.id)))
+                      .map(b => (
+                        <option key={b.id} value={String(b.id)}>
+                          {b.folio} — {b.cleanName || b.name} ({b.completed?.length || 0} ya escaneadas)
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs font-bold text-slate-700 uppercase">
+                    3. Modo de Combinación:
+                  </span>
+                  <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="mergeMode"
+                      checked={mergeMode === 'UNION'}
+                      onChange={() => setMergeMode('UNION')}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <strong>Unir todas las series (Recomendado):</strong> Combina todas las series únicas de los checklists seleccionados, conserva todas las máquinas escaneadas y pasa a verificadas las lecturas en error que coincidan.
+                    </span>
+                  </label>
+                  <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="mergeMode"
+                      checked={mergeMode === 'BASE_LIST'}
+                      onChange={() => setMergeMode('BASE_LIST')}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <strong>Usar lista de series de un checklist específico + transferir avance:</strong> Ideal si subiste un nuevo checklist con el PDF corregido y quieres pasarle lo ya escaneado del anterior.
+                    </span>
+                  </label>
+
+                  {mergeMode === 'BASE_LIST' && (
+                    <div className="pl-5 pt-1">
+                      <label className="block text-[11px] font-bold text-indigo-800 uppercase mb-1">
+                        Tomar la lista de series esperadas de:
+                      </label>
+                      <select
+                        value={mergeBaseListBatchId}
+                        onChange={(e) => setMergeBaseListBatchId(e.target.value)}
+                        className="w-full bg-white border border-indigo-300 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-800 outline-none"
+                      >
+                        {receptionBatches
+                          .filter(b => selectedMergeBatchIds.includes(String(b.id)))
+                          .map(b => (
+                            <option key={b.id} value={String(b.id)}>
+                              {b.folio} — {b.cleanName || b.name} ({b.expectedSeries?.length || 0} series)
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* VISTA PREVIA EN TIEMPO REAL DE LA FUSIÓN Y CORRESPONDENCIAS */}
+            {mergePreviewStats && (
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3.5 flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-indigo-950 uppercase">
+                    📊 Resultado de la Fusión:
+                  </span>
+                  <span className="text-xs font-black text-indigo-700">
+                    Total: {mergePreviewStats.totalSeries} series
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-white p-2 rounded-lg border border-indigo-100">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase block">Ya Escaneadas</span>
+                    <span className="text-sm font-black text-emerald-700">{mergePreviewStats.alreadyScanned}</span>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-indigo-100">
+                    <span className="text-[10px] font-bold text-amber-700 uppercase block">✨ Cruce Errores</span>
+                    <span className="text-sm font-black text-amber-600">+{mergePreviewStats.autoMatchedErrors.length}</span>
+                  </div>
+                  <div className="bg-white p-2 rounded-lg border border-indigo-100">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase block">Faltantes Finales</span>
+                    <span className="text-sm font-black text-slate-800">{mergePreviewStats.pendingAfterMerge}</span>
+                  </div>
+                </div>
+
+                {mergePreviewStats.autoMatchedErrors.length > 0 && (
+                  <div className="bg-emerald-100/90 border border-emerald-300 rounded-lg p-2 text-[11px] text-emerald-950">
+                    <strong>✨ ¡Correspondencias automáticas encontradas!</strong> Las siguientes series que habían marcado error ahora existen en la lista combinada y quedarán <strong>VERIFICADAS</strong> automáticamente:
+                    <div className="font-mono font-bold text-emerald-900 mt-1 flex flex-wrap gap-1">
+                      {mergePreviewStats.autoMatchedErrors.map(s => (
+                        <span key={s} className="bg-white px-2 py-0.5 rounded border border-emerald-300">
+                          ✓ {s}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl">
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                Contraseña de Autorización:
+              </label>
+              <input
+                type="password"
+                required
+                placeholder="Ingresa contraseña requerida (QWERTY)"
+                value={mergePasswordInput}
+                onChange={(e) => setMergePasswordInput(e.target.value)}
+                className="w-full border border-slate-300 focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 rounded-xl px-3 py-2 text-center text-sm font-bold text-slate-800"
+              />
+            </div>
+
+            <div className="flex gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowMergeModal(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                disabled={isMergingChecklists || selectedMergeBatchIds.length < 2}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs transition shadow-xs cursor-pointer"
+              >
+                {isMergingChecklists ? 'Fusionando Checklists...' : '🔗 Confirmar Fusión'}
               </button>
             </div>
           </form>
