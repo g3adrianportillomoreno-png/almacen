@@ -235,14 +235,21 @@ export function parseSeriesFromText(rawText) {
   const rawEntries = []; // { rawSerial, pedimento }
   const lines = rawText.split(/\r?\n/);
 
-  // 1. Extraer candidatos línea por línea considerando columnas de pedimento o fecha
+  // 1. Extraer candidatos línea por línea considerando columnas de pedimento, fecha (incluso 0000-00-00) o inicio directo con serie Brother
   for (const line of lines) {
-    const pedMatch = line.match(/\b(\d{4}-\d{6,8})\b/);
-    const hasDate = /\b202\d-\d{2}-\d{2}\b/.test(line);
+    const pedMatch = line.match(/\b(\d{4}-+\d{6,8})\b/);
+    const dateMatch = line.match(/\b((?:202\d|19\d\d|0000)-+\d{2}-+\d{2})\b/);
+    const directSerialLine = /^\s*[U0OVJ]\d{4,5}[A-Z0-9]{7,11}\b/i.test(line);
 
-    if (pedMatch || hasDate) {
-      const cutIdx = pedMatch ? line.indexOf(pedMatch[1]) : line.search(/\b202\d-\d{2}-\d{2}\b/);
+    if (pedMatch || dateMatch || directSerialLine) {
+      let cutIdx = -1;
+      if (pedMatch) {
+        cutIdx = line.indexOf(pedMatch[1]);
+      } else if (dateMatch) {
+        cutIdx = line.indexOf(dateMatch[1]);
+      }
       const leftPart = (cutIdx > 0 ? line.slice(0, cutIdx) : line).trim();
+      const normalizedPed = pedMatch ? pedMatch[1].replace(/-+/g, '-') : null;
 
       const tokens = leftPart.split(/\s+/).filter(Boolean);
       let temp = '';
@@ -258,11 +265,11 @@ export function parseSeriesFromText(rawText) {
         if (cleanTok.length >= 13 && cleanTok.length <= 17) {
           if (temp) {
             if (temp.length >= 13 && temp.length <= 17) {
-              rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
+              rawEntries.push({ rawSerial: temp, pedimento: normalizedPed });
             }
             temp = '';
           }
-          rawEntries.push({ rawSerial: cleanTok, pedimento: pedMatch ? pedMatch[1] : null });
+          rawEntries.push({ rawSerial: cleanTok, pedimento: normalizedPed });
         } else if (cleanTok.length >= 4 && cleanTok.length <= 12) {
           if (!temp) {
             if (/^[U0OVJ]\d{2,}/i.test(cleanTok)) {
@@ -271,11 +278,11 @@ export function parseSeriesFromText(rawText) {
           } else {
             const combined = temp + cleanTok;
             if (combined.length >= 13 && combined.length <= 17) {
-              rawEntries.push({ rawSerial: combined, pedimento: pedMatch ? pedMatch[1] : null });
+              rawEntries.push({ rawSerial: combined, pedimento: normalizedPed });
               temp = '';
             } else {
               if (temp.length >= 13 && temp.length <= 17) {
-                rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
+                rawEntries.push({ rawSerial: temp, pedimento: normalizedPed });
               }
               temp = /^[U0OVJ]\d{2,}/i.test(cleanTok) ? cleanTok : '';
             }
@@ -284,7 +291,7 @@ export function parseSeriesFromText(rawText) {
       }
 
       if (temp && temp.length >= 13 && temp.length <= 17) {
-        rawEntries.push({ rawSerial: temp, pedimento: pedMatch ? pedMatch[1] : null });
+        rawEntries.push({ rawSerial: temp, pedimento: normalizedPed });
       }
     }
   }
@@ -483,7 +490,8 @@ export function parseSeriesFromText(rawText) {
     return clean;
   };
 
-  // 5. Aplicar validación contra pedimento y modelo dominante
+  // 5. Aplicar validación contra pedimento, modelo dominante y resolución de colisiones por vecindad secuencial
+  const normalizedList = [];
   for (const entry of rawEntries) {
     const rawOriginal = entry.rawSerial.replace(/[^A-Z0-9]/gi, '').toUpperCase();
     let clean = normalizeBrotherSerial(rawOriginal);
@@ -507,15 +515,146 @@ export function parseSeriesFromText(rawText) {
       }
     }
 
-    // Solo aceptar números de serie que empiecen estrictamente con 'U' y tengan estructura válida de serie
     if (
       clean.startsWith('U') &&
       clean.length >= 13 &&
       clean.length <= 16 &&
       /^U\d{4,5}[A-Z0-9]+$/.test(clean)
     ) {
-      if (!seenSerials.has(clean)) {
-        seenSerials.add(clean);
+      normalizedList.push({ clean, rawOriginal });
+    }
+  }
+
+  // Pares de confusión visual frecuente en dígitos de fax/OCR
+  const ocrDigitConfusions = {
+    '0': ['8', '6', '9'],
+    '1': ['7', '4'],
+    '2': ['9', '7', '3'],
+    '3': ['8', '6', '5', '2'],
+    '4': ['1', '9'],
+    '5': ['6', '8', '3'],
+    '6': ['5', '8', '3', '0'],
+    '7': ['1', '2'],
+    '8': ['3', '6', '5', '0', '9'],
+    '9': ['2', '8', '0', '4']
+  };
+
+  // Evalúa si una serie de 15 caracteres en la posición `pos` que colisionó como duplicado
+  // puede repararse cambiando 1 dígito de su consecutivo apoyándose en el renglón anterior y siguiente
+  const findNeighborBridgeCandidate = (pos, targetSerial, reservedSet) => {
+    if (targetSerial.length !== 15 || !/^U\d{5}[A-Z]\d[A-Z]\d{6}$/.test(targetSerial)) return null;
+    const prefix9 = targetSerial.slice(0, 9);
+    const seq6 = targetSerial.slice(9, 15);
+
+    const prevEntry = pos > 0 ? normalizedList[pos - 1] : null;
+    const nextEntry = pos + 1 < normalizedList.length ? normalizedList[pos + 1] : null;
+
+    const prevNum =
+      prevEntry && prevEntry.clean.length === 15 && prevEntry.clean.startsWith(prefix9) && /^\d{6}$/.test(prevEntry.clean.slice(9))
+        ? parseInt(prevEntry.clean.slice(9), 10)
+        : null;
+    const nextNum =
+      nextEntry && nextEntry.clean.length === 15 && nextEntry.clean.startsWith(prefix9) && /^\d{6}$/.test(nextEntry.clean.slice(9))
+        ? parseInt(nextEntry.clean.slice(9), 10)
+        : null;
+
+    if (prevNum === null && nextNum === null) return null;
+
+    let bestCandSerial = null;
+    let bestScore = 0;
+
+    for (let dIdx = 0; dIdx < 6; dIdx++) {
+      const origDigit = seq6[dIdx];
+      const likelyAlts = ocrDigitConfusions[origDigit] || [];
+
+      for (let d = 0; d <= 9; d++) {
+        const altDigit = String(d);
+        if (altDigit === origDigit) continue;
+
+        const candSeq6 = seq6.slice(0, dIdx) + altDigit + seq6.slice(dIdx + 1);
+        const candSerial = prefix9 + candSeq6;
+        if (reservedSet.has(candSerial)) continue;
+
+        const candNum = parseInt(candSeq6, 10);
+        let score = 0;
+
+        // Caso ideal: puente exacto consecutivo entre renglón anterior y siguiente (ej. 738197 -> [738198] -> 738199)
+        if (prevNum !== null && nextNum !== null) {
+          if (
+            (prevNum + 1 === candNum && candNum + 1 === nextNum) ||
+            (prevNum - 1 === candNum && candNum - 1 === nextNum)
+          ) {
+            score = 1000;
+          } else if (
+            Math.abs(nextNum - prevNum) <= 15 &&
+            ((prevNum < candNum && candNum < nextNum) || (prevNum > candNum && candNum > nextNum))
+          ) {
+            score = 500 - Math.abs(nextNum - prevNum) * 10;
+          }
+        }
+
+        if (score === 0) {
+          const distPrev = prevNum !== null ? Math.abs(candNum - prevNum) : Infinity;
+          const distNext = nextNum !== null ? Math.abs(candNum - nextNum) : Infinity;
+          const minDist = Math.min(distPrev, distNext);
+          if (minDist === 1) {
+            score = 300;
+          } else if (minDist <= 3 && likelyAlts.includes(altDigit)) {
+            score = 150 - minDist * 20;
+          }
+        }
+
+        if (score > 0 && likelyAlts.includes(altDigit)) {
+          score += 25;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestCandSerial = candSerial;
+        }
+      }
+    }
+
+    return bestCandSerial ? { serial: bestCandSerial, score: bestScore } : null;
+  };
+
+  const allNormalizedSet = new Set(normalizedList.map((e) => e.clean));
+  const firstOccurrenceMap = new Map(); // serial -> { itemIdx, listPos }
+
+  for (let pos = 0; pos < normalizedList.length; pos++) {
+    const { clean, rawOriginal } = normalizedList[pos];
+
+    if (!seenSerials.has(clean)) {
+      seenSerials.add(clean);
+      firstOccurrenceMap.set(clean, { itemIdx: items.length, listPos: pos });
+      items.push({
+        serial: clean,
+        material: materialRaw,
+        repairedFrom: clean !== rawOriginal ? rawOriginal : null
+      });
+    } else {
+      // Colisión de duplicado: verificar si esta aparición (o la primera) tuvo un dígito mal leído respecto a sus vecinos de fila
+      const reservedSet = new Set([...seenSerials, ...allNormalizedSet]);
+      const candCurrent = findNeighborBridgeCandidate(pos, clean, reservedSet);
+      const firstInfo = firstOccurrenceMap.get(clean);
+      const candFirst = firstInfo ? findNeighborBridgeCandidate(firstInfo.listPos, clean, reservedSet) : null;
+
+      if (candCurrent && (!candFirst || candCurrent.score >= candFirst.score)) {
+        seenSerials.add(candCurrent.serial);
+        allNormalizedSet.add(candCurrent.serial);
+        items.push({
+          serial: candCurrent.serial,
+          material: materialRaw,
+          repairedFrom: rawOriginal
+        });
+      } else if (candFirst && firstInfo) {
+        // La primera aparición era la que tenía el dígito mal leído y la actual es la real
+        seenSerials.add(candFirst.serial);
+        allNormalizedSet.add(candFirst.serial);
+        items[firstInfo.itemIdx].repairedFrom = items[firstInfo.itemIdx].repairedFrom || clean;
+        items[firstInfo.itemIdx].serial = candFirst.serial;
+
+        firstOccurrenceMap.set(clean, { itemIdx: items.length, listPos: pos });
         items.push({
           serial: clean,
           material: materialRaw,
