@@ -410,6 +410,33 @@ class OfflineSyncServiceImpl {
         return true;
       }
 
+      case 'MARK_CHECKLIST_BAJA': {
+        const { checklistId, serialNumber } = payload;
+        const { error } = await supabase
+          .from('expected_series')
+          .update({
+            printer_status: 'BAJA',
+            is_scanned: true
+          })
+          .eq('checklist_id', checklistId)
+          .eq('serial_number', serialNumber);
+        if (error) throw error;
+        return true;
+      }
+
+      case 'CANCEL_CHECKLIST_BAJA': {
+        const { checklistId, serialNumber } = payload;
+        const { error } = await supabase
+          .from('expected_series')
+          .update({
+            printer_status: 'DISPONIBLE'
+          })
+          .eq('checklist_id', checklistId)
+          .eq('serial_number', serialNumber);
+        if (error) throw error;
+        return true;
+      }
+
       case 'UPDATE_PRINTER_STATUS': {
         const { serialNumber, newStatus } = payload;
         const { error } = await supabase

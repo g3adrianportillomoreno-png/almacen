@@ -372,6 +372,78 @@ function App() {
     await ChecklistController.forceFinishChecklist(activeBatchId);
   };
 
+  // Marcar una serie del checklist como baja (salida de almacén)
+  const handleMarkChecklistBaja = async (serial, bajaDate, reason, specificBatchId = null) => {
+    const targetBatchId = specificBatchId || activeBatchId;
+    if (!targetBatchId || !serial) return;
+
+    const sUpper = String(serial).trim().toUpperCase();
+    const dateVal = bajaDate ? new Date(bajaDate).toISOString() : new Date().toISOString();
+
+    // Optimista local inmediato en pantalla
+    setBatches(prev => prev.map(b => {
+      if (b.id !== targetBatchId) return b;
+      const updatedExpected = (b.expectedSeries || []).map(p => {
+        if (p.serial === sUpper) {
+          return {
+            ...p,
+            status: 'BAJA',
+            bajaAt: dateVal,
+            bajaReason: reason,
+            isScanned: true
+          };
+        }
+        return p;
+      });
+      const newCompleted = b.completed.includes(sUpper) ? b.completed : [...b.completed, sUpper];
+      return {
+        ...b,
+        expectedSeries: updatedExpected,
+        completed: newCompleted
+      };
+    }));
+
+    try {
+      await ChecklistController.markChecklistPrinterBaja(targetBatchId, sUpper, dateVal, reason);
+    } catch (err) {
+      console.error('Error al registrar baja de checklist:', err);
+    }
+  };
+
+  // Cancelar la baja de una serie de checklist (restaurar a disponible)
+  const handleCancelChecklistBaja = async (serial, specificBatchId = null) => {
+    const targetBatchId = specificBatchId || activeBatchId;
+    if (!targetBatchId || !serial) return;
+
+    const sUpper = String(serial).trim().toUpperCase();
+
+    // Optimista local inmediato en pantalla
+    setBatches(prev => prev.map(b => {
+      if (b.id !== targetBatchId) return b;
+      const updatedExpected = (b.expectedSeries || []).map(p => {
+        if (p.serial === sUpper) {
+          return {
+            ...p,
+            status: 'DISPONIBLE',
+            bajaAt: null,
+            bajaReason: null
+          };
+        }
+        return p;
+      });
+      return {
+        ...b,
+        expectedSeries: updatedExpected
+      };
+    }));
+
+    try {
+      await ChecklistController.cancelChecklistPrinterBaja(targetBatchId, sUpper);
+    } catch (err) {
+      console.error('Error al cancelar baja de checklist:', err);
+    }
+  };
+
   const handleFinishSession = () => {
     setActiveBatchId(null);
     setView('home');
@@ -567,6 +639,8 @@ function App() {
                 onReconcileSimilar={handleReconcileSimilar}
                 onFinishSession={handleFinishSession}
                 onForceFinish={handleForceFinishBatch}
+                onMarkBaja={handleMarkChecklistBaja}
+                onCancelBaja={handleCancelChecklistBaja}
                 availableRows={availableRows}
                 availableWarehouses={mapModel.warehouses.map(w => w.name)}
                 allPrinters={allPrinters}

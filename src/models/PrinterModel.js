@@ -48,7 +48,9 @@ export class PrinterModel {
     checklistFolio = '',
     internalNumber = null,
     assignedAt = null,
-    documentName = ''
+    documentName = '',
+    bajaAt = null,
+    bajaReason = ''
   }) {
     this.id = id;
     this.serial = (serial || '').trim().toUpperCase();
@@ -70,6 +72,8 @@ export class PrinterModel {
       : null;
     this.assignedAt = assignedAt;
     this.documentName = (documentName || '').trim();
+    this.bajaAt = bajaAt || null;
+    this.bajaReason = (bajaReason || '').trim();
   }
 
   get isAssigned() {
@@ -202,6 +206,8 @@ export class PrinterModel {
     const warehouseSpace = dbItem.warehouse_space || meta.warehouseSpace || '';
     const assignedAt = dbItem.assigned_at || meta.assignedAt || null;
     const docName = dbItem.document_name || meta.documentName || dbItem.documentName || '';
+    const bajaAt = dbItem.departure_date || dbItem.baja_at || meta.bajaAt || null;
+    const bajaReason = dbItem.departure_reason || dbItem.baja_reason || meta.bajaReason || '';
     const internalNum = dbItem.internal_number !== undefined && dbItem.internal_number !== null
       ? dbItem.internal_number
       : (meta.internalNumber ?? null);
@@ -228,7 +234,9 @@ export class PrinterModel {
       checklistFolio: checklistInfo?.folio || meta.checklistFolio || 'SIN FOLIO',
       internalNumber: internalNum,
       assignedAt: assignedAt,
-      documentName: docName
+      documentName: docName,
+      bajaAt: bajaAt,
+      bajaReason: bajaReason
     });
   }
 }

@@ -62,6 +62,14 @@ export class ChecklistModel {
     return Math.min(100, Math.round((this.scannedCount / this.totalCount) * 100));
   }
 
+  get bajasSeries() {
+    return (this.expectedSeries || []).filter(p => p.isBaja);
+  }
+
+  get bajasCount() {
+    return this.bajasSeries.length;
+  }
+
   /**
    * Sugiere el siguiente consecutivo solo a partir de checklists de recepción de equipos nuevos
    */

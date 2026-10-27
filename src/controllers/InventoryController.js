@@ -331,6 +331,8 @@ export class InventoryController {
     const faltantes = expected.filter(p => !completedSet.has(String(p.serial).trim().toUpperCase()));
     // Lecturas fuera de lista / Errores
     const inesperadas = batch.unexpectedLogs || [];
+    // Impresoras Dadas de Baja en este checklist
+    const bajas = expected.filter(p => p.isBaja || p.status === 'BAJA');
 
     const isFullDone = expected.length > 0 && presentes.length >= expected.length;
     const isClosedWithPending = (batch.status === 'completed' || batch.status === 'closed') && faltantes.length > 0;
@@ -367,6 +369,7 @@ export class InventoryController {
       { 'CONCEPTO': 'TOTAL ESPERADAS', 'DETALLE': expected.length },
       { 'CONCEPTO': 'PRESENTES / ESCANEADAS', 'DETALLE': presentes.length },
       { 'CONCEPTO': 'FALTANTES', 'DETALLE': faltantes.length },
+      { 'CONCEPTO': 'DADAS DE BAJA (SALIDAS)', 'DETALLE': bajas.length },
       { 'CONCEPTO': 'ERRORES / FUERA DE LISTA', 'DETALLE': inesperadas.length }
     ];
 
@@ -403,6 +406,7 @@ export class InventoryController {
 
     // 2. Hoja PRESENTES (Equipos escaneados correctamente)
     const dataPresentes = sortedPresentes.map((p, idx) => {
+      const isBaja = p.isBaja || p.status === 'BAJA';
       const row = {
         'NO.': idx + 1,
         'CLAVE': p.material || '',
@@ -411,7 +415,8 @@ export class InventoryController {
         'ALMACEN': p.warehouseName || 'Almacén 1',
         'FILA': p.warehouseRow || '',
         'ESPACIO': p.warehouseSpace || '',
-        'ESTADO': p.status || 'DISPONIBLE'
+        'ESTADO': isBaja ? 'DADA DE BAJA' : (p.status || 'DISPONIBLE'),
+        'FECHA DE BAJA': isBaja && p.bajaAt ? new Date(p.bajaAt).toLocaleString('es-MX') : ''
       };
       if (hasMultipleDocs) {
         row['DOCUMENTO DE ORIGEN'] = p.documentName || 'Documento Principal';
@@ -480,6 +485,54 @@ export class InventoryController {
     ];
     XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES");
 
+    // 4. Hoja BAJAS (Equipos dados de baja / salidas del checklist con fecha)
+    const sortedBajas = [...bajas].sort((a, b) => {
+      const docA = a.documentName || '';
+      const docB = b.documentName || '';
+      if (docA !== docB) return docA.localeCompare(docB);
+      return a.serial.localeCompare(b.serial);
+    });
+
+    const dataBajas = sortedBajas.map((p, idx) => {
+      const row = {
+        'NO.': idx + 1,
+        'CLAVE': p.material || '',
+        'NUMERO DE SERIE': p.serial || '',
+        'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+        'ESTADO': 'DADA DE BAJA',
+        'FECHA Y HORA DE BAJA': p.bajaAt ? new Date(p.bajaAt).toLocaleString('es-MX') : new Date().toLocaleString('es-MX'),
+        'MOTIVO': p.bajaReason || 'Baja de checklist'
+      };
+      if (hasMultipleDocs) {
+        row['DOCUMENTO DE ORIGEN'] = p.documentName || 'Documento Principal';
+      }
+      return row;
+    });
+
+    const wsBajas = XLSX.utils.json_to_sheet(
+      dataBajas.length > 0 ? dataBajas : [{
+        'NO.': '',
+        'CLAVE': '',
+        'NUMERO DE SERIE': 'SIN EQUIPOS DADOS DE BAJA',
+        'NUMERO DE EQUIPO': '',
+        'ESTADO': 'NINGUNO',
+        'FECHA Y HORA DE BAJA': '',
+        'MOTIVO': '',
+        ...(hasMultipleDocs ? { 'DOCUMENTO DE ORIGEN': '' } : {})
+      }]
+    );
+    wsBajas['!cols'] = [
+      { wch: 6 },
+      { wch: 25 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 24 },
+      { wch: 26 },
+      ...(hasMultipleDocs ? [{ wch: 32 }] : [])
+    ];
+    XLSX.utils.book_append_sheet(wb, wsBajas, "BAJAS");
+
     // Si hay más de un documento, generar pestañas separadas por cada documento
     if (hasMultipleDocs) {
       let docIndex = 1;
@@ -487,12 +540,14 @@ export class InventoryController {
         const cleanDocTitle = docName.replace(/\.[^/.]+$/, '').replace(/[:*?/\\\[\]]/g, '_').slice(0, 18);
         const sheetName = `DOC ${docIndex} - ${cleanDocTitle}`;
         const docRows = stats.items.map((item, i) => {
+          const isBaja = item.isBaja || item.status === 'BAJA';
           const isDone = completedSet.has(String(item.serial).trim().toUpperCase());
           return {
             'NO.': i + 1,
             'CLAVE': item.material || '',
             'NUMERO DE SERIE': item.serial || '',
-            'ESTADO': isDone ? '✓ SÍ ESTÁ' : 'PENDIENTE / FALTANTE',
+            'ESTADO': isBaja ? 'DADA DE BAJA' : (isDone ? '✓ SÍ ESTÁ' : 'PENDIENTE / FALTANTE'),
+            'FECHA DE BAJA': isBaja && item.bajaAt ? new Date(item.bajaAt).toLocaleString('es-MX') : '',
             'UBICACION': isDone && item.warehouseRow ? `${item.warehouseName || 'Almacén 1'} → ${item.warehouseRow} [${item.warehouseSpace || 'Gral'}]` : 'Sin Ubicación'
           };
         });

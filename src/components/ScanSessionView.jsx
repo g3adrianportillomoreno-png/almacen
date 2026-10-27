@@ -3,6 +3,7 @@ import useBarcodeScanner from '../hooks/useBarcodeScanner';
 import CameraScanner from './CameraScanner';
 import OfflineSyncBanner from './OfflineSyncBanner';
 import SerialSimilarityModal from './SerialSimilarityModal';
+import ChecklistBajasModal from './ChecklistBajasModal';
 import { InventoryController } from '../controllers/InventoryController';
 import { findSerialMatch, findSimilarSerialMatches } from '../utils/serialMatcher';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects';
@@ -13,7 +14,9 @@ export default function ScanSessionView({
   onLogUnexpected, 
   onReconcileSimilar,
   onFinishSession, 
-  onForceFinish
+  onForceFinish,
+  onMarkBaja,
+  onCancelBaja
 }) {
   const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
 
@@ -27,6 +30,7 @@ export default function ScanSessionView({
   const [useCamera, setUseCamera] = useState(false);
   const [manualInput, setManualInput] = useState('');
   const [showSimilarityModal, setShowSimilarityModal] = useState(false);
+  const [showBajasModal, setShowBajasModal] = useState(false);
 
   // Filtros de visualización
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
@@ -69,8 +73,10 @@ export default function ScanSessionView({
     return (batchDetails.expectedSeries || []).filter(item => {
       const isPresent = batchDetails.completed.includes(item.serial);
 
+      const isBaja = item.isBaja || item.status === 'BAJA';
       if (statusFilter === 'PENDING' && isPresent) return false;
-      if (statusFilter === 'SCANNED' && !isPresent) return false;
+      if (statusFilter === 'SCANNED' && (!isPresent || isBaja)) return false;
+      if (statusFilter === 'BAJA' && !isBaja) return false;
 
       if (selectedDocFilter !== 'ALL') {
         const itemDoc = item.documentName?.trim() || 'General';
@@ -109,6 +115,11 @@ export default function ScanSessionView({
   const escaneados = batchDetails.completed.length;
   const faltantes = total - escaneados;
   const isFinished = batchDetails.status === 'completed' || batchDetails.status === 'closed' || (total > 0 && escaneados >= total);
+
+  const bajasList = useMemo(() => {
+    return (batchDetails.expectedSeries || []).filter(item => item.isBaja || item.status === 'BAJA');
+  }, [batchDetails.expectedSeries]);
+  const bajasCount = bajasList.length;
 
   const faltantesList = useMemo(() => {
     return (batchDetails.expectedSeries || []).filter(item => !batchDetails.completed.includes(item.serial));
@@ -234,6 +245,20 @@ export default function ScanSessionView({
         <div className="bg-white p-6 md:p-8 rounded-2xl shadow-xs border border-slate-200">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 border-b border-slate-100 pb-3">
             <h3 className="text-base font-bold text-slate-800">Resumen de Verificación de Equipos</h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBajasModal(true)}
+                className="bg-rose-700 hover:bg-rose-800 text-white font-black px-4 py-2 rounded-xl text-xs transition shadow-xs flex items-center gap-2 cursor-pointer active:scale-95"
+                title="Abrir apartado de bajas de este checklist"
+              >
+                <span>📦 Salida / Bajas del Checklist</span>
+                {bajasCount > 0 && (
+                  <span className="bg-rose-950 text-white text-[10px] font-black px-2 py-0.5 rounded-full">
+                    {bajasCount} de baja
+                  </span>
+                )}
+              </button>
             {faltantesList.length > 0 && (
               <button
                 type="button"
@@ -248,6 +273,7 @@ export default function ScanSessionView({
                 )}
               </button>
             )}
+            </div>
           </div>
           
           <div className="space-y-6">
@@ -318,6 +344,50 @@ export default function ScanSessionView({
                     <div key={idx} className="bg-rose-50/60 p-2.5 rounded-lg border border-rose-200 flex justify-between items-center">
                       <span className="font-mono font-semibold text-rose-700">{item}</span>
                       <span className="text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded">NO ESTÁ EN LISTA</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {bajasList.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-semibold text-rose-800 flex items-center gap-2 text-sm">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-600"></span>
+                    Equipos Dados de Baja en este Checklist ({bajasList.length})
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setShowBajasModal(true)}
+                    className="text-xs font-bold text-rose-700 hover:text-rose-900 underline cursor-pointer"
+                  >
+                    + Gestionar Bajas
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  {bajasList.map((item, idx) => (
+                    <div key={idx} className="bg-rose-50/80 p-2.5 rounded-xl border border-rose-200 flex justify-between items-center">
+                      <div className="min-w-0 pr-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-rose-900">{item.serial}</span>
+                          <span className="bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.2 rounded">BAJA</span>
+                        </div>
+                        <span className="text-slate-500 text-[11px] block mt-0.5 truncate">{item.material}</span>
+                        {item.bajaAt && (
+                          <span className="text-rose-700 text-[10px] block mt-0.5">
+                            Fecha: {new Date(item.bajaAt).toLocaleString('es-MX')}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onCancelBaja && onCancelBaja(item.serial, batchDetails.id)}
+                        className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white border border-slate-300 px-2 py-1 rounded-lg shrink-0 cursor-pointer"
+                        title="Cancelar baja y regresar a disponible"
+                      >
+                        ↩ Cancelar
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -588,21 +658,37 @@ export default function ScanSessionView({
             </button>
           </div>
 
-          {faltantes > 0 && (
+          <div className="flex items-center gap-2">
+            {faltantes > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowSimilarityModal(true)}
+                className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-3.5 py-1.5 rounded-xl text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                title="Comparar las series faltantes con las que dieron error de lectura"
+              >
+                <span>🔍 Coincidencias</span>
+                {similarMatches.length > 0 && (
+                  <span className="bg-slate-900 text-amber-300 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                    {similarMatches.length}
+                  </span>
+                )}
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => setShowSimilarityModal(true)}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-black px-3.5 py-1.5 rounded-xl text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer"
-              title="Comparar las series faltantes con las que dieron error de lectura"
+              onClick={() => setShowBajasModal(true)}
+              className="bg-rose-700 hover:bg-rose-800 text-white font-black px-3.5 py-1.5 rounded-xl text-xs transition shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+              title="Apartado de bajas del checklist"
             >
-              <span>🔍 Coincidencias</span>
-              {similarMatches.length > 0 && (
-                <span className="bg-slate-900 text-amber-300 text-[10px] font-black px-1.5 py-0.2 rounded-full">
-                  {similarMatches.length}
+              <span>📦 Bajas</span>
+              {bajasCount > 0 && (
+                <span className="bg-rose-950 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                  {bajasCount}
                 </span>
               )}
             </button>
-          )}
+          </div>
         </div>
 
         {/* Separación y Filtros por Documento (si hay más de 1 documento en este checklist) */}
@@ -714,12 +800,14 @@ export default function ScanSessionView({
                           </div>
                           <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded-md shrink-0 ${
-                              isPresent
+                              item.isBaja || item.status === 'BAJA'
+                                ? 'bg-rose-700 text-white'
+                                : isPresent
                                 ? 'bg-emerald-600 text-white'
                                 : 'bg-slate-200 text-slate-600'
                             }`}
                           >
-                            {isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
+                            {item.isBaja || item.status === 'BAJA' ? '📦 BAJA' : isPresent ? '✓ SÍ ESTÁ' : 'PENDIENTE'}
                           </span>
                         </div>
                       );

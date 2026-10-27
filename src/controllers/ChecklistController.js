@@ -100,6 +100,20 @@ export class ChecklistController {
   }
 
   /**
+   * Marca una serie del checklist como baja junto con su fecha (salida de equipo)
+   */
+  static async markChecklistPrinterBaja(checklistId, serialNumber, bajaDate = null, reason = 'Baja de checklist') {
+    return await InventoryRepository.markChecklistPrinterBaja(checklistId, serialNumber, bajaDate, reason);
+  }
+
+  /**
+   * Cancela la baja de una serie de checklist restaurándola a DISPONIBLE
+   */
+  static async cancelChecklistPrinterBaja(checklistId, serialNumber) {
+    return await InventoryRepository.cancelChecklistPrinterBaja(checklistId, serialNumber);
+  }
+
+  /**
    * Elimina un checklist completo
    */
   static async removeChecklist(checklistId) {

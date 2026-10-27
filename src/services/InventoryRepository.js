@@ -420,6 +420,125 @@ export class InventoryRepository {
   /**
    * Actualiza el estado de una impresora: 'CONSULTA', 'BAJA' o 'DISPONIBLE'
    */
+  /**
+   * Marca una serie del checklist como baja junto con su fecha (salida de equipo)
+   */
+  static async markChecklistPrinterBaja(checklistId, serialNumber, bajaDate = null, reason = 'Baja de checklist') {
+    const serial = String(serialNumber || '').trim().toUpperCase();
+    if (!serial) return null;
+    const nowIso = bajaDate ? new Date(bajaDate).toISOString() : new Date().toISOString();
+
+    // 1. Guardar inmediatamente en caché local
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    const existing = cache.serials[serial] || {};
+    cache.serials[serial] = {
+      ...existing,
+      status: 'BAJA',
+      bajaAt: nowIso,
+      bajaReason: reason || 'Baja de checklist',
+      isScanned: true
+    };
+    this.saveMetadataCache(cache);
+
+    // 2. Si no hay conexión, encolar en OfflineSyncService
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('MARK_CHECKLIST_BAJA', {
+        checklistId,
+        serialNumber: serial,
+        bajaDate: nowIso,
+        reason
+      });
+      return cache.serials[serial];
+    }
+
+    // 3. Actualizar en Supabase
+    try {
+      const { error } = await supabase
+        .from('expected_series')
+        .update({
+          printer_status: 'BAJA',
+          is_scanned: true
+        })
+        .eq('checklist_id', checklistId)
+        .eq('serial_number', serial);
+
+      if (error) {
+        OfflineSyncService.addToQueue('MARK_CHECKLIST_BAJA', {
+          checklistId,
+          serialNumber: serial,
+          bajaDate: nowIso,
+          reason
+        });
+      }
+    } catch (err) {
+      console.warn('Error actualizando baja en Supabase, encolando offline:', err);
+      OfflineSyncService.addToQueue('MARK_CHECKLIST_BAJA', {
+        checklistId,
+        serialNumber: serial,
+        bajaDate: nowIso,
+        reason
+      });
+    }
+
+    return cache.serials[serial];
+  }
+
+  /**
+   * Cancela la baja de una serie de checklist restaurándola a DISPONIBLE
+   */
+  static async cancelChecklistPrinterBaja(checklistId, serialNumber) {
+    const serial = String(serialNumber || '').trim().toUpperCase();
+    if (!serial) return null;
+
+    // 1. Guardar en caché local
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    const existing = cache.serials[serial] || {};
+    cache.serials[serial] = {
+      ...existing,
+      status: 'DISPONIBLE',
+      bajaAt: null,
+      bajaReason: null
+    };
+    this.saveMetadataCache(cache);
+
+    // 2. Si no hay conexión, encolar en OfflineSyncService
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('CANCEL_CHECKLIST_BAJA', {
+        checklistId,
+        serialNumber: serial
+      });
+      return cache.serials[serial];
+    }
+
+    // 3. Actualizar en Supabase
+    try {
+      const { error } = await supabase
+        .from('expected_series')
+        .update({
+          printer_status: 'DISPONIBLE'
+        })
+        .eq('checklist_id', checklistId)
+        .eq('serial_number', serial);
+
+      if (error) {
+        OfflineSyncService.addToQueue('CANCEL_CHECKLIST_BAJA', {
+          checklistId,
+          serialNumber: serial
+        });
+      }
+    } catch (err) {
+      console.warn('Error cancelando baja en Supabase, encolando offline:', err);
+      OfflineSyncService.addToQueue('CANCEL_CHECKLIST_BAJA', {
+        checklistId,
+        serialNumber: serial
+      });
+    }
+
+    return cache.serials[serial];
+  }
+
   static async updatePrinterStatus(serialNumber, newStatus) {
     const serial = serialNumber.trim().toUpperCase();
     

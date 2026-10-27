@@ -865,6 +865,8 @@ export default function HomeView({
                     new Set(batch.expectedSeries.map(s => s.material).filter(Boolean))
                   ).slice(0, 2).join(', ');
 
+                  const batchBajasCount = (batch.expectedSeries || []).filter(p => p.isBaja || p.status === 'BAJA').length;
+
                   return (
                     <div key={batch.id} className="flex gap-2 items-center">
                       <button 
@@ -896,6 +898,11 @@ export default function HomeView({
 
                         <div className="flex items-center gap-3 shrink-0">
                           <div className="text-right">
+                            {batchBajasCount > 0 && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-black text-rose-800 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded-md mr-1.5 shadow-2xs">
+                                📦 {batchBajasCount} {batchBajasCount === 1 ? 'baja' : 'bajas'}
+                              </span>
+                            )}
                             {isFullCompleted ? (
                               <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2.5 py-1 rounded-md shadow-2xs">
                                 <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
