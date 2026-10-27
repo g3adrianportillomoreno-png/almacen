@@ -15,6 +15,7 @@ export default function HomeView({
   onNavigateToAssignment,
   onNavigateToMasterInventory,
   onNavigateToReading,
+  onNavigateToBajas,
   onStatusChange,
   onLayoutChange
 }) {
@@ -520,16 +521,30 @@ export default function HomeView({
           </div>
         </div>
 
-        {onNavigateToMasterInventory && (
-          <button
-            type="button"
-            onClick={onNavigateToMasterInventory}
-            className="text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shrink-0"
-          >
-            <span>Ir al Inventario Maestro</span>
-            <span>&rarr;</span>
-          </button>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {onNavigateToBajas && (
+            <button
+              type="button"
+              onClick={() => onNavigateToBajas()}
+              className="text-xs font-bold text-white bg-rose-700 hover:bg-rose-800 border border-rose-800 px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+              title="Entrar en Modo Bajas para escanear salidas de almacén"
+            >
+              <span>🔴</span>
+              <span>Modo Bajas</span>
+            </button>
+          )}
+
+          {onNavigateToMasterInventory && (
+            <button
+              type="button"
+              onClick={onNavigateToMasterInventory}
+              className="text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3.5 py-2 rounded-xl transition flex items-center gap-1.5"
+            >
+              <span>Ir al Inventario Maestro</span>
+              <span>&rarr;</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* FILA SUPERIOR: SUBIR DOCUMENTO, ESTADO DE CHECKLIST Y RESUMEN RÁPIDO */}

@@ -16,7 +16,8 @@ export default function ScanSessionView({
   onFinishSession, 
   onForceFinish,
   onMarkBaja,
-  onCancelBaja
+  onCancelBaja,
+  onNavigateToBajas
 }) {
   const [soundMuted, setSoundMuted] = useState(() => isSoundMuted());
 
@@ -866,6 +867,15 @@ export default function ScanSessionView({
         batchDetails={batchDetails}
         onAcceptMatch={handleAcceptMatch}
         onAcceptAll={handleAcceptAllMatches}
+      />
+
+      <ChecklistBajasModal
+        isOpen={showBajasModal}
+        onClose={() => setShowBajasModal(false)}
+        batchDetails={batchDetails}
+        onMarkBaja={onMarkBaja}
+        onCancelBaja={onCancelBaja}
+        onOpenModoBajas={onNavigateToBajas}
       />
     </div>
   );

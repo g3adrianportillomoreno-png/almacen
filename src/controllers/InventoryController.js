@@ -585,4 +585,167 @@ export class InventoryController {
     const fileName = `Reporte_Checklist_${safeFolio}_${dateStr}.xlsx`;
     XLSX.writeFile(wb, fileName);
   }
+
+  /**
+   * Guarda y aplica una sesión completa de Modo Bajas en la base de datos
+   */
+  static async commitBajasSession(sessionData) {
+    const result = await InventoryRepository.markPrintersBajaBulk(sessionData.items, {
+      bajaDate: sessionData.bajaDate,
+      reason: sessionData.reason,
+      operator: sessionData.operator,
+      targetScope: sessionData.targetScope,
+      targetLoteName: sessionData.targetLoteName
+    });
+    return result;
+  }
+
+  /**
+   * Obtiene el historial de sesiones de bajas guardadas
+   */
+  static getBajasSessions() {
+    return InventoryRepository.getBajasSessionsHistory();
+  }
+
+  /**
+   * Genera y descarga el reporte en Excel de una sesión de bajas cerrada
+   */
+  static exportBajasSessionExcel(sessionRecord) {
+    if (!sessionRecord || !sessionRecord.items || sessionRecord.items.length === 0) {
+      alert("No hay registros en la sesión para exportar.");
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+    const dateFormatted = new Date(sessionRecord.date).toLocaleString('es-MX');
+
+    // Desglose por modelo
+    const modelCounts = {};
+    const batchCounts = {};
+    sessionRecord.items.forEach(it => {
+      const m = it.material || 'Sin Modelo';
+      const b = it.batchFolio ? `${it.batchFolio} (${it.batchName || ''})` : (it.batchName || 'General');
+      modelCounts[m] = (modelCounts[m] || 0) + 1;
+      batchCounts[b] = (batchCounts[b] || 0) + 1;
+    });
+
+    // 1. HOJA RESUMEN
+    const resumenRows = [
+      { 'CAMPO': 'FOLIO DE SESIÓN', 'VALOR': sessionRecord.folio || 'N/A' },
+      { 'CAMPO': 'FECHA Y HORA DE CIERRE', 'VALOR': dateFormatted },
+      { 'CAMPO': 'ÁMBITO / LOTE', 'VALOR': sessionRecord.targetLoteName || 'Todo el Inventario' },
+      { 'CAMPO': 'MOTIVO GENERAL', 'VALOR': sessionRecord.reason || 'Salida de almacén' },
+      { 'CAMPO': 'OPERADOR / RESPONSABLE', 'VALOR': sessionRecord.operator || 'Operador' },
+      { 'CAMPO': 'TOTAL EQUIPOS DADOS DE BAJA', 'VALOR': sessionRecord.items.length },
+      { 'CAMPO': '', 'VALOR': '' },
+      { 'CAMPO': '--- DESGLOSE POR MODELO ---', 'VALOR': 'CANTIDAD' },
+      ...Object.entries(modelCounts).map(([m, c]) => ({ 'CAMPO': m, 'VALOR': c })),
+      { 'CAMPO': '', 'VALOR': '' },
+      { 'CAMPO': '--- DESGLOSE POR LOTE / ORIGEN ---', 'VALOR': 'CANTIDAD' },
+      ...Object.entries(batchCounts).map(([b, c]) => ({ 'CAMPO': b, 'VALOR': c }))
+    ];
+
+    const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
+    wsResumen['!cols'] = [{ wch: 35 }, { wch: 35 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN_BAJAS");
+
+    // 2. HOJA DETALLE DE BAJAS
+    const detailRows = sessionRecord.items.map((it, idx) => ({
+      'NO.': idx + 1,
+      'NÚMERO DE SERIE': it.serial || '',
+      'MODELO': it.material || '',
+      '# EQUIPO': it.internalNumber || '',
+      'LOTE ORIGEN': it.batchFolio ? `${it.batchFolio} - ${it.batchName || ''}` : (it.batchName || 'Inventario'),
+      'ALMACÉN': it.warehouseName || 'Almacén 1',
+      'FILA': it.warehouseRow || 'Sin Asignar',
+      'ESPACIO': it.warehouseSpace || '',
+      'MOTIVO': sessionRecord.reason || 'Salida de almacén',
+      'FECHA Y HORA': dateFormatted,
+      'HORA ESCANEO': it.scannedAt ? new Date(it.scannedAt).toLocaleTimeString('es-MX') : ''
+    }));
+
+    const wsDetail = XLSX.utils.json_to_sheet(detailRows);
+    wsDetail['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 25 },
+      { wch: 12 },
+      { wch: 30 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 26 },
+      { wch: 22 },
+      { wch: 14 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsDetail, "EQUIPOS_DADOS_DE_BAJA");
+
+    const safeFolio = (sessionRecord.folio || 'BAJA').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safeDate = new Date(sessionRecord.date).toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Reporte_${safeFolio}_${safeDate}.xlsx`);
+  }
+
+  /**
+   * Genera y descarga el reporte en Excel de Bajas filtradas por rango de fechas
+   */
+  static exportBajasByDateExcel(departures = [], startDate = '', endDate = '', filterLote = 'ALL') {
+    if (!departures || departures.length === 0) {
+      alert("No hay registros de bajas en el rango de fechas seleccionado.");
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    const dataRows = departures.map((d, idx) => ({
+      'NO.': idx + 1,
+      'FECHA Y HORA': d.departure_date ? new Date(d.departure_date).toLocaleString('es-MX') : '',
+      'NÚMERO DE SERIE': d.serial || '',
+      'MODELO': d.material || '',
+      '# EQUIPO': d.internal_number || '',
+      'LOTE / ORIGEN': d.batchFolio ? `${d.batchFolio} (${d.batchName || ''})` : (d.batchName || 'General'),
+      'ALMACÉN': d.warehouse_name || '',
+      'FILA': d.warehouse_row || '',
+      'ESPACIO': d.warehouse_space || '',
+      'MOTIVO': d.reason || 'Baja de almacén'
+    }));
+
+    // Desglose por modelo
+    const modelCounts = {};
+    departures.forEach(d => {
+      const m = d.material || 'Sin Modelo';
+      modelCounts[m] = (modelCounts[m] || 0) + 1;
+    });
+
+    const resumenRows = [
+      { 'CAMPO': 'REPORTE DE BAJAS POR FECHA', 'VALOR': '' },
+      { 'CAMPO': 'PERIODO', 'VALOR': `${startDate || 'Inicio'} hasta ${endDate || 'Hoy'}` },
+      { 'CAMPO': 'FILTRO LOTE', 'VALOR': filterLote === 'ALL' ? 'Todos los Lotes' : filterLote },
+      { 'CAMPO': 'TOTAL EQUIPOS', 'VALOR': departures.length },
+      { 'CAMPO': '', 'VALOR': '' },
+      { 'CAMPO': '--- TOTALES POR MODELO ---', 'VALOR': 'CANTIDAD' },
+      ...Object.entries(modelCounts).map(([m, c]) => ({ 'CAMPO': m, 'VALOR': c }))
+    ];
+
+    const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
+    wsResumen['!cols'] = [{ wch: 32 }, { wch: 35 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
+
+    const wsData = XLSX.utils.json_to_sheet(dataRows);
+    wsData['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 25 },
+      { wch: 12 },
+      { wch: 28 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 26 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsData, "DETALLE_BAJAS");
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Reporte_Bajas_Fechas_${dateStr}.xlsx`);
+  }
 }

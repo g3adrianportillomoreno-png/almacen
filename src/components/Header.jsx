@@ -116,6 +116,20 @@ export default function Header({
                 <span>Mercado Libre</span>
               </button>
 
+              {/* PESTAÑA: MODO BAJAS */}
+              <button
+                onClick={() => setView('bajas')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                  currentView === 'bajas' 
+                    ? 'bg-rose-900 text-white shadow-xs font-black border border-rose-400' 
+                    : 'text-rose-200 hover:text-white hover:bg-rose-900/60 font-bold'
+                }`}
+                title="Modo Bajas: Escanear salidas por lote o todo el inventario, cerrar bajas y descargar reportes por fecha"
+              >
+                <span className="text-sm">🔴</span>
+                <span>Modo Bajas</span>
+              </button>
+
               {/* PESTAÑA 3: MAPA DE ALMACÉN */}
               <button
                 onClick={() => setView('warehouseMap')}

@@ -8,7 +8,8 @@ export default function ChecklistBajasModal({
   onClose,
   batchDetails,
   onMarkBaja,
-  onCancelBaja
+  onCancelBaja,
+  onOpenModoBajas
 }) {
   const [activeTab, setActiveTab] = useState('bajas'); // 'bajas' | 'catalogo'
   const [scanInput, setScanInput] = useState('');
@@ -133,14 +134,31 @@ export default function ChecklistBajasModal({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl p-2 transition text-sm cursor-pointer shrink-0"
-            title="Cerrar modal"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {onOpenModoBajas && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenModoBajas();
+                }}
+                className="text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 border border-rose-400 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+                title="Abrir en Modo Bajas a pantalla completa para escanear y cerrar sesión"
+              >
+                <span>🔴</span>
+                <span className="hidden sm:inline">Modo Bajas Completo</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl p-2 transition text-sm cursor-pointer shrink-0"
+              title="Cerrar modal"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* NOTIFICACIÓN / ALERTA TEMPORAL */}

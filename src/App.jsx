@@ -21,6 +21,7 @@ import EquipmentReadingView from './components/EquipmentReadingView';
 import OperatorMobileView from './components/OperatorMobileView';
 import MercadoLibreView from './components/MercadoLibreView';
 import MercadoLibreScanView from './components/MercadoLibreScanView';
+import BajasSessionView from './components/BajasSessionView';
 import { supabase } from './utils/supabaseClient';
 
 function App() {
@@ -47,6 +48,9 @@ function App() {
   // Lotes y Sesiones de Mercado Libre
   const [mlBatches, setMlBatches] = useState([]);
   const [activeMlBatchId, setActiveMlBatchId] = useState(null);
+
+  // Lote preseleccionado para Modo Bajas
+  const [bajasPreselectedBatchId, setBajasPreselectedBatchId] = useState(null);
 
   // Obtener nombres de filas disponibles desde el layout del mapa
   const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
@@ -625,6 +629,10 @@ function App() {
                 onNavigateToAssignment={() => setView('equipmentReading')}
                 onNavigateToReading={() => setView('equipmentReading')}
                 onNavigateToMasterInventory={() => setView('masterInventory')}
+                onNavigateToBajas={(batchId) => {
+                  setBajasPreselectedBatchId(batchId || null);
+                  setView('bajas');
+                }}
                 onStatusChange={fetchBatches}
                 onLayoutChange={handleLayoutChange}
               />
@@ -641,6 +649,10 @@ function App() {
                 onForceFinish={handleForceFinishBatch}
                 onMarkBaja={handleMarkChecklistBaja}
                 onCancelBaja={handleCancelChecklistBaja}
+                onNavigateToBajas={() => {
+                  setBajasPreselectedBatchId(activeBatch.id);
+                  setView('bajas');
+                }}
                 availableRows={availableRows}
                 availableWarehouses={mapModel.warehouses.map(w => w.name)}
                 allPrinters={allPrinters}
@@ -704,6 +716,21 @@ function App() {
                 onRecordUnexpected={handleRecordMlUnexpected}
                 onFinishSession={handleFinishMlSession}
                 onForceFinish={handleForceFinishMlBatch}
+              />
+            )}
+
+            {/* Vista 9: Modo Bajas y Salidas de Inventario */}
+            {view === 'bajas' && (
+              <BajasSessionView 
+                batches={batches}
+                allPrinters={allPrinters}
+                allSystemPrinters={allSystemPrinters}
+                preselectedBatchId={bajasPreselectedBatchId}
+                onBajasCommitted={async () => {
+                  await fetchBatches(true);
+                  handleLayoutChange();
+                }}
+                onBack={() => setView('masterInventory')}
               />
             )}
           </>

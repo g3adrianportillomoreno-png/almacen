@@ -7,6 +7,7 @@ import { WarehouseMapController } from '../controllers/WarehouseMapController.js
 import { findSerialMatch, findSimilarSerialMatches } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
+import BajasSessionView from './BajasSessionView.jsx';
 import OfflineSyncBanner from './OfflineSyncBanner.jsx';
 import useOfflineSync from '../hooks/useOfflineSync.js';
 
@@ -490,24 +491,21 @@ export default function OperatorMobileView({
         </div>
       )}
 
-      {/* SELECTOR DE MODO: 3 PESTAÑAS (LECTURA, CHECKLISTS, MERCADO LIBRE) */}
+      {/* SELECTOR DE MODO: 4 PESTAÑAS (LECTURA, CHECKLISTS, MERCADO LIBRE, BAJAS) */}
       <div className="p-3 bg-slate-950/60 border-b border-slate-800">
-        <div className="grid grid-cols-3 gap-1.5 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        <div className="grid grid-cols-4 gap-1 bg-slate-900 p-1 rounded-2xl border border-slate-800">
           <button
             onClick={() => {
               setOperatorTab('reading');
               setActiveChecklistId(null);
               setActiveMlBatchId(null);
             }}
-            className={`py-2 px-1.5 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+            className={`py-2 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold transition flex items-center justify-center gap-1 ${
               operatorTab === 'reading' && !activeChecklistId
                 ? 'bg-emerald-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-            </svg>
             <span>Lectura</span>
           </button>
 
@@ -516,16 +514,13 @@ export default function OperatorMobileView({
               setOperatorTab('checklists');
               setActiveMlBatchId(null);
             }}
-            className={`py-2 px-1.5 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 ${
-              operatorTab === 'checklists' || activeChecklistId
+            className={`py-2 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+              (operatorTab === 'checklists' || activeChecklistId) && operatorTab !== 'bajas'
                 ? 'bg-red-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-            <span>Checklists ({receptionBatches.length})</span>
+            <span>Lotes ({receptionBatches.length})</span>
           </button>
 
           <button
@@ -533,20 +528,50 @@ export default function OperatorMobileView({
               setOperatorTab('mercadolibre');
               setActiveChecklistId(null);
             }}
-            className={`py-2 px-1.5 rounded-xl text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+            className={`py-2 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold transition flex items-center justify-center gap-1 ${
               operatorTab === 'mercadolibre'
                 ? 'bg-amber-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
             <span className="text-amber-400">📦</span>
-            <span>ML ({mlBatches.length})</span>
+            <span>ML</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setOperatorTab('bajas');
+              setActiveChecklistId(null);
+              setActiveMlBatchId(null);
+            }}
+            className={`py-2 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+              operatorTab === 'bajas'
+                ? 'bg-rose-700 text-white shadow-md'
+                : 'text-rose-400 hover:text-white'
+            }`}
+          >
+            <span>🔴</span>
+            <span>Bajas</span>
           </button>
         </div>
       </div>
 
       {/* ÁREA DE CAPTURA PRINCIPAL */}
       <div className="p-4 flex-1 flex flex-col gap-4">
+
+        {/* SI ESTÁ EN MODO BAJAS */}
+        {operatorTab === 'bajas' && (
+          <div className="bg-slate-900 rounded-2xl">
+            <BajasSessionView
+              batches={batches}
+              allPrinters={placedPrinters}
+              allSystemPrinters={allSystemPrinters}
+              onBajasCommitted={async () => {
+                if (onRefreshData) await onRefreshData();
+              }}
+            />
+          </div>
+        )}
 
         {/* SI ESTÁ VIENDO LA LISTA DE CHECKLISTS */}
         {operatorTab === 'checklists' && !activeChecklistId && (

@@ -539,6 +539,134 @@ export class InventoryRepository {
     return cache.serials[serial];
   }
 
+  /**
+   * Procesa una sesión de bajas completa en bloque (Modo Bajas):
+   * 1. Actualiza el estado de cada impresora en la caché local (status: 'BAJA', bajaAt, bajaReason).
+   * 2. Actualiza expected_series en Supabase con printer_status = 'BAJA'.
+   * 3. Registra las salidas en la tabla inventory_departures para auditoría y reportes históricos.
+   * 4. Registra la sesión de bajas en el historial local para consulta y reportes por fecha.
+   */
+  static async markPrintersBajaBulk(items = [], sessionInfo = {}) {
+    if (!items || items.length === 0) return { count: 0, session: null };
+    const nowIso = sessionInfo.bajaDate ? new Date(sessionInfo.bajaDate).toISOString() : new Date().toISOString();
+    const reason = sessionInfo.reason || 'Baja de almacén';
+    const operator = sessionInfo.operator || 'Operador';
+
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+
+    const departuresToLog = [];
+    const serialsToUpdate = [];
+
+    for (const item of items) {
+      const serial = String(item.serial || '').trim().toUpperCase();
+      if (!serial) continue;
+      serialsToUpdate.push(serial);
+
+      const existing = cache.serials[serial] || {};
+      cache.serials[serial] = {
+        ...existing,
+        material: item.material || existing.material || 'Sin Modelo',
+        warehouseName: item.warehouseName || existing.warehouseName || 'Almacén 1',
+        warehouseRow: item.warehouseRow || existing.warehouseRow || 'Sin Asignar',
+        warehouseSpace: item.warehouseSpace || existing.warehouseSpace || '',
+        internalNumber: item.internalNumber ?? existing.internalNumber ?? null,
+        status: 'BAJA',
+        bajaAt: nowIso,
+        bajaReason: reason,
+        bajaOperator: operator,
+        isScanned: true
+      };
+
+      departuresToLog.push({
+        serial: serial,
+        material: item.material || existing.material || 'Sin Modelo',
+        internalNumber: item.internalNumber ?? existing.internalNumber ?? null,
+        warehouseName: item.warehouseName || existing.warehouseName || 'Almacén 1',
+        warehouseRow: item.warehouseRow || existing.warehouseRow || 'Sin Asignar',
+        warehouseSpace: item.warehouseSpace || existing.warehouseSpace || '',
+        systemStatus: existing.systemStatus || 'Principal',
+        reason: reason,
+        departure_date: nowIso
+      });
+    }
+
+    this.saveMetadataCache(cache);
+
+    // Registrar en inventory_departures
+    await this.logDepartures(departuresToLog, reason);
+
+    // Actualizar expected_series en Supabase en chunks
+    const CHUNK = 50;
+    for (let i = 0; i < serialsToUpdate.length; i += CHUNK) {
+      const chunk = serialsToUpdate.slice(i, i + CHUNK);
+      try {
+        await supabase
+          .from('expected_series')
+          .update({
+            printer_status: 'BAJA',
+            is_scanned: true
+          })
+          .in('serial_number', chunk);
+      } catch (e) {
+        console.warn('Nota actualizando expected_series en baja bulk:', e);
+      }
+    }
+
+    // Guardar sesión en historial de sesiones de bajas
+    const sessionRecord = {
+      id: `baja_session_${Date.now()}`,
+      folio: `BAJA-${nowIso.slice(0, 10)}-${String(Date.now()).slice(-4)}`,
+      date: nowIso,
+      reason: reason,
+      operator: operator,
+      targetScope: sessionInfo.targetScope || 'ALL',
+      targetLoteName: sessionInfo.targetLoteName || 'Todo el Inventario',
+      itemsCount: items.length,
+      items: items.map(it => ({
+        serial: it.serial,
+        material: it.material,
+        internalNumber: it.internalNumber,
+        warehouseName: it.warehouseName,
+        warehouseRow: it.warehouseRow,
+        warehouseSpace: it.warehouseSpace,
+        batchFolio: it.batchFolio,
+        batchName: it.batchName,
+        scannedAt: it.scannedAt || nowIso
+      }))
+    };
+
+    this.saveBajasSession(sessionRecord);
+
+    return { count: items.length, session: sessionRecord };
+  }
+
+  /**
+   * Obtiene el historial de sesiones de bajas registradas
+   */
+  static getBajasSessionsHistory() {
+    try {
+      const raw = localStorage.getItem('cdm_bajas_sessions_v1');
+      if (!raw) return [];
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Guarda una sesión de bajas en el historial persistente
+   */
+  static saveBajasSession(sessionRecord) {
+    try {
+      const history = this.getBajasSessionsHistory();
+      const updated = [sessionRecord, ...history].slice(0, 200);
+      localStorage.setItem('cdm_bajas_sessions_v1', JSON.stringify(updated));
+    } catch (e) {
+      console.warn('Error guardando historial de bajas:', e);
+    }
+  }
+
   static async updatePrinterStatus(serialNumber, newStatus) {
     const serial = serialNumber.trim().toUpperCase();
     
