@@ -182,6 +182,190 @@ function extractCcittTiffBuffersFromPdfBytes(uint8Array) {
  * 6. Repara dígitos de secuencia aislados por rotura de trazo en fax (ej. 350226 -> 650226, 642806 -> 649806)
  *    mediante análisis de clústeres de sub-prefijos (3 y 4 dígitos) y proximidad de vecinos en el lote.
  */
+
+// Patrones de modelos multi-marca soportados
+const KNOWN_MODELS = [
+  { brand: 'RICOH', regex: /\b(?:RC|LN|SV)?\s*(IM\s*C?\d{3,4}[A-Z]*|MP\s*C?\d{3,4}[A-Z]*|Aficio\s+[A-Z0-9]+)\b/i },
+  { brand: 'SHARP', regex: /\b(?:SH)?\s*(MX-(?!F\d)[A-Z0-9-]{3,12}|BP-[A-Z0-9-]{3,12}|DX-[A-Z0-9-]{3,12})\b/i },
+  { brand: 'BROTHER', regex: /\b(MFC-?[A-Z0-9]{3,12}|HL-?[A-Z0-9]{3,12}|DCP-?[A-Z0-9]{3,12})\b/i },
+  { brand: 'HP', regex: /\b(?:HP\s+)?(?:LaserJet|PageWide|DesignJet)\s+(?:Pro\s+)?([A-Z0-9-]{3,12})\b/i },
+  { brand: 'KYOCERA', regex: /\b(?:ECOSYS\s+[A-Z0-9-]+|TASKalfa\s+[A-Z0-9-]+)\b/i },
+  { brand: 'CANON', regex: /\b(?:imageRUNNER\s+[A-Z0-9-]+|iR-ADV\s+[A-Z0-9-]+)\b/i }
+];
+
+function cleanModelName(modelStr, fallback = 'MODELO GENERAL') {
+  if (!modelStr) return fallback;
+  let m = modelStr.trim();
+  if (/^RC\s+/i.test(m)) return 'RICOH ' + m.slice(3).trim();
+  if (/^SH\s+/i.test(m)) return 'SHARP ' + m.slice(3).trim();
+  if (/^(?:LN|SV)\s+/i.test(m)) return 'RICOH ' + m.slice(3).trim();
+  if (/^MFC1\d{4}/i.test(m)) return 'MFCL' + m.slice(4);
+  for (const km of KNOWN_MODELS) {
+    const match = m.match(km.regex);
+    if (match) {
+      let sub = match[1].toUpperCase().replace(/\s+/g, ' ');
+      if (km.brand === 'BROTHER' && /^MFC1\d{4}/.test(sub)) sub = 'MFCL' + sub.slice(4);
+      return (km.brand + ' ' + sub).trim();
+    }
+  }
+  return m.toUpperCase();
+}
+
+function detectModelInLine(line, docDefault = 'MODELO GENERAL') {
+  for (const km of KNOWN_MODELS) {
+    const m = line.match(km.regex);
+    if (m) {
+      let modelName = m[1].toUpperCase().replace(/\s+/g, ' ');
+      if (km.brand === 'BROTHER' && /^MFC1\d{4}/.test(modelName)) {
+        modelName = 'MFCL' + modelName.slice(4);
+      }
+      return (km.brand + ' ' + modelName).trim();
+    }
+  }
+  return docDefault;
+}
+
+function isValidSerialFormat(token) {
+  if (!token || typeof token !== 'string') return false;
+  const s = token.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (s.length < 7 || s.length > 18) return false;
+
+  // Filtrar palabras comunes de encabezados, totales o notas
+  if (/^(INVOICE|ORDER|TOTAL|PAGE|PAGINA|DATE|FECHA|CLIENTE|MEXICO|UNITED|FOREIGN|SUBTOTAL|BALANCE)$/i.test(s)) return false;
+  if (/^(ACCESORIO|ACCESSORIES|STAND|PEDESTAL|FAXTYPE|FINISHER)$/i.test(s)) return false;
+
+  // Brother: U + 4-5 dígitos + alfanumérico
+  if (/^U\d{4,5}[A-Z0-9]{7,11}$/.test(s)) return true;
+
+  // Ricoh: 11-12 caracteres (ej. 3370P401367, 3092R100930, 3101RA70837, 3919PC00093, 3090RC01682)
+  if (/^[3WE]\d{3}[A-Z0-9]{7,8}$/.test(s) || /^\d{4}[A-Z]{1,2}[A-Z0-9]{5,7}$/.test(s)) return true;
+
+  // Sharp: 8 caracteres alfanuméricos (ej. 03001148, 13029721, 05011393, 0303311Y, 9301614Y, 0F01046X)
+  if (/^\d[0-9A-Z]{6}[0-9A-Z]$/.test(s) && !/^(202\d|19\d\d)\d{4}$/.test(s)) return true;
+
+  // HP / Kyocera (10 caracteres alfanuméricos con letras y dígitos)
+  if (/^[A-Z0-9]{10}$/.test(s) && /[A-Z]/.test(s) && /\d/.test(s)) return true;
+
+  // Genérico alfanumérico (7 a 18 caracteres con al menos una letra y un dígito)
+  if (/^[A-Z0-9]{7,18}$/.test(s) && /[A-Z]/.test(s) && /\d/.test(s)) return true;
+
+  return false;
+}
+
+/**
+ * Extrae registros tabulares estructurados usando las coordenadas espaciales (X, Y)
+ * de la capa de texto nativa de pdfjs. Identifica columnas como "Serial #", "S/N", "Mfg/Model".
+ */
+function extractTableFromPageItems(items) {
+  const rows = [];
+  for (const item of items) {
+    if (!item.str || !item.str.trim()) continue;
+    const y = item.transform[5];
+    const x = item.transform[4];
+    let row = rows.find(r => Math.abs(r.y - y) <= 3.5);
+    if (!row) {
+      row = { y, items: [] };
+      rows.push(row);
+    }
+    row.items.push({ x, str: item.str.trim() });
+  }
+
+  rows.sort((a, b) => b.y - a.y);
+
+  let headerY = -1;
+  const colBounds = {};
+
+  for (const row of rows) {
+    row.items.sort((a, b) => a.x - b.x);
+    const lineStr = row.items.map(i => i.str).join(' ');
+
+    if (/(?:Serial\s*#|Serial\s*No|Serial\s*Number|S\/N\b|SN\b|No\.?\s*Serie|N°\s*Serie|Nro\.?\s*Serie|Series\b)/i.test(lineStr)) {
+      headerY = row.y;
+      for (const item of row.items) {
+        if (/Item(?:\s*ID)?/i.test(item.str)) colBounds.itemId = item.x;
+        if (/Bin/i.test(item.str)) colBounds.bin = item.x;
+        if (/(?:Mfg\/)?Model|Modelo|Descripci[oó]n|Description|Equipo|Material/i.test(item.str)) colBounds.model = item.x;
+        if (/(?:Serial|S\/N|SN|Serie)/i.test(item.str)) colBounds.serial = item.x;
+        if (/Accessories|Accesorios/i.test(item.str)) colBounds.accessories = item.x;
+        if (/Meter/i.test(item.str)) colBounds.meter = item.x;
+        if (/Qty|Cant/i.test(item.str)) colBounds.qty = item.x;
+      }
+      break;
+    }
+  }
+
+  if (headerY <= 0 || !colBounds.serial) {
+    return null;
+  }
+
+  const tableResults = [];
+
+  for (const row of rows) {
+    if (row.y >= headerY) continue;
+    row.items.sort((a, b) => a.x - b.x);
+
+    let serialItem = null;
+    let modelItem = null;
+
+    for (const item of row.items) {
+      if (Math.abs(item.x - colBounds.serial) <= 45) {
+        serialItem = item.str;
+      }
+      if (colBounds.model && Math.abs(item.x - colBounds.model) <= 45) {
+        modelItem = item.str;
+      }
+    }
+
+    if (serialItem) {
+      const cleanSerial = serialItem.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+      if (isValidSerialFormat(cleanSerial)) {
+        if (!modelItem) {
+          for (const item of row.items) {
+            for (const km of KNOWN_MODELS) {
+              const m = item.str.match(km.regex);
+              if (m) {
+                modelItem = m[0];
+                break;
+              }
+            }
+            if (modelItem) break;
+          }
+        }
+
+        tableResults.push({
+          serial: cleanSerial,
+          material: cleanModelName(modelItem)
+        });
+      }
+    }
+  }
+
+  return tableResults;
+}
+
+/**
+ * Reconstruye líneas de texto respetando saltos de línea físicos mediante agrupación en Y y orden en X
+ */
+function reconstructLinesFromTextItems(items) {
+  const rows = [];
+  for (const item of items) {
+    if (!item.str || !item.str.trim()) continue;
+    const y = item.transform[5];
+    const x = item.transform[4];
+    let row = rows.find(r => Math.abs(r.y - y) <= 3.5);
+    if (!row) {
+      row = { y, items: [] };
+      rows.push(row);
+    }
+    row.items.push({ x, str: item.str });
+  }
+  rows.sort((a, b) => b.y - a.y);
+  return rows.map(r => {
+    r.items.sort((a, b) => a.x - b.x);
+    return r.items.map(i => i.str).join(' ');
+  }).join('\n');
+}
+
 export function parseSeriesFromText(rawText) {
   const items = [];
   const seenSerials = new Set();
@@ -790,6 +974,87 @@ export function parseSeriesFromText(rawText) {
     }
   }
 
+
+  // Si encontramos series por el motor Brother, retornarlas directamente
+  if (items.length > 0) {
+    return items;
+  }
+
+  // PARSEO UNIVERSAL MULTI-MARCA: Para facturas y documentos que no son pedimentos aduanales Brother (Ricoh, Sharp, HP, Kyocera, etc.)
+  for (const line of lines) {
+    if (/(?:Invoice|Order\b|Customer PO|Item ID|Frank Ave|Bill To|Ship To|Historical|Date\b|Total|Subtotal|Payment|Shipping|Cust ID|Phone:|Fax:|Terms|FOB|Route|Class\b|Rep\b|Web:)/i.test(line)) continue;
+
+    const tokens = line.split(/\s+/).map(t => t.replace(/^[^A-Z0-9]+|[^A-Z0-9]+$/gi, '')).filter(Boolean);
+    let matchedSerial = null;
+
+    // A. Brother en texto libre
+    for (const tok of tokens) {
+      const clean = tok.toUpperCase();
+      if (/^U\d{4,5}[A-Z0-9]{7,11}$/.test(clean)) {
+        matchedSerial = clean;
+        break;
+      }
+    }
+
+    // B. Ricoh (11-12 caracteres: ej. 3370P401367, 3092R100930, 3101RA70837, 3919PC00093, 3090RC01682)
+    if (!matchedSerial) {
+      for (const tok of tokens) {
+        const clean = tok.toUpperCase();
+        if (/^[3WE]\d{3}[A-Z0-9]{7,8}$/.test(clean) || /^\d{4}[A-Z]{1,2}[A-Z0-9]{5,7}$/.test(clean)) {
+          matchedSerial = clean;
+          break;
+        }
+      }
+    }
+
+    // C. Sharp (8 caracteres alfanuméricos: ej. 03001148, 13029721, 05011393, 0303311Y, 9301614Y, 0F01046X)
+    if (!matchedSerial) {
+      for (const tok of tokens) {
+        const clean = tok.toUpperCase();
+        if (/^\d[0-9A-Z]{6}[0-9A-Z]$/.test(clean) && !/^(202\d|19\d\d)\d{4}$/.test(clean)) {
+          if (!/^(FAX|PED|STAND|ST|FN)/.test(clean)) {
+            matchedSerial = clean;
+            break;
+          }
+        }
+      }
+    }
+
+    // D. HP / Kyocera (10 caracteres)
+    if (!matchedSerial) {
+      for (const tok of tokens) {
+        const clean = tok.toUpperCase();
+        if (/^[A-Z0-9]{10}$/.test(clean) && /[A-Z]/.test(clean) && /\d/.test(clean)) {
+          matchedSerial = clean;
+          break;
+        }
+      }
+    }
+
+    // E. Genérico (7 a 18 caracteres alfanuméricos con letras y dígitos)
+    if (!matchedSerial) {
+      for (const tok of tokens) {
+        const clean = tok.toUpperCase();
+        if (clean.length >= 7 && clean.length <= 18 && /[A-Z]/.test(clean) && /\d/.test(clean)) {
+          if (!/^(INVOICE|ORDER|TOTAL|PAGE|PAGINA|DATE|FECHA|CLIENTE|MEXICO|UNITED|FOREIGN|SUBTOTAL|BALANCE)$/i.test(clean)) {
+            matchedSerial = clean;
+            break;
+          }
+        }
+      }
+    }
+
+    if (matchedSerial && !seenSerials.has(matchedSerial)) {
+      seenSerials.add(matchedSerial);
+      const rowModel = detectModelInLine(line, materialRaw);
+      items.push({
+        serial: matchedSerial,
+        material: rowModel,
+        repairedFrom: null
+      });
+    }
+  }
+
   return items;
 }
 
@@ -833,19 +1098,41 @@ export async function extractSeriesFromPDF(file, onProgress = null) {
         // PASO 2: Extraer capa de texto nativa con pdf.js
         const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
         const numPages = pdf.numPages;
-        let fullText = "";
+
+        // Subpaso 2A: Intentar extracción tabular espacial por página (detecta tablas como Wulff, Packing Lists, etc.)
+        const tabularItems = [];
+        const seenTabularSerials = new Set();
+        let fullReconstructedText = "";
 
         for (let i = 1; i <= numPages; i++) {
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
-          const pageText = textContent.items.map(item => item.str).join(" ");
-          fullText += pageText + " \n";
+          
+          const pageTable = extractTableFromPageItems(textContent.items);
+          if (pageTable && pageTable.length > 0) {
+            for (const item of pageTable) {
+              if (!seenTabularSerials.has(item.serial)) {
+                seenTabularSerials.add(item.serial);
+                tabularItems.push(item);
+              }
+            }
+          }
+
+          const pageLineText = reconstructLinesFromTextItems(textContent.items);
+          fullReconstructedText += pageLineText + "\n";
         }
 
-        extractedItems = parseSeriesFromText(fullText);
+        if (tabularItems.length > 0) {
+          console.log(`Extracción tabular exitosa: detectados ${tabularItems.length} equipos con sus modelos.`);
+          resolve(tabularItems);
+          return;
+        }
+
+        // Subpaso 2B: Si no hubo tabla formal con encabezados, procesar el texto multilínea reconstruido
+        extractedItems = parseSeriesFromText(fullReconstructedText);
 
         // PASO 3: Si no hubo series o fue escaso en la capa de texto, renderizar páginas en Canvas optimizado + Filtro y OCR
-        if (fullText.trim().length < 100 || extractedItems.length === 0) {
+        if (fullReconstructedText.trim().length < 100 || extractedItems.length === 0) {
           console.log("Iniciando OCR por renderizado optimizado de página (Escala 2.5x + Filtro Morfológico)...");
           let canvasOcrText = "";
 
@@ -877,7 +1164,7 @@ export async function extractSeriesFromPDF(file, onProgress = null) {
             canvasOcrText += text + " \n";
           }
 
-          const ocrItems = parseSeriesFromText(fullText + "\n" + combinedOcrText + "\n" + canvasOcrText);
+          const ocrItems = parseSeriesFromText(fullReconstructedText + "\n" + combinedOcrText + "\n" + canvasOcrText);
           if (ocrItems.length > 0) {
             extractedItems = ocrItems;
           }
