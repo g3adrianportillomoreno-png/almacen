@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
+import { extractSerialFromScanned } from '../utils/serialMatcher.js';
 
 export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
   const videoRef = useRef(null);
@@ -130,13 +131,8 @@ export default function CameraScanner({ expectedSeries, onScan, onCancel }) {
               
               if (qrText) {
                 qrText = qrText.trim().toUpperCase();
-                setLastDetected(qrText);
-
-                const parts = qrText.split(',');
-                let extractedSerie = qrText;
-                if (parts.length >= 2) {
-                  extractedSerie = parts[1].trim(); 
-                }
+                const extractedSerie = extractSerialFromScanned(qrText) || qrText;
+                setLastDetected(extractedSerie);
 
                 setStatus('Código procesado...');
                 isActive = false; 

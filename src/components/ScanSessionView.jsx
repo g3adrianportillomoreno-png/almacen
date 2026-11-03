@@ -5,7 +5,7 @@ import OfflineSyncBanner from './OfflineSyncBanner';
 import SerialSimilarityModal from './SerialSimilarityModal';
 import ChecklistBajasModal from './ChecklistBajasModal';
 import { InventoryController } from '../controllers/InventoryController';
-import { findSerialMatch, findSimilarSerialMatches } from '../utils/serialMatcher';
+import { findSerialMatch, findSimilarSerialMatches, extractSerialFromScanned } from '../utils/serialMatcher';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects';
 
 export default function ScanSessionView({ 
@@ -150,8 +150,11 @@ export default function ScanSessionView({
   const processScan = (scannedCode) => {
     if (!scannedCode || scannedCode.trim() === '' || isFinished) return;
 
-    const code = scannedCode.trim().toUpperCase();
-    setLastScanned(code);
+    const raw = scannedCode.trim();
+    const code = raw.toUpperCase();
+    const candidateSerial = extractSerialFromScanned(code);
+
+    setLastScanned(candidateSerial || code);
     setIsSearching(true);
     setSearchSuccess(false);
     setSearchDuplicate(false);
@@ -162,14 +165,15 @@ export default function ScanSessionView({
       setIsSearching(false);
       
       const expectedItem = findSerialMatch(code, batchDetails.expectedSeries);
+      const targetSerial = expectedItem ? expectedItem.serial : (candidateSerial || code);
       const isAlreadyDone = expectedItem 
         ? batchDetails.completed.includes(expectedItem.serial) 
-        : batchDetails.completed.includes(code);
+        : batchDetails.completed.includes(targetSerial);
 
       if (isAlreadyDone) {
         soundEffects.playScanDuplicate();
         setSearchDuplicate(true);
-        setLastScanned(expectedItem ? expectedItem.serial : code);
+        setLastScanned(targetSerial);
         setLastScannedMaterial(expectedItem ? expectedItem.material : '');
         setTimeout(() => {
           setSearchDuplicate(false);
@@ -201,7 +205,9 @@ export default function ScanSessionView({
       } else {
         soundEffects.playScanError();
         setSearchError(true);
-        onLogUnexpected(code);
+        const logSerial = candidateSerial || code;
+        setLastScanned(logSerial);
+        onLogUnexpected(logSerial);
         setTimeout(() => {
           setSearchError(false);
           setLastScanned('');

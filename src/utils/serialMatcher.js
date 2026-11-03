@@ -17,6 +17,63 @@ export function cleanSerialCore(str) {
 }
 
 /**
+ * Extrae la serie real si el escáner o cámara leyó un código QR con metadatos embebidos
+ * (por ejemplo códigos QR de Ricoh que contienen prefijo de producto + serie + sufijo de fecha/lote,
+ * o códigos de Brother concatenados / con omisión de 'U').
+ */
+export function extractSerialFromScanned(rawScanned) {
+  if (!rawScanned) return '';
+  let str = String(rawScanned).trim().toUpperCase();
+
+  // Si viene separado por comas (formato CSV/etiqueta como "MODEL,SERIAL,EXTRA")
+  if (str.includes(',')) {
+    const parts = str.split(',').map(p => p.trim()).filter(Boolean);
+    for (const part of parts) {
+      const cleanPart = cleanSerialCore(part);
+      if (cleanPart.length >= 7 && cleanPart.length <= 18) {
+        if (/^[3WE]\d{3}(?:[A-Z]\d{6}|[A-Z]{2}\d{5})$/.test(cleanPart)) return cleanPart;
+        if (/^U\d{4,5}[A-Z0-9]{7,11}$/.test(cleanPart)) return cleanPart;
+      }
+    }
+    if (parts.length >= 2 && parts[1].length >= 6) {
+      str = parts[1];
+    }
+  }
+
+  const clean = cleanSerialCore(str);
+  if (!clean) return '';
+
+  // CASO A: Código QR de Ricoh
+  // Ejemplos reales:
+  // D0C8173911P201593102418562 -> Serie: 3911P201593 (11 caracteres)
+  // D0AP173359PA00145910418490 -> Serie: 3359PA00145 (11 caracteres)
+  // D0C5173371P501604105418485 -> Serie: 3371P501604 (11 caracteres)
+  // Estructura: 4 dígitos (inicia en 3, W o E) + 1 letra y 6 dígitos O 2 letras y 5 dígitos = 11 caracteres
+  const ricohQrMatch = clean.match(/(?:^|[A-Z0-9]*?)([3WE]\d{3}(?:[A-Z]\d{6}|[A-Z]{2}\d{5}))/);
+  if (ricohQrMatch && ricohQrMatch[1]) {
+    return ricohQrMatch[1];
+  }
+
+  // CASO B: Doble lectura consecutiva de Brother (30 caracteres)
+  if (clean.length === 30 && /^U\d{5}[A-Z]\d[A-Z]\d{6}U\d{5}[A-Z]\d[A-Z]\d{6}$/.test(clean)) {
+    return clean.slice(0, 15);
+  }
+
+  // CASO C: Serie Brother donde la pistola omitió la 'U' inicial (14 caracteres)
+  if (clean.length === 14 && /^\d{5}[A-Z]\d[A-Z]\d{6}$/.test(clean)) {
+    return 'U' + clean;
+  }
+
+  // CASO D: Serie Brother embebida en un código QR más largo
+  const brotherEmbeddedMatch = clean.match(/(?:^|[A-Z0-9]*?)(U\d{5}[A-Z]\d[A-Z]\d{6})/);
+  if (brotherEmbeddedMatch && brotherEmbeddedMatch[1]) {
+    return brotherEmbeddedMatch[1];
+  }
+
+  return clean;
+}
+
+/**
  * Calcula la distancia de edición (Levenshtein) entre dos cadenas
  */
 function calculateEditDistance(a, b) {
@@ -107,7 +164,7 @@ export function findSimilarSerialMatches(missingItems = [], unexpectedLogs = [])
 
     if (!rawStr) continue;
     const clean = cleanSerialCore(rawStr);
-    if (!clean || clean.length < 8) continue;
+    if (!clean || clean.length < 7) continue;
 
     // Caso A: Si la pistola concatenó 2 lecturas de 15 caracteres (ej. U66653F6N650212U66653F6N650210)
     if (clean.length === 30 && /^U\d{5}[A-Z]\d[A-Z]\d{6}U\d{5}[A-Z]\d[A-Z]\d{6}$/.test(clean)) {
@@ -124,11 +181,9 @@ export function findSimilarSerialMatches(missingItems = [], unexpectedLogs = [])
       continue;
     }
 
-    // Caso B: Si la pistola omitió la 'U' inicial en una serie Brother de 14 caracteres
-    let normalized = clean;
-    if (clean.length === 14 && /^\d{5}[A-Z]\d[A-Z]\d{6}$/.test(clean)) {
-      normalized = 'U' + clean;
-    }
+    // Caso B: Extraer serie si proviene de un código QR (Ricoh, Brother, etc.)
+    const extracted = extractSerialFromScanned(rawStr);
+    const normalized = extracted || clean;
 
     const key = `${normalized}|${rawStr}`;
     if (!seenErrorKeys.has(key)) {
@@ -255,6 +310,9 @@ export function findSerialMatch(
 
   if (!scannedClean) return null;
 
+  // Extraer serie canónica de QR (Ricoh, Brother, etc.)
+  const extractedSerial = extractSerialFromScanned(rawScanned);
+
   // Si la pistola láser omitió la 'U' inicial en una serie Brother de 14 caracteres (ej: 66653F6N650240)
   if (scannedClean.length === 14 && /^\d{5}[A-Z]\d[A-Z]\d{6}$/.test(scannedClean)) {
     scannedClean = 'U' + scannedClean;
@@ -274,16 +332,49 @@ export function findSerialMatch(
   // Nivel 1: Coincidencia Exacta
   for (const item of items) {
     const s = String(getSerial(item) || '').trim().toUpperCase();
-    if (s === scannedUpper || s === scannedClean) return item;
+    if (s === scannedUpper || s === scannedClean || (extractedSerial && s === extractedSerial)) return item;
   }
 
   // Nivel 2: Coincidencia de Núcleo Limpio (resuelve paréntesis, puntos y ceros a la izquierda)
   for (const item of items) {
     const s = getSerial(item);
-    if (cleanSerialCore(s) === scannedClean) return item;
+    const itemClean = cleanSerialCore(s);
+    if (itemClean === scannedClean || (extractedSerial && itemClean === extractedSerial)) return item;
   }
 
-  // Nivel 3: Ceros de relleno al final (ej: 12345678 vs 123456780 o 1234567800)
+  // Nivel 3: Coincidencia de QR Embebido / Contención de Subcadena
+  // Resuelve el caso en que el QR físico contiene metadatos de producto/fábrica (ej. Ricoh D0C8173911P201593102418562)
+  // y la serie esperada está contenida dentro de esa cadena de texto
+  let bestSubMatch = null;
+  let maxSubMatchLen = 0;
+
+  for (const item of items) {
+    const itemClean = cleanSerialCore(getSerial(item));
+    if (!itemClean || itemClean.length < 7) continue;
+
+    // Caso A: La cadena escaneada (QR) CONTIENE la serie esperada
+    if (scannedClean.includes(itemClean)) {
+      if (itemClean.length > maxSubMatchLen) {
+        maxSubMatchLen = itemClean.length;
+        bestSubMatch = item;
+      }
+    }
+    // Caso B: La serie extraída del QR coincide con la serie del equipo
+    else if (extractedSerial && extractedSerial.length >= 7) {
+      if (itemClean.includes(extractedSerial) || extractedSerial.includes(itemClean)) {
+        if (itemClean.length > maxSubMatchLen) {
+          maxSubMatchLen = itemClean.length;
+          bestSubMatch = item;
+        }
+      }
+    }
+  }
+
+  if (bestSubMatch) {
+    return bestSubMatch;
+  }
+
+  // Nivel 4: Ceros de relleno al final (ej: 12345678 vs 123456780 o 1234567800)
   for (const item of items) {
     const itemClean = cleanSerialCore(getSerial(item));
     if (!itemClean) continue;
@@ -299,7 +390,7 @@ export function findSerialMatch(
     }
   }
 
-  // Nivel 4: Prefijos comunes de fabricante (SN, S, P/N, (S), etc.)
+  // Nivel 5: Prefijos comunes de fabricante (SN, S, P/N, (S), etc.)
   for (const item of items) {
     const itemClean = cleanSerialCore(getSerial(item));
     if (!itemClean) continue;

@@ -4,7 +4,7 @@ import SerialSimilarityModal from './SerialSimilarityModal.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
-import { findSerialMatch, findSimilarSerialMatches } from '../utils/serialMatcher.js';
+import { findSerialMatch, findSimilarSerialMatches, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 import BajasSessionView from './BajasSessionView.jsx';
@@ -225,19 +225,23 @@ export default function OperatorMobileView({
     const code = (rawCode || '').trim().toUpperCase();
     if (!code) return;
 
+    const candidateSerial = extractSerialFromScanned(code);
+
     setNotFoundSerial('');
     setSuccessMessage('');
 
     // Si estamos en un checklist específico: SOLO marcar si está o no está (sin pedir ubicación física)
     if (activeChecklist) {
       const matchInBatch = findSerialMatch(code, activeChecklist.expectedSeries);
+      const targetSerial = matchInBatch ? matchInBatch.serial : (candidateSerial || code);
+
       const isAlreadyDone = matchInBatch
         ? activeChecklist.completed.includes(matchInBatch.serial)
-        : activeChecklist.completed.includes(code);
+        : activeChecklist.completed.includes(targetSerial);
 
       if (isAlreadyDone) {
         soundEffects.playScanDuplicate();
-        setSuccessMessage(`⚠️ La serie ${matchInBatch ? matchInBatch.serial : code} YA estaba verificada en este checklist.`);
+        setSuccessMessage(`⚠️ La serie ${targetSerial} YA estaba verificada en este checklist.`);
         setScanInput('');
         return;
       }
@@ -253,9 +257,10 @@ export default function OperatorMobileView({
         }
       } else {
         soundEffects.playScanError();
-        setNotFoundSerial(code);
+        const unexpectedToLog = candidateSerial || code;
+        setNotFoundSerial(unexpectedToLog);
         if (onLogUnexpected) {
-          await onLogUnexpected(code, activeChecklist.id);
+          await onLogUnexpected(unexpectedToLog, activeChecklist.id);
         }
       }
     } else {
@@ -265,11 +270,11 @@ export default function OperatorMobileView({
         soundEffects.playScanSuccess();
         handleSelectPrinter({
           ...match,
-          scannedCode: code
+          scannedCode: match.serial
         });
       } else {
         soundEffects.playScanError();
-        setNotFoundSerial(code);
+        setNotFoundSerial(candidateSerial || code);
       }
     }
     setScanInput('');

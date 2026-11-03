@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { InventoryController } from '../controllers/InventoryController.js';
-import { findSerialMatch } from '../utils/serialMatcher.js';
+import { findSerialMatch, extractSerialFromScanned, cleanSerialCore } from '../utils/serialMatcher.js';
 import { soundEffects } from '../utils/soundEffects.js';
 import CameraScanner from './CameraScanner.jsx';
 
@@ -147,26 +147,27 @@ export default function BajasSessionView({
   const handleProcessScan = (scannedCode) => {
     if (!scannedCode || !scannedCode.trim()) return;
     const code = scannedCode.trim().toUpperCase();
+    const candidateSerial = extractSerialFromScanned(code);
 
-    // 1. Verificar si ya fue escaneado en esta misma sesión activa
-    const alreadyInSession = activeSession.items.some(
-      it => String(it.serial).trim().toUpperCase() === code
-    );
-    if (alreadyInSession) {
-      soundEffects.playScanDuplicate();
-      showNotificationMsg('warning', `⚠️ La serie "${code}" YA está agregada en esta sesión de bajas.`);
-      setScanInput('');
-      return;
-    }
-
-    // 2. Buscar coincidencia en el pool de candidatos
+    // 1. Buscar coincidencia en el pool de candidatos
     const matched = findSerialMatch(code, candidatePool);
     if (!matched) {
       soundEffects.playScanError();
       const scopeMsg = activeSession.targetScope === 'LOTE'
         ? `en el lote seleccionado (${activeSession.targetLoteName})`
         : 'en el inventario registrado';
-      showNotificationMsg('error', `❌ La serie "${code}" no se encontró ${scopeMsg}.`);
+      showNotificationMsg('error', `❌ La serie "${candidateSerial || code}" no se encontró ${scopeMsg}.`);
+      setScanInput('');
+      return;
+    }
+
+    // 2. Verificar si ya fue escaneado en esta misma sesión activa
+    const alreadyInSession = activeSession.items.some(
+      it => cleanSerialCore(it.serial) === cleanSerialCore(matched.serial)
+    );
+    if (alreadyInSession) {
+      soundEffects.playScanDuplicate();
+      showNotificationMsg('warning', `⚠️ La serie "${matched.serial}" YA está agregada en esta sesión de bajas.`);
       setScanInput('');
       return;
     }

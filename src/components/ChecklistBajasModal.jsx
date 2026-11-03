@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import { findSerialMatch } from '../utils/serialMatcher.js';
+import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects } from '../utils/soundEffects.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 
@@ -66,7 +66,8 @@ export default function ChecklistBajasModal({
     const matchedItem = findSerialMatch(code, expected);
     if (!matchedItem) {
       soundEffects.playScanError();
-      showNotification('error', `La serie "${code}" no pertenece a este checklist (${batchDetails.folio}).`);
+      const notFoundSerial = extractSerialFromScanned(code) || code;
+      showNotification('error', `La serie "${notFoundSerial}" no pertenece a este checklist (${batchDetails.folio}).`);
       setScanInput('');
       return;
     }

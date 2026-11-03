@@ -3,7 +3,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import CameraScanner from './CameraScanner.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
-import { findSerialMatch } from '../utils/serialMatcher.js';
+import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 
 export default function EquipmentReadingView({ 
@@ -133,12 +133,12 @@ export default function EquipmentReadingView({
       soundEffects.playScanSuccess();
       handleSelectPrinterForLocation({
         ...match,
-        scannedCode: serial
+        scannedCode: match.serial
       });
     } else {
       soundEffects.playScanError();
       setActivePrinter(null);
-      setNotFoundQuery(serial);
+      setNotFoundQuery(extractSerialFromScanned(serial) || serial);
     }
     setScanInput('');
   };
