@@ -6,6 +6,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { findSerialMatch, findSimilarSerialMatches, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
+import { getNextSpace } from '../utils/locationUtils.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 import BajasSessionView from './BajasSessionView.jsx';
 import OfflineSyncBanner from './OfflineSyncBanner.jsx';
@@ -63,6 +64,14 @@ export default function OperatorMobileView({
   const [showCustomRow, setShowCustomRow] = useState(false);
   const [customRowInput, setCustomRowInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Secuencia de ubicación activa para auto-completar escaneos consecutivos
+  const [operatorSequence, setOperatorSequence] = useState(() => ({
+    warehouse: availableWarehouses[0] || 'Almacén 1',
+    row: availableRows[0] || 'Fila 1',
+    space: ''
+  }));
+  const [mapVersion, setMapVersion] = useState(0);
 
   const scanInputRef = useRef(null);
 
@@ -167,29 +176,92 @@ export default function OperatorMobileView({
     );
   }, [allSystemPrinters]);
 
-  // Opciones de almacén
+  // Opciones de almacén (de props, del mapa persistido, de impresoras existentes y del estado actual)
   const warehouseOptions = useMemo(() => {
     const set = new Set(availableWarehouses);
+    try {
+      const mapModel = WarehouseMapController.loadMap();
+      (mapModel?.warehouses || []).forEach(w => {
+        if (w.name && w.name.trim()) set.add(w.name.trim());
+      });
+    } catch (e) {
+      // fallback
+    }
     allSystemPrinters.forEach(p => {
       if (p.warehouseName && p.warehouseName.trim()) set.add(p.warehouseName.trim());
     });
-    return Array.from(set).sort();
-  }, [availableWarehouses, allSystemPrinters]);
+    if (selectedWarehouse && selectedWarehouse.trim()) set.add(selectedWarehouse.trim());
+    if (operatorSequence.warehouse && operatorSequence.warehouse.trim()) set.add(operatorSequence.warehouse.trim());
+    return Array.from(set).filter(Boolean).sort();
+  }, [availableWarehouses, allSystemPrinters, selectedWarehouse, operatorSequence.warehouse, mapVersion]);
 
-  // Opciones de fila
+  // Opciones de fila (de props, del mapa persistido, de impresoras y del estado actual)
   const rowOptions = useMemo(() => {
     const set = new Set(availableRows);
+    try {
+      const mapModel = WarehouseMapController.loadMap();
+      (mapModel?.warehouses || []).forEach(w => {
+        (w.rows || []).forEach(r => {
+          if (r.name && r.name.trim()) set.add(r.name.trim());
+        });
+      });
+    } catch (e) {
+      // fallback
+    }
     allSystemPrinters.forEach(p => {
       if (p.warehouseRow && p.warehouseRow.trim() && p.warehouseRow !== 'Sin Asignar') {
         set.add(p.warehouseRow.trim());
       }
     });
-    return Array.from(set).sort((a, b) => {
+    if (selectedRow && selectedRow.trim()) set.add(selectedRow.trim());
+    if (operatorSequence.row && operatorSequence.row.trim()) set.add(operatorSequence.row.trim());
+    return Array.from(set).filter(Boolean).sort((a, b) => {
       const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
       const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
       return numA - numB;
     });
-  }, [availableRows, allSystemPrinters]);
+  }, [availableRows, allSystemPrinters, selectedRow, operatorSequence.row, mapVersion]);
+
+  // Funciones para agregar nuevos almacenes y filas dinámicamente
+  const handleAddNewWarehouse = (customName) => {
+    const trimmed = (customName || '').trim();
+    if (!trimmed) return;
+    try {
+      WarehouseMapController.addWarehouseDirect(trimmed);
+    } catch (err) {
+      console.warn('Error saving new warehouse:', err);
+    }
+    setSelectedWarehouse(trimmed);
+    setOperatorSequence(prev => ({ ...prev, warehouse: trimmed }));
+    setShowCustomWarehouse(false);
+    setCustomWarehouseInput('');
+    setMapVersion(v => v + 1);
+  };
+
+  const handleAddNewRow = (customName) => {
+    const trimmed = (customName || '').trim();
+    if (!trimmed) return;
+    try {
+      WarehouseMapController.ensureRowExists(trimmed, selectedWarehouse);
+    } catch (err) {
+      console.warn('Error saving new row:', err);
+    }
+    setSelectedRow(trimmed);
+    setOperatorSequence(prev => ({ ...prev, row: trimmed }));
+    setShowCustomRow(false);
+    setCustomRowInput('');
+    setMapVersion(v => v + 1);
+  };
+
+  const handleWarehouseChange = (val) => {
+    setSelectedWarehouse(val);
+    setOperatorSequence(prev => ({ ...prev, warehouse: val }));
+  };
+
+  const handleRowChange = (val) => {
+    setSelectedRow(val);
+    setOperatorSequence(prev => ({ ...prev, row: val }));
+  };
 
   // Detección de colisión en tiempo real
   const collisionOccupant = useMemo(() => {
@@ -212,12 +284,29 @@ export default function OperatorMobileView({
   // Seleccionar equipo para asignarle ubicación
   const handleSelectPrinter = (printer) => {
     setActivePrinter(printer);
-    setSelectedWarehouse(printer.warehouseName || warehouseOptions[0] || 'Almacén 1');
-    setSelectedRow(printer.warehouseRow && printer.warehouseRow !== 'Sin Asignar' ? printer.warehouseRow : (rowOptions[0] || 'Fila 1'));
-    setSpaceInput(printer.warehouseSpace || '');
+    const hasAssignedWh = printer.warehouseName && printer.warehouseName.trim();
+    const hasAssignedRow = printer.warehouseRow && printer.warehouseRow.trim() && printer.warehouseRow !== 'Sin Asignar';
+    const hasAssignedSpace = printer.warehouseSpace && printer.warehouseSpace.trim();
+    const isAlreadyAssigned = Boolean(hasAssignedWh || hasAssignedRow || hasAssignedSpace);
+
+    if (isAlreadyAssigned) {
+      setSelectedWarehouse(printer.warehouseName || operatorSequence.warehouse || warehouseOptions[0] || 'Almacén 1');
+      setSelectedRow(hasAssignedRow ? printer.warehouseRow : (operatorSequence.row || rowOptions[0] || 'Fila 1'));
+      setSpaceInput(printer.warehouseSpace || '');
+    } else {
+      // Máquina nueva sin ubicación previa: pre-cargar con la secuencia activa consecutiva
+      const targetWh = operatorSequence.warehouse || selectedWarehouse || warehouseOptions[0] || 'Almacén 1';
+      const targetRow = operatorSequence.row || selectedRow || rowOptions[0] || 'Fila 1';
+      setSelectedWarehouse(targetWh);
+      setSelectedRow(targetRow);
+      setSpaceInput(operatorSequence.space || '');
+    }
+
     setInternalNumberInput(printer.internalNumber ? String(printer.internalNumber) : '');
     setNotFoundSerial('');
     setSuccessMessage('');
+    setShowCustomWarehouse(false);
+    setShowCustomRow(false);
   };
 
   // Procesar código leído por pistola o escáner con coincidencia inteligente
@@ -329,15 +418,14 @@ export default function OperatorMobileView({
       soundEffects.playLocationAssigned();
       setSuccessMessage(`✓ [${activePrinter.material || 'MÁQUINA'}] Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} [${spaceVal}]`);
 
-      // Sugerir siguiente espacio si es numérico (ej: 19 D -> 20 D o 1 -> 2)
-      const numMatch = spaceVal.match(/^.*?(\d+)$/);
-      if (numMatch) {
-        const nextNum = parseInt(numMatch[1], 10) + 1;
-        const prefix = spaceVal.replace(/\d+$/, '');
-        setSpaceInput(`${prefix}${nextNum}`);
-      } else {
-        setSpaceInput('');
-      }
+      // Calcular siguiente espacio consecutivo y actualizar la secuencia activa
+      const nextConsecutiveSpace = getNextSpace(spaceVal);
+      setOperatorSequence({
+        warehouse: selectedWarehouse,
+        row: selectedRow,
+        space: nextConsecutiveSpace
+      });
+      setSpaceInput(nextConsecutiveSpace);
 
       setActivePrinter(null);
       if (onAssignmentSaved) onAssignmentSaved();
@@ -703,6 +791,60 @@ export default function OperatorMobileView({
                 </button>
               </div>
             )}
+
+            {/* BARRA DE SECUENCIA Y UBICACIÓN CONSECUTIVA ACTIVA */}
+            <div className="bg-slate-800/90 border border-slate-700/80 rounded-2xl p-3 flex flex-col gap-2 shadow-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                  Ubicación Activa Consecutiva:
+                </span>
+                <span className="text-[10px] text-emerald-400 font-mono font-bold">
+                  {operatorSequence.space ? `Próximo: ${operatorSequence.space}` : 'Próximo: manual'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between bg-slate-950/80 p-2 rounded-xl border border-slate-800 text-xs">
+                <div className="flex items-center gap-1.5 font-bold truncate">
+                  <span className="text-white bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700 truncate max-w-[110px]">
+                    {operatorSequence.warehouse || selectedWarehouse}
+                  </span>
+                  <span className="text-slate-500">→</span>
+                  <span className="text-emerald-300 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700 truncate max-w-[90px]">
+                    {operatorSequence.row || selectedRow}
+                  </span>
+                  {operatorSequence.space && (
+                    <>
+                      <span className="text-slate-500">→</span>
+                      <span className="text-amber-400 font-mono font-bold bg-amber-950/60 px-2 py-0.5 rounded-lg border border-amber-800/50">
+                        {operatorSequence.space}
+                      </span>
+                    </>
+                  )}
+                </div>
+                <div className="flex gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newWh = prompt('Nombre del nuevo almacén:', '');
+                      if (newWh) handleAddNewWarehouse(newWh);
+                    }}
+                    className="text-[10px] bg-slate-800 hover:bg-slate-700 text-blue-300 font-bold px-2 py-1 rounded-lg border border-slate-700 transition"
+                  >
+                    + Almacén
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const newRow = prompt(`Nombre de la nueva fila para "${operatorSequence.warehouse || selectedWarehouse}":`, '');
+                      if (newRow) handleAddNewRow(newRow);
+                    }}
+                    className="text-[10px] bg-slate-800 hover:bg-slate-700 text-emerald-300 font-bold px-2 py-1 rounded-lg border border-slate-700 transition"
+                  >
+                    + Fila
+                  </button>
+                </div>
+              </div>
+            </div>
 
             {/* BARRA DE ENTRADA CON PISTOLA O TECLADO */}
             <div className="bg-slate-800/80 p-4 rounded-3xl border border-slate-700 flex flex-col gap-3 shadow-lg">
@@ -1124,7 +1266,7 @@ export default function OperatorMobileView({
                 {!showCustomWarehouse ? (
                   <select
                     value={selectedWarehouse}
-                    onChange={(e) => setSelectedWarehouse(e.target.value)}
+                    onChange={(e) => handleWarehouseChange(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500"
                   >
                     {warehouseOptions.map((w, idx) => (
@@ -1139,18 +1281,18 @@ export default function OperatorMobileView({
                       placeholder="Ej: Alpha, Beta..."
                       value={customWarehouseInput}
                       onChange={(e) => setCustomWarehouseInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddNewWarehouse(customWarehouseInput);
+                        }
+                      }}
                       className="flex-1 bg-slate-950 border border-blue-400 rounded-xl px-3 py-2 text-xs font-bold text-white uppercase outline-none"
                     />
                     <button
                       type="button"
-                      onClick={() => {
-                        if (customWarehouseInput.trim()) {
-                          setSelectedWarehouse(customWarehouseInput.trim());
-                          setShowCustomWarehouse(false);
-                          setCustomWarehouseInput('');
-                        }
-                      }}
-                      className="bg-slate-700 text-white font-bold text-xs px-3 py-2 rounded-xl"
+                      onClick={() => handleAddNewWarehouse(customWarehouseInput)}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-2 rounded-xl"
                     >
                       OK
                     </button>
@@ -1184,7 +1326,7 @@ export default function OperatorMobileView({
                 {!showCustomRow ? (
                   <select
                     value={selectedRow}
-                    onChange={(e) => setSelectedRow(e.target.value)}
+                    onChange={(e) => handleRowChange(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500"
                   >
                     {rowOptions.map((r, idx) => (
@@ -1199,18 +1341,18 @@ export default function OperatorMobileView({
                       placeholder="Ej: 20, 19, 22..."
                       value={customRowInput}
                       onChange={(e) => setCustomRowInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddNewRow(customRowInput);
+                        }
+                      }}
                       className="flex-1 bg-slate-950 border border-blue-400 rounded-xl px-3 py-2 text-xs font-bold text-white uppercase outline-none"
                     />
                     <button
                       type="button"
-                      onClick={() => {
-                        if (customRowInput.trim()) {
-                          setSelectedRow(customRowInput.trim());
-                          setShowCustomRow(false);
-                          setCustomRowInput('');
-                        }
-                      }}
-                      className="bg-slate-700 text-white font-bold text-xs px-3 py-2 rounded-xl"
+                      onClick={() => handleAddNewRow(customRowInput)}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-2 rounded-xl"
                     >
                       OK
                     </button>

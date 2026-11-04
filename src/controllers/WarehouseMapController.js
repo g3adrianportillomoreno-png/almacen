@@ -49,6 +49,23 @@ export class WarehouseMapController {
   }
 
   /**
+   * Agrega un nuevo almacén directamente por nombre, persistiendo y retornando el modelo actualizado.
+   * Si ya existe un almacén con ese nombre (insensible a mayúsculas), no lo duplica.
+   */
+  static addWarehouseDirect(name) {
+    if (!name || !name.trim()) return null;
+    const cleanName = name.trim();
+    const currentModel = WarehouseMapController.loadMap();
+    const exists = (currentModel.warehouses || []).some(
+      w => w.name && w.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (exists) return currentModel;
+    const updated = currentModel.addWarehouse(cleanName);
+    WarehouseMapController.saveMap(updated);
+    return updated;
+  }
+
+  /**
    * Modifica el nombre de una Fila y sincroniza las impresoras asignadas
    */
   static renameRow(mapModel, rowId, newName) {

@@ -5,6 +5,7 @@ import CameraScanner from './CameraScanner.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
+import { getNextSpace } from '../utils/locationUtils.js';
 
 export default function EquipmentReadingView({ 
   checklists = [], 
@@ -31,6 +32,14 @@ export default function EquipmentReadingView({
   const [showCustomRow, setShowCustomRow] = useState(false);
   const [customRowInput, setCustomRowInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Secuencia de ubicación activa para auto-completar asignaciones consecutivas
+  const [operatorSequence, setOperatorSequence] = useState(() => ({
+    warehouse: availableWarehouses[0] || 'Almacén 1',
+    row: availableRows[0] || 'Fila 1',
+    space: ''
+  }));
+  const [mapVersion, setMapVersion] = useState(0);
 
   const scanInputRef = useRef(null);
 
@@ -62,29 +71,92 @@ export default function EquipmentReadingView({
     return { total, conUbicacion, sinUbicacion };
   }, [allSystemPrinters, unassignedPrinters]);
 
-  // Opciones de almacenes
+  // Opciones de almacenes (de props, del mapa persistido, de impresoras y del estado actual)
   const warehouseOptions = useMemo(() => {
     const set = new Set(availableWarehouses);
+    try {
+      const mapModel = WarehouseMapController.loadMap();
+      (mapModel?.warehouses || []).forEach(w => {
+        if (w.name && w.name.trim()) set.add(w.name.trim());
+      });
+    } catch (e) {
+      // fallback
+    }
     allSystemPrinters.forEach(p => {
       if (p.warehouseName && p.warehouseName.trim()) set.add(p.warehouseName.trim());
     });
-    return Array.from(set).sort();
-  }, [availableWarehouses, allSystemPrinters]);
+    if (selectedWarehouse && selectedWarehouse.trim()) set.add(selectedWarehouse.trim());
+    if (operatorSequence.warehouse && operatorSequence.warehouse.trim()) set.add(operatorSequence.warehouse.trim());
+    return Array.from(set).filter(Boolean).sort();
+  }, [availableWarehouses, allSystemPrinters, selectedWarehouse, operatorSequence.warehouse, mapVersion]);
 
-  // Opciones de filas
+  // Opciones de filas (de props, del mapa persistido, de impresoras y del estado actual)
   const rowOptions = useMemo(() => {
     const set = new Set(availableRows);
+    try {
+      const mapModel = WarehouseMapController.loadMap();
+      (mapModel?.warehouses || []).forEach(w => {
+        (w.rows || []).forEach(r => {
+          if (r.name && r.name.trim()) set.add(r.name.trim());
+        });
+      });
+    } catch (e) {
+      // fallback
+    }
     allSystemPrinters.forEach(p => {
       if (p.warehouseRow && p.warehouseRow.trim() && p.warehouseRow !== 'Sin Asignar') {
         set.add(p.warehouseRow.trim());
       }
     });
-    return Array.from(set).sort((a, b) => {
+    if (selectedRow && selectedRow.trim()) set.add(selectedRow.trim());
+    if (operatorSequence.row && operatorSequence.row.trim()) set.add(operatorSequence.row.trim());
+    return Array.from(set).filter(Boolean).sort((a, b) => {
       const numA = parseInt(a.replace(/\D/g, ''), 10) || 0;
       const numB = parseInt(b.replace(/\D/g, ''), 10) || 0;
       return numA - numB;
     });
-  }, [availableRows, allSystemPrinters]);
+  }, [availableRows, allSystemPrinters, selectedRow, operatorSequence.row, mapVersion]);
+
+  // Funciones para agregar almacenes y filas dinámicamente
+  const handleAddNewWarehouse = (customName) => {
+    const trimmed = (customName || '').trim();
+    if (!trimmed) return;
+    try {
+      WarehouseMapController.addWarehouseDirect(trimmed);
+    } catch (err) {
+      console.warn('Error saving new warehouse:', err);
+    }
+    setSelectedWarehouse(trimmed);
+    setOperatorSequence(prev => ({ ...prev, warehouse: trimmed }));
+    setShowCustomWarehouse(false);
+    setCustomWarehouseInput('');
+    setMapVersion(v => v + 1);
+  };
+
+  const handleAddNewRow = (customName) => {
+    const trimmed = (customName || '').trim();
+    if (!trimmed) return;
+    try {
+      WarehouseMapController.ensureRowExists(trimmed, selectedWarehouse);
+    } catch (err) {
+      console.warn('Error saving new row:', err);
+    }
+    setSelectedRow(trimmed);
+    setOperatorSequence(prev => ({ ...prev, row: trimmed }));
+    setShowCustomRow(false);
+    setCustomRowInput('');
+    setMapVersion(v => v + 1);
+  };
+
+  const handleWarehouseChange = (val) => {
+    setSelectedWarehouse(val);
+    setOperatorSequence(prev => ({ ...prev, warehouse: val }));
+  };
+
+  const handleRowChange = (val) => {
+    setSelectedRow(val);
+    setOperatorSequence(prev => ({ ...prev, row: val }));
+  };
 
   // Validación de Colisión en tiempo real
   const collisionOccupant = useMemo(() => {
@@ -108,9 +180,24 @@ export default function EquipmentReadingView({
   // Abrir equipo seleccionado para asignarle ubicación
   const handleSelectPrinterForLocation = (printer) => {
     setActivePrinter(printer);
-    setSelectedWarehouse(printer.warehouseName || warehouseOptions[0] || 'Almacén 1');
-    setSelectedRow(printer.warehouseRow && printer.warehouseRow !== 'Sin Asignar' ? printer.warehouseRow : (rowOptions[0] || 'Fila 1'));
-    setSpaceInput(printer.warehouseSpace || '');
+    const hasAssignedWh = printer.warehouseName && printer.warehouseName.trim();
+    const hasAssignedRow = printer.warehouseRow && printer.warehouseRow.trim() && printer.warehouseRow !== 'Sin Asignar';
+    const hasAssignedSpace = printer.warehouseSpace && printer.warehouseSpace.trim();
+    const isAlreadyAssigned = Boolean(hasAssignedWh || hasAssignedRow || hasAssignedSpace);
+
+    if (isAlreadyAssigned) {
+      setSelectedWarehouse(printer.warehouseName || operatorSequence.warehouse || warehouseOptions[0] || 'Almacén 1');
+      setSelectedRow(hasAssignedRow ? printer.warehouseRow : (operatorSequence.row || rowOptions[0] || 'Fila 1'));
+      setSpaceInput(printer.warehouseSpace || '');
+    } else {
+      // Máquina sin ubicación previa: pre-cargar con la secuencia activa y el espacio consecutivo
+      const targetWh = operatorSequence.warehouse || selectedWarehouse || warehouseOptions[0] || 'Almacén 1';
+      const targetRow = operatorSequence.row || selectedRow || rowOptions[0] || 'Fila 1';
+      setSelectedWarehouse(targetWh);
+      setSelectedRow(targetRow);
+      setSpaceInput(operatorSequence.space || '');
+    }
+
     setInternalNumberInput(printer.internalNumber !== null && printer.internalNumber !== undefined ? String(printer.internalNumber) : '');
     setSuccessMessage('');
     setNotFoundQuery('');
@@ -194,15 +281,14 @@ export default function EquipmentReadingView({
       soundEffects.playLocationAssigned();
       setSuccessMessage(`¡Equipo serie ${activePrinter.serial} (${activePrinter.material || 'Equipo'}) guardado exitosamente en ${selectedWarehouse} → ${selectedRow} → ${spaceVal}!`);
       
-      // Sugerir siguiente espacio si es numérico (ej: 1 -> 2)
-      const numMatch = spaceVal.match(/^.*?(\d+)$/);
-      if (numMatch) {
-        const nextNum = parseInt(numMatch[1], 10) + 1;
-        const prefix = spaceVal.replace(/\d+$/, '');
-        setSpaceInput(`${prefix}${nextNum}`);
-      } else {
-        setSpaceInput('');
-      }
+      // Calcular siguiente espacio consecutivo y actualizar secuencia activa
+      const nextConsecutiveSpace = getNextSpace(spaceVal);
+      setOperatorSequence({
+        warehouse: selectedWarehouse,
+        row: selectedRow,
+        space: nextConsecutiveSpace
+      });
+      setSpaceInput(nextConsecutiveSpace);
 
       setActivePrinter(null);
       if (onAssignmentSaved) onAssignmentSaved();
@@ -476,7 +562,7 @@ export default function EquipmentReadingView({
               {!showCustomWarehouse ? (
                 <select
                   value={selectedWarehouse}
-                  onChange={(e) => setSelectedWarehouse(e.target.value)}
+                  onChange={(e) => handleWarehouseChange(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:border-emerald-600 outline-none"
                 >
                   {warehouseOptions.map((w, idx) => (
@@ -491,17 +577,17 @@ export default function EquipmentReadingView({
                     placeholder="Ej: Alpha, Beta..."
                     value={customWarehouseInput}
                     onChange={(e) => setCustomWarehouseInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddNewWarehouse(customWarehouseInput);
+                      }
+                    }}
                     className="flex-1 bg-slate-50 border border-blue-400 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 uppercase"
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      if (customWarehouseInput.trim()) {
-                        setSelectedWarehouse(customWarehouseInput.trim());
-                        setShowCustomWarehouse(false);
-                        setCustomWarehouseInput('');
-                      }
-                    }}
+                    onClick={() => handleAddNewWarehouse(customWarehouseInput)}
                     className="bg-slate-800 text-white font-medium text-xs px-2.5 py-1.5 rounded-xl"
                   >
                     OK
@@ -538,7 +624,7 @@ export default function EquipmentReadingView({
               {!showCustomRow ? (
                 <select
                   value={selectedRow}
-                  onChange={(e) => setSelectedRow(e.target.value)}
+                  onChange={(e) => handleRowChange(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:border-emerald-600 outline-none"
                 >
                   {rowOptions.map((r, idx) => (
@@ -553,17 +639,17 @@ export default function EquipmentReadingView({
                     placeholder="Ej: 20, 19, 22..."
                     value={customRowInput}
                     onChange={(e) => setCustomRowInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddNewRow(customRowInput);
+                      }
+                    }}
                     className="flex-1 bg-slate-50 border border-blue-400 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 uppercase"
                   />
                   <button
                     type="button"
-                    onClick={() => {
-                      if (customRowInput.trim()) {
-                        setSelectedRow(customRowInput.trim());
-                        setShowCustomRow(false);
-                        setCustomRowInput('');
-                      }
-                    }}
+                    onClick={() => handleAddNewRow(customRowInput)}
                     className="bg-slate-800 text-white font-medium text-xs px-2.5 py-1.5 rounded-xl"
                   >
                     OK
