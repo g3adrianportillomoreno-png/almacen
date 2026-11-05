@@ -99,7 +99,7 @@ function calculateEditDistance(a, b) {
 /**
  * Construye el desglose carácter por carácter para resaltar visualmente las diferencias
  */
-function buildCharDiff(expectedStr, scannedStr) {
+export function buildCharDiff(expectedStr, scannedStr) {
   const maxLen = Math.max(expectedStr.length, scannedStr.length);
   const expectedChars = [];
   const scannedChars = [];
@@ -374,19 +374,30 @@ export function findSerialMatch(
     return bestSubMatch;
   }
 
-  // Nivel 4: Ceros de relleno al final (ej: 12345678 vs 123456780 o 1234567800)
+  // Nivel 4: Ceros de relleno al final (ej: W758L700142 vs W758L7001420 o W758L70014200 en SANTI)
+  const trailingTargets = Array.from(new Set([scannedClean, extractedSerial].filter(Boolean)));
   for (const item of items) {
     const itemClean = cleanSerialCore(getSerial(item));
     if (!itemClean) continue;
 
-    if (itemClean.startsWith(scannedClean)) {
-      const suffix = itemClean.slice(scannedClean.length);
-      if (/^0+$/.test(suffix)) return item;
-    }
+    for (const tgt of trailingTargets) {
+      if (itemClean.startsWith(tgt)) {
+        const suffix = itemClean.slice(tgt.length);
+        if (/^0+$/.test(suffix)) return item;
+      }
 
-    if (scannedClean.startsWith(itemClean)) {
-      const suffix = scannedClean.slice(itemClean.length);
-      if (/^0+$/.test(suffix)) return item;
+      if (tgt.startsWith(itemClean)) {
+        const suffix = tgt.slice(itemClean.length);
+        if (/^0+$/.test(suffix)) return item;
+      }
+
+      if (
+        itemClean.length >= 6 &&
+        tgt.length >= 6 &&
+        itemClean.replace(/0+$/, '') === tgt.replace(/0+$/, '')
+      ) {
+        return item;
+      }
     }
   }
 
@@ -404,4 +415,167 @@ export function findSerialMatch(
   }
 
   return null;
+}
+
+/**
+ * Busca candidatos similares en una lista de equipos para un código escaneado.
+ * Especialmente optimizado para el caso de SANTI donde se agregan ceros adicionales al final,
+ * códigos QR con metadatos embebidos, o diferencias menores de caracteres.
+ *
+ * @param {string} rawScanned Código escaneado con pistola o cámara
+ * @param {Array} items Lista de equipos u objetos
+ * @param {Function} getSerial Función extractora de serie
+ * @param {number} maxResults Cantidad máxima de candidatos a retornar (default: 6)
+ * @returns {Array} Lista de candidatos ordenados por puntuación de similitud
+ */
+export function findSimilarCandidates(
+  rawScanned,
+  items = [],
+  getSerial = (item) => (item?.serial || item?.serial_number || item),
+  maxResults = 6
+) {
+  if (!rawScanned || !items || !items.length) return [];
+
+  const scannedRaw = String(rawScanned).trim().toUpperCase();
+  const scannedClean = cleanSerialCore(scannedRaw);
+  if (!scannedClean) return [];
+
+  const extractedSerial = extractSerialFromScanned(scannedRaw);
+  const targets = Array.from(new Set([scannedClean, extractedSerial, scannedRaw].filter(Boolean)));
+
+  const candidates = [];
+  const seenSerials = new Set();
+
+  for (const item of items) {
+    const rawExpected = String(getSerial(item) || '').trim().toUpperCase();
+    if (!rawExpected || seenSerials.has(rawExpected)) continue;
+    const expectedClean = cleanSerialCore(rawExpected);
+    if (!expectedClean) continue;
+
+    let bestScore = 0;
+    let bestReason = '';
+    let matchType = '';
+    let matchedTarget = scannedClean;
+
+    for (const target of targets) {
+      if (!target) continue;
+
+      // 1. Ceros al final en SANTI (ej: Físico W758L700142 -> SANTI W758L7001420 o W758L70014200)
+      if (expectedClean.startsWith(target) && /^0+$/.test(expectedClean.slice(target.length))) {
+        const extraZeros = expectedClean.slice(target.length);
+        const score = 99 - (extraZeros.length * 2);
+        if (score > bestScore) {
+          bestScore = score;
+          bestReason = `Ceros adicionales en SANTI (+${extraZeros})`;
+          matchType = 'TRAILING_ZEROS_SANTI';
+          matchedTarget = target;
+        }
+      }
+      // 1b. Ceros al final en el escaneo y SANTI tiene la serie más corta
+      else if (target.startsWith(expectedClean) && /^0+$/.test(target.slice(expectedClean.length))) {
+        const extraZeros = target.slice(expectedClean.length);
+        const score = 97 - (extraZeros.length * 2);
+        if (score > bestScore) {
+          bestScore = score;
+          bestReason = `Escaneo con ceros al final (+${extraZeros})`;
+          matchType = 'TRAILING_ZEROS_SCAN';
+          matchedTarget = target;
+        }
+      }
+      // 1c. Misma raíz eliminando ceros al final en ambos lados
+      else if (
+        expectedClean.replace(/0+$/, '').length >= 6 &&
+        expectedClean.replace(/0+$/, '') === target.replace(/0+$/, '')
+      ) {
+        const score = 96;
+        if (score > bestScore) {
+          bestScore = score;
+          bestReason = 'Misma serie base con variación de ceros finales en SANTI';
+          matchType = 'TRAILING_ZEROS_DIFF';
+          matchedTarget = target;
+        }
+      }
+
+      // 2. Contenido en código QR de fabricante o subcadena
+      if (target.length > expectedClean.length && target.includes(expectedClean) && expectedClean.length >= 7) {
+        const score = 94;
+        if (score > bestScore) {
+          bestScore = score;
+          bestReason = 'Serie de SANTI contenida en código QR físico';
+          matchType = 'QR_CONTAINS';
+          matchedTarget = target;
+        }
+      } else if (expectedClean.length > target.length && expectedClean.includes(target) && target.length >= 7) {
+        const score = 92;
+        if (score > bestScore) {
+          bestScore = score;
+          bestReason = 'Serie de SANTI contiene el código leído';
+          matchType = 'CONTAINS_SCAN';
+          matchedTarget = target;
+        }
+      }
+
+      // 3. Similitud por distancia de edición (Levenshtein) si longitudes cercanas
+      const lenDiff = Math.abs(expectedClean.length - target.length);
+      if (lenDiff <= 2 && expectedClean.length >= 7 && target.length >= 7) {
+        const maxLen = Math.max(expectedClean.length, target.length);
+        const editDist = calculateEditDistance(expectedClean, target);
+
+        let posDiffs = editDist;
+        if (expectedClean.length === target.length) {
+          posDiffs = 0;
+          for (let i = 0; i < maxLen; i++) {
+            if (expectedClean[i] !== target[i]) posDiffs++;
+          }
+        }
+        const effectiveDiffs = Math.min(editDist, posDiffs);
+        const similarity = Math.round(((maxLen - effectiveDiffs) / maxLen) * 100);
+
+        if (similarity >= 75 && effectiveDiffs <= 2) {
+          const score = similarity;
+          if (score > bestScore) {
+            bestScore = score;
+            bestReason = `${similarity}% similitud (${effectiveDiffs} ${effectiveDiffs === 1 ? 'dígito diferente' : 'dígitos diferentes'})`;
+            matchType = 'EDIT_SIMILARITY';
+            matchedTarget = target;
+          }
+        }
+      }
+    }
+
+    // Si tiene una coincidencia relevante
+    if (bestScore >= 70) {
+      seenSerials.add(rawExpected);
+      const isUnassigned = !item?.warehouseSpace || !item?.warehouseRow || item?.warehouseRow === 'Sin Asignar' || (typeof item?.warehouseSpace === 'string' && item.warehouseSpace.trim() === '');
+
+      // Priorizar equipos pendientes de acomodo
+      let finalScore = bestScore;
+      if (isUnassigned) {
+        finalScore += 5;
+      }
+
+      const { expectedChars, scannedChars } = buildCharDiff(rawExpected, matchedTarget);
+
+      candidates.push({
+        item,
+        serial: rawExpected,
+        cleanSerial: expectedClean,
+        material: item?.material || item?.model || 'EQUIPO',
+        batchFolio: item?.batchFolio || item?.documentName || '',
+        warehouseLocation: item?.warehouseName && item?.warehouseRow && item?.warehouseRow !== 'Sin Asignar'
+          ? `${item.warehouseName} → ${item.warehouseRow} [${item.warehouseSpace || 'S/E'}]`
+          : 'Pendiente de Ubicación',
+        isUnassigned,
+        score: finalScore,
+        rawScore: bestScore,
+        reason: bestReason,
+        matchType,
+        expectedChars,
+        scannedChars
+      });
+    }
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  return candidates.slice(0, maxResults);
 }

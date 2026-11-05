@@ -29,3 +29,4 @@ export function getNextSpace(spaceVal) {
 
   return prefix + padded + suffix;
 }
+

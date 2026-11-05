@@ -2,8 +2,9 @@ import { useState, useMemo, useRef, useEffect } from 'react';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import CameraScanner from './CameraScanner.jsx';
+import SimilarPrintersModal from './SimilarPrintersModal.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
-import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
+import { findSerialMatch, findSimilarCandidates, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 import { getNextSpace } from '../utils/locationUtils.js';
 
@@ -21,6 +22,11 @@ export default function EquipmentReadingView({
   const [successMessage, setSuccessMessage] = useState('');
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [searchTableQuery, setSearchTableQuery] = useState('');
+
+  // Estados para opciones parecidas en SANTI
+  const [similarCandidates, setSimilarCandidates] = useState([]);
+  const [isSimilarModalOpen, setIsSimilarModalOpen] = useState(false);
+  const [scannedSimilarCode, setScannedSimilarCode] = useState('');
 
   // Formulario de asignación
   const [selectedWarehouse, setSelectedWarehouse] = useState(availableWarehouses[0] || 'Almacén 1');
@@ -223,16 +229,35 @@ export default function EquipmentReadingView({
         scannedCode: match.serial
       });
     } else {
-      soundEffects.playScanError();
-      setActivePrinter(null);
-      setNotFoundQuery(extractSerialFromScanned(serial) || serial);
+      // Buscar opciones parecidas en SANTI (por ceros finales, subcadenas o similitud)
+      const candidates = findSimilarCandidates(serial, allSystemPrinters);
+      if (candidates.length > 0) {
+        soundEffects.playScanSuccess();
+        setSimilarCandidates(candidates);
+        setScannedSimilarCode(extractSerialFromScanned(serial) || serial);
+        setIsSimilarModalOpen(true);
+      } else {
+        soundEffects.playScanError();
+        setActivePrinter(null);
+        setNotFoundQuery(extractSerialFromScanned(serial) || serial);
+      }
     }
     setScanInput('');
   };
 
+  const handleSelectSimilarCandidate = (selectedItem) => {
+    setIsSimilarModalOpen(false);
+    if (!selectedItem) return;
+    soundEffects.playScanSuccess();
+    handleSelectPrinterForLocation({
+      ...selectedItem,
+      scannedCode: selectedItem.serial
+    });
+  };
+
   // Escáner de pistola global
   useBarcodeScanner((scanned) => {
-    if (!isCameraActive && !activePrinter) {
+    if (!isCameraActive && !activePrinter && !isSimilarModalOpen) {
       handleSearchSerial(scanned);
     }
   });
@@ -834,6 +859,15 @@ export default function EquipmentReadingView({
           </div>
         )}
       </div>
+
+      {/* MODAL DE OPCIONES PARECIDAS EN SANTI */}
+      <SimilarPrintersModal
+        isOpen={isSimilarModalOpen}
+        onClose={() => setIsSimilarModalOpen(false)}
+        scannedCode={scannedSimilarCode}
+        candidates={similarCandidates}
+        onSelectCandidate={handleSelectSimilarCandidate}
+      />
 
     </div>
   );

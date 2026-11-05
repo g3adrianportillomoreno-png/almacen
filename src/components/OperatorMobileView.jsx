@@ -1,10 +1,11 @@
 import { useState, useMemo, useRef } from 'react';
 import CameraScanner from './CameraScanner.jsx';
 import SerialSimilarityModal from './SerialSimilarityModal.jsx';
+import SimilarPrintersModal from './SimilarPrintersModal.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
-import { findSerialMatch, findSimilarSerialMatches, extractSerialFromScanned } from '../utils/serialMatcher.js';
+import { findSerialMatch, findSimilarSerialMatches, findSimilarCandidates, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 import { getNextSpace } from '../utils/locationUtils.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
@@ -49,6 +50,11 @@ export default function OperatorMobileView({
   const [successMessage, setSuccessMessage] = useState('');
   const [notFoundSerial, setNotFoundSerial] = useState('');
   const [showSimilarityModal, setShowSimilarityModal] = useState(false);
+
+  // Estados para el modal de opciones parecidas en SANTI (ceros finales / variaciones)
+  const [similarCandidates, setSimilarCandidates] = useState([]);
+  const [isSimilarModalOpen, setIsSimilarModalOpen] = useState(false);
+  const [scannedSimilarCode, setScannedSimilarCode] = useState('');
 
   // Filtros de estado y documento para el checklist móvil
   const [checklistStatusFilter, setChecklistStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
@@ -345,15 +351,24 @@ export default function OperatorMobileView({
           await onCompleteTrailer(matchInBatch.serial, null, activeChecklist.id);
         }
       } else {
-        soundEffects.playScanError();
-        const unexpectedToLog = candidateSerial || code;
-        setNotFoundSerial(unexpectedToLog);
-        if (onLogUnexpected) {
-          await onLogUnexpected(unexpectedToLog, activeChecklist.id);
+        // Si no coincide exactamente, buscar opciones parecidas en el lote (ej. ceros al final en SANTI)
+        const batchCandidates = findSimilarCandidates(code, activeChecklist.expectedSeries);
+        if (batchCandidates.length > 0) {
+          soundEffects.playScanSuccess();
+          setSimilarCandidates(batchCandidates);
+          setScannedSimilarCode(candidateSerial || code);
+          setIsSimilarModalOpen(true);
+        } else {
+          soundEffects.playScanError();
+          const unexpectedToLog = candidateSerial || code;
+          setNotFoundSerial(unexpectedToLog);
+          if (onLogUnexpected) {
+            await onLogUnexpected(unexpectedToLog, activeChecklist.id);
+          }
         }
       }
     } else {
-      // Búsqueda global en todo el sistema (Pestaña "Lectura": aquí SÍ abre el modal para dar ubicación física)
+      // Búsqueda global en todo el sistema (Pestaña "Lectura" / Acomodo: aquí SÍ abre el modal para dar ubicación física)
       const match = findSerialMatch(code, allSystemPrinters);
       if (match) {
         soundEffects.playScanSuccess();
@@ -362,16 +377,45 @@ export default function OperatorMobileView({
           scannedCode: match.serial
         });
       } else {
-        soundEffects.playScanError();
-        setNotFoundSerial(candidateSerial || code);
+        // Buscar opciones parecidas en SANTI (por ceros finales, subcadenas o similitud)
+        const candidates = findSimilarCandidates(code, allSystemPrinters);
+        if (candidates.length > 0) {
+          soundEffects.playScanSuccess();
+          setSimilarCandidates(candidates);
+          setScannedSimilarCode(candidateSerial || code);
+          setIsSimilarModalOpen(true);
+        } else {
+          soundEffects.playScanError();
+          setNotFoundSerial(candidateSerial || code);
+        }
       }
     }
     setScanInput('');
   };
 
+  // Seleccionar candidato similar desde el modal de opciones parecidas en SANTI
+  const handleSelectSimilarCandidate = (selectedItem) => {
+    setIsSimilarModalOpen(false);
+    if (!selectedItem) return;
+
+    if (activeChecklist) {
+      soundEffects.playScanSuccess();
+      setSuccessMessage(`✓ ¡SÍ ESTÁ! [${selectedItem.material || 'EQUIPO'}] Serie: ${selectedItem.serial}`);
+      if (onCompleteTrailer) {
+        onCompleteTrailer(selectedItem.serial, null, activeChecklist.id);
+      }
+    } else {
+      soundEffects.playScanSuccess();
+      handleSelectPrinter({
+        ...selectedItem,
+        scannedCode: selectedItem.serial
+      });
+    }
+  };
+
   // Escáner de pistola física global
   useBarcodeScanner((scanned) => {
-    if (!isCameraActive && !activePrinter) {
+    if (!isCameraActive && !activePrinter && !isSimilarModalOpen) {
       handleProcessScan(scanned);
     }
   });
@@ -579,8 +623,28 @@ export default function OperatorMobileView({
       )}
 
       {notFoundSerial && (
-        <div className="bg-rose-600 text-white px-4 py-2.5 text-xs font-bold text-center animate-fade-in flex items-center justify-center gap-2">
-          <span>⚠️ Serie "{notFoundSerial}" no encontrada en la lista actual.</span>
+        <div className="bg-rose-600 text-white px-4 py-2 text-xs font-bold animate-fade-in flex flex-wrap items-center justify-between gap-2 shadow-md">
+          <div className="flex items-center gap-1.5 truncate">
+            <span>⚠️</span>
+            <span className="truncate">Serie "{notFoundSerial}" no encontrada exactamente.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const targetList = activeChecklist ? activeChecklist.expectedSeries : allSystemPrinters;
+              const cands = findSimilarCandidates(notFoundSerial, targetList);
+              if (cands.length > 0) {
+                setSimilarCandidates(cands);
+                setScannedSimilarCode(notFoundSerial);
+                setIsSimilarModalOpen(true);
+              } else {
+                alert(`No se encontraron series parecidas a "${notFoundSerial}" en SANTI.`);
+              }
+            }}
+            className="text-[11px] bg-slate-950/80 hover:bg-slate-950 text-amber-300 font-bold px-3 py-1 rounded-xl border border-amber-400/50 shrink-0 transition active:scale-95 flex items-center gap-1"
+          >
+            🔍 <span>Ver Opciones Parecidas</span>
+          </button>
         </div>
       )}
 
@@ -1421,6 +1485,15 @@ export default function OperatorMobileView({
           </div>
         </div>
       )}
+
+      {/* MODAL DE OPCIONES PARECIDAS EN SANTI */}
+      <SimilarPrintersModal
+        isOpen={isSimilarModalOpen}
+        onClose={() => setIsSimilarModalOpen(false)}
+        scannedCode={scannedSimilarCode}
+        candidates={similarCandidates}
+        onSelectCandidate={handleSelectSimilarCandidate}
+      />
 
     </div>
   );
