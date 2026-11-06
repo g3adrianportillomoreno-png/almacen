@@ -22,6 +22,7 @@ import OperatorMobileView from './components/OperatorMobileView';
 import MercadoLibreView from './components/MercadoLibreView';
 import MercadoLibreScanView from './components/MercadoLibreScanView';
 import BajasSessionView from './components/BajasSessionView';
+import { RealtimeSyncService } from './services/RealtimeSyncService';
 import { supabase } from './utils/supabaseClient';
 
 function App() {
@@ -51,6 +52,9 @@ function App() {
 
   // Lote preseleccionado para Modo Bajas
   const [bajasPreselectedBatchId, setBajasPreselectedBatchId] = useState(null);
+
+  // Notificación flotante de sincronización en tiempo real (ej. cuando se sube un nuevo archivo maestro)
+  const [realtimeNotification, setRealtimeNotification] = useState(null);
 
   // Obtener nombres de filas disponibles desde el layout del mapa
   const [mapModel, setMapModel] = useState(() => WarehouseMapController.loadMap());
@@ -96,39 +100,26 @@ function App() {
     fetchMlBatches();
   }, [fetchMlBatches]);
 
-  // Sincronización en tiempo real vía WebSockets de Supabase (Multi-usuario: Operadores y Oficina)
+  // Sincronización en tiempo real híbrida (Alternativa 1: Broadcast instantáneo + Polling + Visibility + WebSockets)
   useEffect(() => {
-    let debounceTimer = null;
-    const triggerDebouncedRefresh = () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        fetchBatches(true);
-        fetchMlBatches();
-        handleLayoutChange();
-      }, 300);
-    };
+    // 1. Escuchar actualizaciones en vivo
+    const unsubscribeSync = RealtimeSyncService.onSync((eventInfo) => {
+      fetchBatches(true);
+      fetchMlBatches();
+      handleLayoutChange();
+    });
 
-    const channel = supabase
-      .channel('warehouse-realtime-sync')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'expected_series' },
-        () => {
-          triggerDebouncedRefresh();
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'checklists' },
-        () => {
-          triggerDebouncedRefresh();
-        }
-      )
-      .subscribe();
+    // 2. Escuchar avisos visuales (ej. cuando oficina sube un archivo maestro)
+    const unsubscribeNotif = RealtimeSyncService.onNotification((msg) => {
+      setRealtimeNotification(msg);
+      setTimeout(() => {
+        setRealtimeNotification(null);
+      }, 4500);
+    });
 
     return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      supabase.removeChannel(channel);
+      unsubscribeSync();
+      unsubscribeNotif();
     };
   }, [fetchBatches, fetchMlBatches, handleLayoutChange]);
 
@@ -538,34 +529,51 @@ function App() {
   // Si la vista es Modo Operador Móvil, renderizamos su pantalla táctil dedicada inmediatamente sin bloqueo
   if (view === 'operator') {
     return (
-      <OperatorMobileView 
-        batches={batches}
-        isLoading={loading}
-        onRefreshData={() => {
-          fetchBatches();
-          fetchMlBatches();
-        }}
-        onCompleteTrailer={handleCompleteTrailer}
-        onLogUnexpected={handleLogUnexpected}
-        onReconcileSimilar={handleReconcileSimilar}
-        onAssignmentSaved={() => {
-          fetchBatches(true);
-          handleLayoutChange();
-        }}
-        onRequestAdminView={handleRequestAdminView}
-        availableWarehouses={mapModel.warehouses.map(w => w.name)}
-        availableRows={availableRows}
-        mlBatches={mlBatches}
-        onRecordMlScan={handleRecordMlScan}
-        onRecordMlUnexpected={handleRecordMlUnexpected}
-        onRefreshMl={fetchMlBatches}
-        onForceFinishMlBatch={handleForceFinishMlBatch}
-      />
+      <>
+        {/* AVISO FLOTANTE DE SINCRONIZACIÓN EN TIEMPO REAL */}
+        {realtimeNotification && (
+          <div className="fixed top-2 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-emerald-400 border border-emerald-500/60 shadow-2xl px-4 py-2 rounded-2xl text-xs font-bold flex items-center gap-2 animate-fade-in backdrop-blur-md max-w-sm text-center">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+            <span>{realtimeNotification}</span>
+          </div>
+        )}
+        <OperatorMobileView 
+          batches={batches}
+          isLoading={loading}
+          onRefreshData={() => {
+            fetchBatches();
+            fetchMlBatches();
+          }}
+          onCompleteTrailer={handleCompleteTrailer}
+          onLogUnexpected={handleLogUnexpected}
+          onReconcileSimilar={handleReconcileSimilar}
+          onAssignmentSaved={() => {
+            fetchBatches(true);
+            handleLayoutChange();
+          }}
+          onRequestAdminView={handleRequestAdminView}
+          availableWarehouses={mapModel.warehouses.map(w => w.name)}
+          availableRows={availableRows}
+          mlBatches={mlBatches}
+          onRecordMlScan={handleRecordMlScan}
+          onRecordMlUnexpected={handleRecordMlUnexpected}
+          onRefreshMl={fetchMlBatches}
+          onForceFinishMlBatch={handleForceFinishMlBatch}
+        />
+      </>
     );
   }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans text-gray-800">
+      {/* AVISO FLOTANTE DE SINCRONIZACIÓN EN TIEMPO REAL */}
+      {realtimeNotification && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-emerald-400 border border-emerald-500/60 shadow-2xl px-4 py-2 rounded-2xl text-xs font-bold flex items-center gap-2 animate-fade-in backdrop-blur-md">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+          <span>{realtimeNotification}</span>
+        </div>
+      )}
+
       {/* Barra de Navegación Superior */}
       <Header 
         currentView={view} 

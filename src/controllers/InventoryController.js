@@ -1,5 +1,6 @@
 import { InventoryRepository } from '../services/InventoryRepository.js';
 import { WarehouseMapController } from './WarehouseMapController.js';
+import { RealtimeSyncService } from '../services/RealtimeSyncService.js';
 import { PrinterModel } from '../models/PrinterModel.js';
 import * as XLSX from 'xlsx';
 
@@ -221,6 +222,13 @@ export class InventoryController {
       console.warn("Error sincronizando filas en layout del mapa:", err);
     }
 
+    // Notificar en tiempo real a todos los dispositivos abiertos
+    RealtimeSyncService.broadcastMutation('MASTER_UPLOAD', {
+      count: parsedRows.length,
+      updated: result.updated,
+      added: result.added
+    });
+
     return result;
   }
 
@@ -248,6 +256,12 @@ export class InventoryController {
     } catch (err) {
       console.warn("Error sincronizando filas en layout del mapa:", err);
     }
+
+    // Notificar en tiempo real a todos los dispositivos abiertos
+    RealtimeSyncService.broadcastMutation('MASTER_UPLOAD', {
+      count: parsedRows.length,
+      purged: removedPrinters.length
+    });
 
     return result;
   }

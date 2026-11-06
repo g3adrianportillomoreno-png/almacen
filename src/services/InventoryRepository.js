@@ -1,5 +1,6 @@
 import { supabase } from '../utils/supabaseClient.js';
 import { OfflineSyncService } from './OfflineSyncService.js';
+import { RealtimeSyncService } from './RealtimeSyncService.js';
 import { ChecklistModel } from '../models/ChecklistModel.js';
 import { WarehouseMapModel } from '../models/WarehouseMapModel.js';
 
@@ -286,6 +287,14 @@ export class InventoryRepository {
       }
     }
 
+    // Notificar en tiempo real a todos los dispositivos abiertos
+    RealtimeSyncService.broadcastMutation('CHECKLIST_CREATED', {
+      id: batchData.id,
+      name: fullName,
+      folio: folio,
+      count: series.length
+    });
+
     return batchData;
   }
 
@@ -372,6 +381,14 @@ export class InventoryRepository {
         scannedAt: nowIso
       });
     }
+
+    // Notificar en tiempo real a los demás operadores trabajando en este checklist
+    RealtimeSyncService.broadcastMutation('SCAN', {
+      checklistId,
+      serialNumber: serial,
+      warehouseRow: row,
+      internalNumber
+    });
   }
 
   /**
@@ -638,6 +655,12 @@ export class InventoryRepository {
 
     this.saveBajasSession(sessionRecord);
 
+    // Notificar en tiempo real a todos los dispositivos abiertos
+    RealtimeSyncService.broadcastMutation('BAJA_UPDATE', {
+      count: items.length,
+      folio: sessionRecord.folio
+    });
+
     return { count: items.length, session: sessionRecord };
   }
 
@@ -816,6 +839,15 @@ export class InventoryRepository {
         scannedAt: nowIso
       });
     }
+
+    // Notificar en tiempo real a todos los demás dispositivos (evita colisiones de espacio y actualiza vista de acomodo)
+    RealtimeSyncService.broadcastMutation('ASSIGNMENT', {
+      serialNumber: serial,
+      warehouseName: finalWh,
+      warehouseRow: finalRow,
+      warehouseSpace: finalSpace,
+      internalNumber: finalInternal
+    });
 
     return cache.serials[serial];
   }
@@ -1737,6 +1769,12 @@ export class InventoryRepository {
       console.warn('No se pudo actualizar estado del checklist fusionado:', e);
     }
 
+    // Notificar en tiempo real a todos los dispositivos abiertos
+    RealtimeSyncService.broadcastMutation('CHECKLIST_MERGED', {
+      targetChecklistId,
+      totalSeries: finalMergedMap.size
+    });
+
     return {
       targetChecklistId,
       totalSeries: finalMergedMap.size,
@@ -1903,6 +1941,12 @@ export class InventoryRepository {
         .eq('checklist_id', targetChecklistId)
         .in('scanned_value', rawValsToDelete);
     }
+
+    // Notificar en tiempo real a todos los dispositivos abiertos
+    RealtimeSyncService.broadcastMutation('CHECKLIST_MERGED', {
+      targetChecklistId,
+      addedCount: toInsert.length
+    });
 
     return {
       targetChecklistId,
