@@ -14,10 +14,8 @@ export class InventoryController {
    * @param {Array} checklists Lista de instancias ChecklistModel
    * @returns {Array<PrinterModel>}
   /**
-   * Extrae todas las impresoras del inventario de almacén:
-   * Incluye las del lote de Inventario Maestro Y aquellas de checklists de recepción
-   * a las que ya se les haya dado lectura física (escaneadas).
-   * Los checklists recién subidos NO se agregan al inventario hasta que se les dé lectura.
+   * Extrae todas las impresoras del Inventario Maestro para la tabla y vistas de almacén.
+   * Los checklists de recepción se mantienen 100% separados del Inventario Maestro.
    * @param {Array} checklists Lista de instancias ChecklistModel
    * @returns {Array<PrinterModel>}
    */
@@ -25,22 +23,19 @@ export class InventoryController {
     const list = [];
     const seenSerials = new Set();
 
-    for (const batch of checklists) {
-      const isMasterBatch = batch.isMaster || batch.folio === 'MAESTRO' || (batch.name || '').toLowerCase().includes('inventario maestro') || !batch.folio;
+    // Exclusivamente lotes de Inventario Maestro
+    const masterBatches = (checklists || []).filter(b => 
+      b.isMaster || b.folio === 'MAESTRO' || (b.name || '').toLowerCase().includes('inventario maestro')
+    );
 
+    for (const batch of masterBatches) {
       for (const printer of (batch.expectedSeries || [])) {
         if (!printer.serial) continue;
         const serialUpper = String(printer.serial).trim().toUpperCase();
 
         if (!seenSerials.has(serialUpper)) {
-          // Si es del lote de inventario maestro, ya está en almacén.
-          // Si es de un checklist de recepción, SÓLO se incluye si ya se le dio lectura (isScanned === true o está en completed).
-          const isRead = Boolean(printer.isScanned) || Boolean(batch.completed && batch.completed.includes(serialUpper));
-
-          if (isMasterBatch || isRead) {
-            seenSerials.add(serialUpper);
-            list.push(printer);
-          }
+          seenSerials.add(serialUpper);
+          list.push(printer);
         }
       }
     }
@@ -48,15 +43,19 @@ export class InventoryController {
   }
 
   /**
-   * Extrae absolutamente todas las impresoras esperadas/registradas en el sistema
-   * (tanto de almacén maestro como de checklists pendientes de lectura física).
-   * Útil para la pantalla de Lectura de Equipos para buscar o listar las que faltan por ubicar.
+   * Extrae las impresoras del Inventario Maestro para búsquedas globales de acomodo.
+   * Totalmente separado de los checklists de recepción.
    */
   static extractAllExpectedPrinters(checklists = []) {
     const list = [];
     const seenSerials = new Set();
 
-    for (const batch of checklists) {
+    // Exclusivamente lotes de Inventario Maestro
+    const masterBatches = (checklists || []).filter(b => 
+      b.isMaster || b.folio === 'MAESTRO' || (b.name || '').toLowerCase().includes('inventario maestro')
+    );
+
+    for (const batch of masterBatches) {
       for (const printer of (batch.expectedSeries || [])) {
         if (!printer.serial) continue;
         const serialUpper = String(printer.serial).trim().toUpperCase();

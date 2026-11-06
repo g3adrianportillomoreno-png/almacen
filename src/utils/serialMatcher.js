@@ -329,6 +329,38 @@ export function findSerialMatch(
     scannedClean = first15;
   }
 
+  // Nivel 0: Búsqueda directa por Número de SANTI / Número Interno de Equipo (ej: #21465 o 21465)
+  // En SANTI, no existen dos impresoras con el mismo número interno, por lo que es un identificador único directo.
+  const rawCleanNum = String(rawScanned).trim().replace(/^#/, '').trim();
+  if (rawCleanNum && /^\d+$/.test(rawCleanNum)) {
+    // Si viene precedido de '#' o es un número puro, buscar coincidencia por internalNumber
+    const santiMatch = items.find((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const num = item?.internalNumber !== undefined && item?.internalNumber !== null
+        ? String(item.internalNumber).trim().replace(/^#/, '')
+        : (item?.internal_number !== undefined && item?.internal_number !== null
+            ? String(item.internal_number).trim().replace(/^#/, '')
+            : '');
+      return num === rawCleanNum;
+    });
+
+    // Si viene explícitamente con '#', dar prioridad absoluta al número de SANTI
+    if (String(rawScanned).trim().startsWith('#') && santiMatch) {
+      return santiMatch;
+    }
+
+    // Si no tiene '#' pero coincide con número interno y ninguna serie coincide de forma exacta primero
+    if (santiMatch) {
+      const hasExactSerial = items.some(item => {
+        const s = String(getSerial(item) || '').trim().toUpperCase();
+        return s === scannedUpper;
+      });
+      if (!hasExactSerial) {
+        return santiMatch;
+      }
+    }
+  }
+
   // Nivel 1: Coincidencia Exacta
   for (const item of items) {
     const s = String(getSerial(item) || '').trim().toUpperCase();
@@ -446,6 +478,40 @@ export function findSimilarCandidates(
   const candidates = [];
   const seenSerials = new Set();
 
+  // Nivel 0: Búsqueda de candidatos por Número SANTI (#21465 o 21465)
+  const rawNumQuery = String(rawScanned).trim().replace(/^#/, '').trim();
+  if (rawNumQuery && /^\d+$/.test(rawNumQuery)) {
+    for (const item of items) {
+      if (!item || typeof item !== 'object') continue;
+      const num = item?.internalNumber !== undefined && item?.internalNumber !== null
+        ? String(item.internalNumber).trim().replace(/^#/, '')
+        : (item?.internal_number !== undefined && item?.internal_number !== null
+            ? String(item.internal_number).trim().replace(/^#/, '')
+            : '');
+      if (num === rawNumQuery) {
+        const rawExpected = String(getSerial(item) || '').trim().toUpperCase();
+        seenSerials.add(rawExpected);
+        candidates.push({
+          item,
+          serial: rawExpected,
+          cleanSerial: cleanSerialCore(rawExpected),
+          material: item?.material || item?.model || 'EQUIPO',
+          batchFolio: item?.batchFolio || item?.documentName || '',
+          warehouseLocation: item?.warehouseName && item?.warehouseRow && item?.warehouseRow !== 'Sin Asignar'
+            ? `${item.warehouseName} → ${item.warehouseRow} [${item.warehouseSpace || 'S/E'}]`
+            : 'Pendiente de Ubicación',
+          isUnassigned: !item?.warehouseSpace || !item?.warehouseRow || item?.warehouseRow === 'Sin Asignar' || (typeof item?.warehouseSpace === 'string' && item.warehouseSpace.trim() === ''),
+          score: 100,
+          rawScore: 100,
+          reason: `Número SANTI exacto (#${rawNumQuery})`,
+          matchType: 'SANTI_INTERNAL_NUMBER',
+          expectedChars: rawExpected.split('').map(c => ({ char: c, type: 'match' })),
+          scannedChars: String(rawScanned).split('').map(c => ({ char: c, type: 'match' }))
+        });
+      }
+    }
+  }
+
   for (const item of items) {
     const rawExpected = String(getSerial(item) || '').trim().toUpperCase();
     if (!rawExpected || seenSerials.has(rawExpected)) continue;
@@ -459,6 +525,17 @@ export function findSimilarCandidates(
 
     for (const target of targets) {
       if (!target) continue;
+
+      // 0. Coincidencia por núcleo normalizado (diferencia de ceros iniciales o formato)
+      if (expectedClean === target) {
+        const score = 99;
+        if (score > bestScore) {
+          bestScore = score;
+          bestReason = 'Coincidencia exacta sin ceros iniciales de SANTI';
+          matchType = 'LEADING_ZEROS_SANTI';
+          matchedTarget = target;
+        }
+      }
 
       // 1. Ceros al final en SANTI (ej: Físico W758L700142 -> SANTI W758L7001420 o W758L70014200)
       if (expectedClean.startsWith(target) && /^0+$/.test(expectedClean.slice(target.length))) {

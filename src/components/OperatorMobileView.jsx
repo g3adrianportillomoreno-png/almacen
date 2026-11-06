@@ -7,7 +7,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { findSerialMatch, findSimilarSerialMatches, findSimilarCandidates, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
-import { getNextSpace } from '../utils/locationUtils.js';
+import { getNextSpace, adjustNumericRow, adjustNumericSpace } from '../utils/locationUtils.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 import BajasSessionView from './BajasSessionView.jsx';
 import OfflineSyncBanner from './OfflineSyncBanner.jsx';
@@ -267,6 +267,23 @@ export default function OperatorMobileView({
   const handleRowChange = (val) => {
     setSelectedRow(val);
     setOperatorSequence(prev => ({ ...prev, row: val }));
+  };
+
+  const handleSpaceChange = (val) => {
+    setSpaceInput(val);
+    setOperatorSequence(prev => ({ ...prev, space: val }));
+  };
+
+  const handleStepRow = (delta) => {
+    const currentRow = selectedRow || rowOptions[0] || 'Fila 1';
+    const nextRow = adjustNumericRow(currentRow, delta);
+    handleRowChange(nextRow);
+  };
+
+  const handleStepSpace = (delta) => {
+    const currentSpace = spaceInput || '1';
+    const nextSpace = adjustNumericSpace(currentSpace, delta);
+    handleSpaceChange(nextSpace);
   };
 
   // Detección de colisión en tiempo real
@@ -1364,80 +1381,125 @@ export default function OperatorMobileView({
                 )}
               </div>
 
-              {/* FILA */}
+              {/* FILA CON STEPPER [-] [ INPUT ] [+] */}
               <div>
                 <div className="flex justify-between items-center mb-1">
                   <label className="text-[11px] font-bold text-slate-300 uppercase">Fila:</label>
-                  {!showCustomRow ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowCustomRow(true)}
-                      className="text-[11px] text-blue-400 hover:underline font-bold"
-                    >
-                      + Nueva Fila
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowCustomRow(false)}
-                      className="text-[11px] text-slate-400"
-                    >
-                      Cancelar
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-400">Sube/baja con [-] [+] o edita</span>
+                    {!showCustomRow ? (
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomRow(true)}
+                        className="text-[11px] text-blue-400 hover:underline font-bold"
+                      >
+                        Lista
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setShowCustomRow(false)}
+                        className="text-[11px] text-slate-400"
+                      >
+                        Stepper
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {!showCustomRow ? (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleStepRow(-1)}
+                      className="w-12 h-12 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 rounded-xl text-white font-black text-2xl flex items-center justify-center transition active:scale-95 shadow-sm"
+                      title="Fila anterior (-1)"
+                    >
+                      −
+                    </button>
+
+                    <div className="relative flex-1">
+                      <input
+                        type="text"
+                        value={selectedRow}
+                        onChange={(e) => handleRowChange(e.target.value)}
+                        list="operator-row-suggestions"
+                        placeholder="Ej: Fila 1"
+                        className="w-full h-12 bg-slate-950 border border-slate-700 focus:border-emerald-500 rounded-xl px-3 text-center text-sm font-black text-white uppercase outline-none"
+                      />
+                      <datalist id="operator-row-suggestions">
+                        {rowOptions.map((r, idx) => (
+                          <option key={idx} value={r} />
+                        ))}
+                      </datalist>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleStepRow(1)}
+                      className="w-12 h-12 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-slate-700 rounded-xl text-white font-black text-2xl flex items-center justify-center transition active:scale-95 shadow-sm"
+                      title="Siguiente fila (+1)"
+                    >
+                      +
+                    </button>
+                  </div>
+                ) : (
                   <select
                     value={selectedRow}
-                    onChange={(e) => handleRowChange(e.target.value)}
+                    onChange={(e) => {
+                      handleRowChange(e.target.value);
+                      setShowCustomRow(false);
+                    }}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-xs font-bold text-white outline-none focus:border-emerald-500"
                   >
                     {rowOptions.map((r, idx) => (
                       <option key={idx} value={r}>{r}</option>
                     ))}
                   </select>
-                ) : (
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      autoFocus
-                      placeholder="Ej: 20, 19, 22..."
-                      value={customRowInput}
-                      onChange={(e) => setCustomRowInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleAddNewRow(customRowInput);
-                        }
-                      }}
-                      className="flex-1 bg-slate-950 border border-blue-400 rounded-xl px-3 py-2 text-xs font-bold text-white uppercase outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleAddNewRow(customRowInput)}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-2 rounded-xl"
-                    >
-                      OK
-                    </button>
-                  </div>
                 )}
               </div>
 
-              {/* ESPACIO (CAMPO PRINCIPAL) */}
+              {/* ESPACIO EN LA FILA CON STEPPER [-] [ INPUT ] [+] */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-300 mb-1 uppercase">
-                  Espacio en la Fila (Ej: 19 D, 3 I, 14 D, 12...):
-                </label>
-                <input
-                  type="text"
-                  required
-                  autoFocus
-                  placeholder="EJ: 19 D, 3 I, 14 D..."
-                  value={spaceInput}
-                  onChange={(e) => setSpaceInput(e.target.value)}
-                  className="w-full bg-slate-950 border-2 border-emerald-500 rounded-2xl px-4 py-3 text-base font-bold text-white uppercase tracking-wider outline-none"
-                />
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-[11px] font-bold text-slate-300 uppercase">
+                    Espacio en la Fila:
+                  </label>
+                  <span className="text-[10px] text-emerald-400 font-bold">Consecutivo Automático</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleStepSpace(-1)}
+                    className="w-12 h-12 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-emerald-700/60 rounded-xl text-emerald-400 font-black text-2xl flex items-center justify-center transition active:scale-95 shadow-sm"
+                    title="Espacio anterior (-1)"
+                  >
+                    −
+                  </button>
+
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    placeholder="EJ: 19 D, 3 I, 14 D..."
+                    value={spaceInput}
+                    onChange={(e) => handleSpaceChange(e.target.value)}
+                    className="flex-1 h-12 bg-slate-950 border-2 border-emerald-500 rounded-xl px-3 text-center text-lg font-black text-white uppercase tracking-wider outline-none"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() => handleStepSpace(1)}
+                    className="w-12 h-12 bg-slate-800 hover:bg-slate-700 active:bg-slate-900 border border-emerald-700/60 rounded-xl text-emerald-400 font-black text-2xl flex items-center justify-center transition active:scale-95 shadow-sm"
+                    title="Siguiente espacio (+1)"
+                  >
+                    +
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1 text-center">
+                  Usa [-] y [+] para avanzar consecutivo o escribe directamente (ej: 19 D, 3 I, 14)
+                </p>
               </div>
 
               {/* NÚMERO DE EQUIPO OPCIONAL */}

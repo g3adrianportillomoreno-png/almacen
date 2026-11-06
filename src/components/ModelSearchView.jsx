@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { InventoryController } from '../controllers/InventoryController';
 import { PrinterModel } from '../models/PrinterModel';
 
@@ -11,21 +11,45 @@ export default function ModelSearchView({
   const [modelQuery, setModelQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
   const [selectedPrinterForBaja, setSelectedPrinterForBaja] = useState(null);
+  const [displayLimit, setDisplayLimit] = useState(30);
 
-  // Extraer todas las impresoras de todos los lotes
+  // Extraer todas las impresoras del inventario maestro
   const allPrinters = useMemo(() => {
     return InventoryController.extractAllPrinters(checklists);
   }, [checklists]);
 
-  // Modelos únicos para sugerencias rápidas
+  // Modelos únicos del catálogo
   const uniqueModels = useMemo(() => {
     return InventoryController.getUniqueModels(allPrinters);
   }, [allPrinters]);
+
+  // Sugerencias de modelos limitadas dinámicamente para no ralentizar la interfaz
+  const suggestedModels = useMemo(() => {
+    const trimmed = modelQuery.trim().toUpperCase();
+    if (!trimmed) {
+      // Si el buscador está vacío, mostrar solo los primeros 6 para no saturar
+      return uniqueModels.slice(0, 6);
+    }
+    // Conforme el usuario teclea, mostrar solo las opciones que coinciden (máximo 8 botones)
+    return uniqueModels
+      .filter(m => m.toUpperCase().includes(trimmed) && m.toUpperCase() !== trimmed)
+      .slice(0, 8);
+  }, [uniqueModels, modelQuery]);
+
+  // Resetear límite de visualización al cambiar búsqueda o filtro
+  useEffect(() => {
+    setDisplayLimit(30);
+  }, [modelQuery, statusFilter]);
 
   // Impresoras filtradas por el buscador y estado
   const filteredPrinters = useMemo(() => {
     return InventoryController.filterPrinters(allPrinters, modelQuery, statusFilter);
   }, [allPrinters, modelQuery, statusFilter]);
+
+  // Impresoras paginadas visibles para evitar lag con miles de registros
+  const visiblePrinters = useMemo(() => {
+    return filteredPrinters.slice(0, displayLimit);
+  }, [filteredPrinters, displayLimit]);
 
   // Contadores generales
   const stats = useMemo(() => {
@@ -120,10 +144,12 @@ export default function ModelSearchView({
         </div>
 
         {/* Sugerencias de modelos detectados */}
-        {uniqueModels.length > 0 && (
-          <div className="mt-3 flex flex-wrap items-center gap-1.5">
-            <span className="text-[11px] text-slate-400 font-medium uppercase mr-1">Sugerencias:</span>
-            {uniqueModels.map((m, idx) => (
+        {suggestedModels.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5 animate-fade-in">
+            <span className="text-[11px] text-slate-400 font-medium uppercase mr-1">
+              {modelQuery ? 'Modelos coincidentes:' : 'Sugerencias:'}
+            </span>
+            {suggestedModels.map((m, idx) => (
               <button
                 key={idx}
                 onClick={() => setModelQuery(m)}
@@ -191,7 +217,7 @@ export default function ModelSearchView({
       <div className="flex flex-col gap-3">
         <div className="flex justify-between items-center px-1">
           <p className="text-xs font-medium text-slate-500">
-            Mostrando <span className="font-semibold text-slate-700">{filteredPrinters.length}</span> impresora(s)
+            Mostrando <span className="font-semibold text-slate-700">{visiblePrinters.length}</span> {visiblePrinters.length !== filteredPrinters.length && <span>de <span className="font-semibold text-slate-700">{filteredPrinters.length}</span></span>} impresora(s)
           </p>
         </div>
 
@@ -217,7 +243,7 @@ export default function ModelSearchView({
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3">
-            {filteredPrinters.map((printer) => {
+            {visiblePrinters.map((printer) => {
               const badge = printer.getStatusBadge();
 
               return (
@@ -335,6 +361,21 @@ export default function ModelSearchView({
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Botón para cargar más equipos si excede el límite visible */}
+        {filteredPrinters.length > displayLimit && (
+          <div className="flex justify-center items-center py-4">
+            <button
+              onClick={() => setDisplayLimit(prev => prev + 30)}
+              className="bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs px-5 py-2.5 rounded-xl border border-slate-300 shadow-xs transition active:scale-95 flex items-center gap-2"
+            >
+              <span>Cargar 30 equipos más</span>
+              <span className="text-[10px] text-slate-400 font-normal">
+                (Mostrando {visiblePrinters.length} de {filteredPrinters.length})
+              </span>
+            </button>
           </div>
         )}
       </div>
