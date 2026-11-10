@@ -289,7 +289,11 @@ export default function MercadoLibreScanView({
         {useCamera && (
           <div className="p-4 bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 shadow-inner">
             <CameraScanner
-              onScan={(scannedVal) => {
+              initialBurstMode={true}
+              onScan={(scannedVal, options) => {
+                if (!options?.isBurst) {
+                  setUseCamera(false);
+                }
                 processScan(scannedVal, 'camera');
               }}
               onCancel={() => setUseCamera(false)}

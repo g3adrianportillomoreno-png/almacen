@@ -40,6 +40,7 @@ export default function EquipmentReadingView({
   const [customRowInput, setCustomRowInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCollisionModalOpen, setIsCollisionModalOpen] = useState(false);
+  const burstCameraReopenRef = useRef(false);
 
   // Secuencia de ubicación activa para auto-completar asignaciones consecutivas
   const [operatorSequence, setOperatorSequence] = useState(() => ({
@@ -271,7 +272,8 @@ export default function EquipmentReadingView({
     }
   };
 
-  const handleCameraScan = (scannedCode) => {
+  const handleCameraScan = (scannedCode, options = {}) => {
+    burstCameraReopenRef.current = Boolean(options?.isBurst);
     setIsCameraActive(false);
     handleSearchSerial(scannedCode);
   };
@@ -319,6 +321,11 @@ export default function EquipmentReadingView({
 
       setActivePrinter(null);
       if (onAssignmentSaved) onAssignmentSaved();
+
+      // Si se escaneó en ráfaga continua, reactivar cámara para la siguiente máquina
+      if (burstCameraReopenRef.current) {
+        setIsCameraActive(true);
+      }
 
       // Devolver foco al input para la siguiente pistola
       setTimeout(() => {
@@ -395,6 +402,11 @@ export default function EquipmentReadingView({
 
       setActivePrinter(null);
       if (onAssignmentSaved) onAssignmentSaved();
+
+      // Si se escaneó en ráfaga continua, reactivar cámara para la siguiente máquina
+      if (burstCameraReopenRef.current) {
+        setIsCameraActive(true);
+      }
 
       setTimeout(() => {
         scanInputRef.current?.focus();
@@ -503,8 +515,12 @@ export default function EquipmentReadingView({
 
           <CameraScanner
             expectedSeries={allSystemPrinters}
+            initialBurstMode={true}
             onScan={handleCameraScan}
-            onCancel={() => setIsCameraActive(false)}
+            onCancel={() => {
+              burstCameraReopenRef.current = false;
+              setIsCameraActive(false);
+            }}
           />
         </div>
       )}
@@ -815,7 +831,10 @@ export default function EquipmentReadingView({
           <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => setActivePrinter(null)}
+              onClick={() => {
+                burstCameraReopenRef.current = false;
+                setActivePrinter(null);
+              }}
               className="px-4 py-2.5 rounded-xl text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 transition"
             >
               Cancelar

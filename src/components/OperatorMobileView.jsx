@@ -47,6 +47,7 @@ export default function OperatorMobileView({
   const [scanInput, setScanInput] = useState('');
   const [activePrinter, setActivePrinter] = useState(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const burstCameraAfterSaveRef = useRef(false);
   const [searchTableQuery, setSearchTableQuery] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [notFoundSerial, setNotFoundSerial] = useState('');
@@ -502,6 +503,11 @@ export default function OperatorMobileView({
       setActivePrinter(null);
       if (onAssignmentSaved) onAssignmentSaved();
 
+      // Si el escaneo se hizo en modo ráfaga continua, reactivar cámara para la siguiente máquina
+      if (burstCameraAfterSaveRef.current) {
+        setIsCameraActive(true);
+      }
+
       // Devolver foco al input
       setTimeout(() => {
         scanInputRef.current?.focus();
@@ -576,6 +582,11 @@ export default function OperatorMobileView({
       setIsCollisionModalOpen(false);
       setActivePrinter(null);
       if (onAssignmentSaved) onAssignmentSaved();
+
+      // Si el escaneo se hizo en modo ráfaga continua, reactivar cámara para la siguiente máquina
+      if (burstCameraAfterSaveRef.current) {
+        setIsCameraActive(true);
+      }
 
       setTimeout(() => {
         scanInputRef.current?.focus();
@@ -1061,11 +1072,23 @@ export default function OperatorMobileView({
             {isCameraActive && (
               <div className="bg-slate-950 p-2 rounded-3xl border border-slate-700 overflow-hidden">
                 <CameraScanner
-                  onScan={(code) => {
-                    setIsCameraActive(false);
+                  initialBurstMode={true}
+                  onScan={(code, options) => {
+                    if (!options?.isBurst) {
+                      burstCameraAfterSaveRef.current = false;
+                      setIsCameraActive(false);
+                    } else if (!activeChecklist) {
+                      // En Acomodo individual, recordamos reactivar tras guardar la posición
+                      burstCameraAfterSaveRef.current = true;
+                      setIsCameraActive(false);
+                    }
+                    // Si está en checklist activo, no cerramos la cámara: continúa en vivo
                     handleProcessScan(code);
                   }}
-                  onCancel={() => setIsCameraActive(false)}
+                  onCancel={() => {
+                    burstCameraAfterSaveRef.current = false;
+                    setIsCameraActive(false);
+                  }}
                 />
               </div>
             )}
@@ -1355,7 +1378,10 @@ export default function OperatorMobileView({
                 <h3 className="text-lg font-black text-white mt-1">¿Dónde la quieres colocar?</h3>
               </div>
               <button
-                onClick={() => setActivePrinter(null)}
+                onClick={() => {
+                  burstCameraAfterSaveRef.current = false;
+                  setActivePrinter(null);
+                }}
                 className="text-slate-400 hover:text-white p-1 text-sm font-bold"
               >
                 ✕

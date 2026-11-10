@@ -147,7 +147,7 @@ export default function ScanSessionView({
 
   // Proceso inmediato al escanear con pistola lectora, cámara o teclado:
   // Solo verifica si está en la lista o no, sin pedir ubicación física.
-  const processScan = (scannedCode) => {
+  const processScan = (scannedCode, options = {}) => {
     if (!scannedCode || scannedCode.trim() === '' || isFinished) return;
 
     const raw = scannedCode.trim();
@@ -159,7 +159,11 @@ export default function ScanSessionView({
     setSearchSuccess(false);
     setSearchDuplicate(false);
     setSearchError(false);
-    setUseCamera(false);
+    
+    // Si no es modo ráfaga, cerrar el visor de cámara
+    if (!options?.isBurst) {
+      setUseCamera(false);
+    }
     
     setTimeout(() => {
       setIsSearching(false);
@@ -188,10 +192,11 @@ export default function ScanSessionView({
         setLastScannedMaterial(expectedItem.material || 'SIN MODELO');
         setSearchSuccess(true);
 
-        // Si con esta lectura se completó el checklist al 100%, reproducir fanfarria
+        // Si con esta lectura se completó el checklist al 100%, reproducir fanfarria y cerrar cámara
         if ((batchDetails.completed.length + 1) >= batchDetails.expectedSeries.length) {
           setTimeout(() => {
             soundEffects.playChecklistCompleted();
+            setUseCamera(false);
           }, 500);
         }
 
@@ -529,6 +534,7 @@ export default function ScanSessionView({
         ) : useCamera ? (
           <CameraScanner 
             expectedSeries={batchDetails.expectedSeries} 
+            initialBurstMode={true}
             onScan={processScan} 
             onCancel={() => setUseCamera(false)} 
           />

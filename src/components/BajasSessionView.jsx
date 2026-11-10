@@ -662,11 +662,14 @@ export default function BajasSessionView({
               {isCameraActive && (
                 <div className="mt-3 p-3 bg-slate-900 rounded-2xl">
                   <CameraScanner
-                    onScanSuccess={(code) => {
-                      setIsCameraActive(false);
+                    initialBurstMode={true}
+                    onScan={(code, options) => {
+                      if (!options?.isBurst) {
+                        setIsCameraActive(false);
+                      }
                       handleProcessScan(code);
                     }}
-                    onClose={() => setIsCameraActive(false)}
+                    onCancel={() => setIsCameraActive(false)}
                   />
                 </div>
               )}
