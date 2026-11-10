@@ -3,6 +3,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import CameraScanner from './CameraScanner.jsx';
 import SimilarPrintersModal from './SimilarPrintersModal.jsx';
+import SpaceCollisionModal from './SpaceCollisionModal.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { findSerialMatch, findSimilarCandidates, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
@@ -38,6 +39,7 @@ export default function EquipmentReadingView({
   const [showCustomRow, setShowCustomRow] = useState(false);
   const [customRowInput, setCustomRowInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isCollisionModalOpen, setIsCollisionModalOpen] = useState(false);
 
   // Secuencia de ubicación activa para auto-completar asignaciones consecutivas
   const [operatorSequence, setOperatorSequence] = useState(() => ({
@@ -281,7 +283,7 @@ export default function EquipmentReadingView({
 
     if (collisionOccupant) {
       soundEffects.playScanDuplicate();
-      alert(`¡Espacio ocupado! El espacio "${spaceInput}" en la ${selectedRow} (${selectedWarehouse}) ya está ocupado por la serie ${collisionOccupant.serial}. Elige otro espacio.`);
+      setIsCollisionModalOpen(true);
       return;
     }
 
@@ -324,6 +326,81 @@ export default function EquipmentReadingView({
       }, 100);
     } catch (err) {
       alert("Error al guardar asignación: " + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Resolución de colisiones (Opción 2: Reemplazar, Intercambiar o Compartir)
+  const handleResolveCollision = async (action) => {
+    if (!activePrinter || !collisionOccupant) return;
+    setIsSubmitting(true);
+    try {
+      const spaceVal = spaceInput.trim() || 'General';
+      const numEquipo = internalNumberInput.trim() !== '' ? internalNumberInput.trim() : activePrinter.internalNumber;
+
+      if (action === 'REPLACE') {
+        // Desalojar el ocupante anterior (pasa a pendiente de asignación)
+        await InventoryController.unassignPrinter(collisionOccupant.serial);
+        // Asignar el nuevo equipo
+        await InventoryController.assignPrinter(activePrinter.serial, {
+          warehouseName: selectedWarehouse,
+          warehouseRow: selectedRow,
+          warehouseSpace: spaceVal,
+          internalNumber: numEquipo
+        });
+      } else if (action === 'SWAP') {
+        // Intercambiar ubicaciones
+        await InventoryController.swapPrinters(
+          {
+            serial: activePrinter.serial,
+            warehouseName: activePrinter.warehouseName || selectedWarehouse,
+            warehouseRow: activePrinter.warehouseRow || 'Sin Asignar',
+            warehouseSpace: activePrinter.warehouseSpace || '',
+            internalNumber: numEquipo
+          },
+          {
+            serial: collisionOccupant.serial,
+            warehouseName: collisionOccupant.warehouseName || selectedWarehouse,
+            warehouseRow: collisionOccupant.warehouseRow || selectedRow,
+            warehouseSpace: collisionOccupant.warehouseSpace || spaceVal,
+            internalNumber: collisionOccupant.internalNumber
+          }
+        );
+      } else if (action === 'SHARE') {
+        // Compartir el mismo espacio físico
+        await InventoryController.assignPrinter(activePrinter.serial, {
+          warehouseName: selectedWarehouse,
+          warehouseRow: selectedRow,
+          warehouseSpace: spaceVal,
+          internalNumber: numEquipo
+        });
+      }
+
+      if (selectedRow) {
+        WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
+      }
+
+      soundEffects.playLocationAssigned();
+      setIsCollisionModalOpen(false);
+      setSuccessMessage(`¡Ubicación resuelta con éxito (${action})! Equipo serie ${activePrinter.serial} en ${selectedWarehouse} → ${selectedRow} → ${spaceVal}`);
+
+      const nextConsecutiveSpace = getNextSpace(spaceVal);
+      setOperatorSequence({
+        warehouse: selectedWarehouse,
+        row: selectedRow,
+        space: nextConsecutiveSpace
+      });
+      setSpaceInput(nextConsecutiveSpace);
+
+      setActivePrinter(null);
+      if (onAssignmentSaved) onAssignmentSaved();
+
+      setTimeout(() => {
+        scanInputRef.current?.focus();
+      }, 100);
+    } catch (err) {
+      alert("Error al resolver ubicación: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -716,19 +793,19 @@ export default function EquipmentReadingView({
 
           {/* ALERTA DE COLISIÓN DE ESPACIO EN LA MISMA FILA */}
           {collisionOccupant && (
-            <div className="bg-rose-50 border-2 border-rose-400 rounded-2xl p-3 text-xs text-rose-900 animate-pulse flex items-start gap-2.5">
-              <svg className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-amber-50 border-2 border-amber-400 rounded-2xl p-3 text-xs text-amber-900 flex items-start gap-2.5">
+              <svg className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <div>
-                <p className="font-bold text-rose-900">
-                  ¡Espacio Ocupado! No se puede repetir en la misma fila.
+                <p className="font-bold text-amber-900">
+                  Espacio Actualmente Ocupado
                 </p>
-                <p className="text-rose-700 mt-0.5 text-[11px]">
+                <p className="text-amber-800 mt-0.5 text-[11px]">
                   El espacio <strong className="underline font-bold">"{spaceInput}"</strong> en <strong className="font-bold">{selectedRow}</strong> ({selectedWarehouse}) ya está ocupado por la serie <strong className="font-mono">{collisionOccupant.serial}</strong> ({collisionOccupant.material || 'N/A'}).
                 </p>
-                <p className="text-[11px] text-rose-600 mt-1 font-semibold">
-                  Escribe otro espacio diferente para continuar.
+                <p className="text-[11px] text-amber-700 mt-1 font-semibold">
+                  Al confirmar podrás <strong>Reemplazarlo</strong>, <strong>Intercambiarlo</strong> o <strong>Compartir la tarima</strong>.
                 </p>
               </div>
             </div>
@@ -745,17 +822,21 @@ export default function EquipmentReadingView({
             </button>
             <button
               type="submit"
-              disabled={isSubmitting || Boolean(collisionOccupant)}
+              disabled={isSubmitting}
               className={`px-6 py-2.5 rounded-xl text-xs font-bold text-white transition shadow-sm flex items-center gap-2 ${
                 collisionOccupant
-                  ? 'bg-slate-300 cursor-not-allowed'
+                  ? 'bg-amber-600 hover:bg-amber-700'
                   : 'bg-emerald-600 hover:bg-emerald-700'
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
               </svg>
-              {isSubmitting ? 'Guardando...' : 'Confirmar y Asignar Ubicación'}
+              {isSubmitting
+                ? 'Guardando...'
+                : collisionOccupant
+                ? '⚠️ Resolver Espacio Ocupado'
+                : 'Confirmar y Asignar Ubicación'}
             </button>
           </div>
         </form>
@@ -867,6 +948,21 @@ export default function EquipmentReadingView({
         scannedCode={scannedSimilarCode}
         candidates={similarCandidates}
         onSelectCandidate={handleSelectSimilarCandidate}
+      />
+
+      {/* MODAL DE RESOLUCIÓN DE COLISIÓN DE ESPACIO (OPCIÓN 2) */}
+      <SpaceCollisionModal
+        isOpen={isCollisionModalOpen}
+        onClose={() => setIsCollisionModalOpen(false)}
+        targetLocation={{
+          warehouse: selectedWarehouse,
+          row: selectedRow,
+          space: spaceInput,
+        }}
+        currentOccupant={collisionOccupant}
+        incomingPrinter={activePrinter}
+        onResolve={handleResolveCollision}
+        isSubmitting={isSubmitting}
       />
 
     </div>

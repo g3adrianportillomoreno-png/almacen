@@ -853,6 +853,104 @@ export class InventoryRepository {
   }
 
   /**
+   * Desasigna la ubicación física de una impresora dejándola en 'Sin Asignar' (Pendiente de Ubicación)
+   */
+  static async unassignPrinterLocation(serialNumber) {
+    const serial = serialNumber.trim().toUpperCase();
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    const existing = cache.serials[serial] || {};
+
+    cache.serials[serial] = {
+      ...existing,
+      warehouseRow: 'Sin Asignar',
+      warehouseSpace: ''
+    };
+    this.saveMetadataCache(cache);
+
+    const nowIso = new Date().toISOString();
+
+    if (!OfflineSyncService.isOnline()) {
+      OfflineSyncService.addToQueue('ASSIGN_LOCATION', {
+        serialNumber: serial,
+        warehouseName: existing.warehouseName || 'Almacén 1',
+        warehouseRow: 'Sin Asignar',
+        warehouseSpace: '',
+        internalNumber: existing.internalNumber,
+        systemStatus: existing.systemStatus || 'Principal',
+        scannedAt: nowIso
+      });
+      return cache.serials[serial];
+    }
+
+    try {
+      await supabase
+        .from('expected_series')
+        .update({
+          warehouse_row: 'Sin Asignar',
+          warehouse_space: '',
+          scanned_at: nowIso
+        })
+        .eq('serial_number', serial);
+    } catch (e) {
+      console.warn('Fallo al desasignar impresora en Supabase:', e);
+      OfflineSyncService.addToQueue('ASSIGN_LOCATION', {
+        serialNumber: serial,
+        warehouseName: existing.warehouseName || 'Almacén 1',
+        warehouseRow: 'Sin Asignar',
+        warehouseSpace: '',
+        internalNumber: existing.internalNumber,
+        systemStatus: existing.systemStatus || 'Principal',
+        scannedAt: nowIso
+      });
+    }
+
+    RealtimeSyncService.broadcastMutation('ASSIGNMENT', {
+      serialNumber: serial,
+      warehouseName: existing.warehouseName || 'Almacén 1',
+      warehouseRow: 'Sin Asignar',
+      warehouseSpace: ''
+    });
+
+    return cache.serials[serial];
+  }
+
+  /**
+   * Intercambia las posiciones de dos impresoras (Enroque / Swap)
+   */
+  static async swapPrintersLocation(printerA, printerB) {
+    const locA = {
+      warehouseName: printerA.warehouseName || 'Almacén 1',
+      warehouseRow: printerA.warehouseRow || 'Sin Asignar',
+      warehouseSpace: (printerA.warehouseSpace || '').trim(),
+      internalNumber: printerA.internalNumber
+    };
+
+    const locB = {
+      warehouseName: printerB.warehouseName || 'Almacén 1',
+      warehouseRow: printerB.warehouseRow || 'Sin Asignar',
+      warehouseSpace: (printerB.warehouseSpace || '').trim(),
+      internalNumber: printerB.internalNumber
+    };
+
+    // A toma la ubicación de B
+    await this.assignPrinterLocation(printerA.serial, {
+      ...locB,
+      internalNumber: printerA.internalNumber
+    });
+
+    // B toma la ubicación anterior de A
+    if (locA.warehouseRow && locA.warehouseRow !== 'Sin Asignar' && locA.warehouseSpace) {
+      await this.assignPrinterLocation(printerB.serial, {
+        ...locA,
+        internalNumber: printerB.internalNumber
+      });
+    } else {
+      await this.unassignPrinterLocation(printerB.serial);
+    }
+  }
+
+  /**
    * Registra una serie inesperada / no registrada en el lote
    */
   static async logUnexpectedScan(checklistId, serialNumber) {

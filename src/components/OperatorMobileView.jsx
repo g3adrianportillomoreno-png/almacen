@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from 'react';
 import CameraScanner from './CameraScanner.jsx';
 import SerialSimilarityModal from './SerialSimilarityModal.jsx';
 import SimilarPrintersModal from './SimilarPrintersModal.jsx';
+import SpaceCollisionModal from './SpaceCollisionModal.jsx';
 import useBarcodeScanner from '../hooks/useBarcodeScanner.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
@@ -55,6 +56,9 @@ export default function OperatorMobileView({
   const [similarCandidates, setSimilarCandidates] = useState([]);
   const [isSimilarModalOpen, setIsSimilarModalOpen] = useState(false);
   const [scannedSimilarCode, setScannedSimilarCode] = useState('');
+
+  // Estado para el modal de colisión de espacio (Opción 2: Reemplazar, Intercambiar o Compartir)
+  const [isCollisionModalOpen, setIsCollisionModalOpen] = useState(false);
 
   // Filtros de estado y documento para el checklist móvil
   const [checklistStatusFilter, setChecklistStatusFilter] = useState('ALL'); // 'ALL' | 'PENDING' | 'SCANNED'
@@ -442,11 +446,18 @@ export default function OperatorMobileView({
     if (e) e.preventDefault();
     if (!activePrinter) return;
 
+    // Si el espacio ya está ocupado, abrir el modal de resolución (Opción 2)
     if (collisionOccupant) {
       soundEffects.playScanDuplicate();
+      setIsCollisionModalOpen(true);
       return;
     }
 
+    await executeDirectSave();
+  };
+
+  const executeDirectSave = async () => {
+    if (!activePrinter) return;
     setIsSubmitting(true);
     try {
       const spaceVal = spaceInput.trim() || 'General';
@@ -497,6 +508,80 @@ export default function OperatorMobileView({
       }, 150);
     } catch (err) {
       alert("Error guardando ubicación: " + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Resolución de colisiones de espacio (Opción 2: Reemplazar, Intercambiar o Compartir)
+  const handleResolveCollision = async (action) => {
+    if (!activePrinter || !collisionOccupant) return;
+    setIsSubmitting(true);
+    try {
+      const spaceVal = spaceInput.trim() || 'General';
+      const numEquipo = internalNumberInput.trim() !== '' ? internalNumberInput.trim() : activePrinter.internalNumber;
+
+      if (action === 'REPLACE') {
+        // 1. Desalojar al equipo anterior (pasa a pendiente de ubicación)
+        await InventoryController.unassignPrinter(collisionOccupant.serial);
+        // 2. Asignar el equipo actual
+        await InventoryController.assignPrinter(activePrinter.serial, {
+          warehouseName: selectedWarehouse,
+          warehouseRow: selectedRow,
+          warehouseSpace: spaceVal,
+          internalNumber: numEquipo
+        });
+        setSuccessMessage(`✓ Serie ${activePrinter.serial} colocada en ${selectedRow} [${spaceVal}]. La serie ${collisionOccupant.serial} pasó a Pendiente.`);
+      } else if (action === 'SWAP') {
+        // Intercambiar posiciones entre ambos equipos
+        await InventoryController.swapPrinters(activePrinter, collisionOccupant);
+        setSuccessMessage(`✓ Serie ${activePrinter.serial} colocada en ${selectedRow} [${spaceVal}]. Se intercambió lugar con ${collisionOccupant.serial}.`);
+      } else if (action === 'SHARE') {
+        // Compartir espacio: ambas máquinas se guardan juntas
+        await InventoryController.assignPrinter(activePrinter.serial, {
+          warehouseName: selectedWarehouse,
+          warehouseRow: selectedRow,
+          warehouseSpace: spaceVal,
+          internalNumber: numEquipo
+        });
+        setSuccessMessage(`✓ Serie ${activePrinter.serial} colocada en ${selectedRow} [${spaceVal}] (Compartiendo con ${collisionOccupant.serial}).`);
+      }
+
+      // Si venía de checklist activo
+      if (activeChecklist && onCompleteTrailer) {
+        await onCompleteTrailer(activePrinter.serial, {
+          warehouseName: selectedWarehouse,
+          warehouseRow: selectedRow,
+          warehouseSpace: spaceVal,
+          internalNumber: numEquipo,
+          batchId: activeChecklist.id
+        }, activeChecklist.id);
+      }
+
+      if (selectedRow) {
+        WarehouseMapController.ensureRowExists(selectedRow, selectedWarehouse);
+      }
+
+      soundEffects.playLocationAssigned();
+
+      // Siguiente espacio consecutivo
+      const nextConsecutiveSpace = getNextSpace(spaceVal);
+      setOperatorSequence({
+        warehouse: selectedWarehouse,
+        row: selectedRow,
+        space: nextConsecutiveSpace
+      });
+      setSpaceInput(nextConsecutiveSpace);
+
+      setIsCollisionModalOpen(false);
+      setActivePrinter(null);
+      if (onAssignmentSaved) onAssignmentSaved();
+
+      setTimeout(() => {
+        scanInputRef.current?.focus();
+      }, 150);
+    } catch (err) {
+      alert("Error resolviendo conflicto de espacio: " + err.message);
     } finally {
       setIsSubmitting(false);
     }
@@ -1518,29 +1603,44 @@ export default function OperatorMobileView({
 
               {/* ALERTA DE COLISIÓN DE ESPACIO EN TIEMPO REAL */}
               {collisionOccupant && (
-                <div className="bg-rose-950/80 border-2 border-rose-600 rounded-2xl p-3 text-xs text-rose-200 animate-pulse">
-                  <p className="font-bold text-rose-300 text-sm">¡Espacio Ocupado!</p>
+                <div className="bg-amber-950/70 border-2 border-amber-500 rounded-2xl p-3 text-xs text-amber-200">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">⚠️</span>
+                    <p className="font-bold text-amber-300 text-sm">Espacio Actualmente Ocupado</p>
+                  </div>
                   <p className="mt-1">
-                    El espacio <strong className="underline">"{spaceInput}"</strong> en <strong className="text-white">{selectedRow}</strong> ({selectedWarehouse}) ya está ocupado por la serie <strong className="font-mono text-white">{collisionOccupant.serial}</strong>.
+                    El espacio <strong className="underline text-white">"{spaceInput}"</strong> en <strong className="text-white">{selectedRow}</strong> ({selectedWarehouse}) ya está asignado a:
                   </p>
-                  <p className="mt-1 font-bold text-rose-300">Por favor escribe otro espacio.</p>
+                  <div className="bg-slate-900/90 rounded-lg p-2 mt-1.5 border border-amber-600/40">
+                    <p className="font-mono font-bold text-white text-xs">{collisionOccupant.serial}</p>
+                    <p className="text-[11px] text-slate-300">{collisionOccupant.model || 'Sin modelo'}</p>
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-amber-300 font-semibold">
+                    💡 Al presionar el botón podrás <strong>Reemplazarlo</strong>, <strong>Intercambiarlo</strong> o <strong>Compartir la tarima</strong>.
+                  </p>
                 </div>
               )}
 
               {/* BOTÓN GRANDE PARA CONFIRMAR */}
               <button
                 type="submit"
-                disabled={isSubmitting || Boolean(collisionOccupant)}
+                disabled={isSubmitting}
                 className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wide transition shadow-lg flex items-center justify-center gap-2 mt-2 ${
                   collisionOccupant
-                    ? 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                    ? 'bg-amber-600 hover:bg-amber-500 text-white active:scale-98'
                     : 'bg-emerald-600 hover:bg-emerald-500 text-white active:scale-98'
                 }`}
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
                 </svg>
-                <span>{isSubmitting ? 'Guardando...' : 'Confirmar y Colocar Equipo'}</span>
+                <span>
+                  {isSubmitting
+                    ? 'Guardando...'
+                    : collisionOccupant
+                    ? '⚠️ Resolver Espacio Ocupado'
+                    : 'Confirmar y Colocar Equipo'}
+                </span>
               </button>
             </form>
 
@@ -1555,6 +1655,21 @@ export default function OperatorMobileView({
         scannedCode={scannedSimilarCode}
         candidates={similarCandidates}
         onSelectCandidate={handleSelectSimilarCandidate}
+      />
+
+      {/* MODAL DE RESOLUCIÓN DE COLISIÓN DE ESPACIO (OPCIÓN 2) */}
+      <SpaceCollisionModal
+        isOpen={isCollisionModalOpen}
+        onClose={() => setIsCollisionModalOpen(false)}
+        targetLocation={{
+          warehouse: selectedWarehouse,
+          row: selectedRow,
+          space: spaceInput,
+        }}
+        currentOccupant={collisionOccupant}
+        incomingPrinter={activePrinter}
+        onResolve={handleResolveCollision}
+        isSubmitting={isSubmitting}
       />
 
     </div>

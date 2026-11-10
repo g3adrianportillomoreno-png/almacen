@@ -150,6 +150,20 @@ export class InventoryController {
   }
 
   /**
+   * Desasigna la ubicación física de una impresora dejándola pendiente de acomodo
+   */
+  static async unassignPrinter(serial) {
+    return await InventoryRepository.unassignPrinterLocation(serial);
+  }
+
+  /**
+   * Intercambia las posiciones de dos impresoras (Enroque / Swap)
+   */
+  static async swapPrinters(printerA, printerB) {
+    return await InventoryRepository.swapPrintersLocation(printerA, printerB);
+  }
+
+  /**
    * Genera y descarga el archivo Excel Maestro con todas las impresoras de almacén
    * Formato oficial:
    * Clave | Número de serie | Número de equipo | Almacén | Fila | Espacio

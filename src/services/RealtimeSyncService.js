@@ -135,7 +135,7 @@ class RealtimeSyncServiceImpl {
   }
 
   /**
-   * Sondeo periódico inteligente de fondo (cada 8 segundos mientras la pantalla esté activa)
+   * Sondeo periódico inteligente de fondo (cada 3.5 segundos mientras la pantalla esté activa)
    */
   setupHeartbeatPolling() {
     if (this.pollingTimer) clearInterval(this.pollingTimer);
@@ -144,12 +144,12 @@ class RealtimeSyncServiceImpl {
       const isVisible = typeof document !== 'undefined' ? document.visibilityState === 'visible' : true;
       if (isVisible && typeof navigator !== 'undefined' && navigator.onLine) {
         const now = Date.now();
-        // Solo sondeo si no se ha refrescado en los últimos 7 segundos
-        if (now - this.lastRefreshTimestamp > 7000) {
+        // Sondeo rápido si no se ha refrescado en los últimos 3 segundos
+        if (now - this.lastRefreshTimestamp > 3000) {
           this.triggerDebouncedSync({ type: 'HEARTBEAT_POLL' });
         }
       }
-    }, 8000);
+    }, 3500);
   }
 
   /**
@@ -232,3 +232,4 @@ class RealtimeSyncServiceImpl {
 
 export const RealtimeSyncService = new RealtimeSyncServiceImpl();
 export default RealtimeSyncService;
+
