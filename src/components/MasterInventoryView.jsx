@@ -88,11 +88,35 @@ export default function MasterInventoryView({
     return { total, conUbicacion, sinUbicacion, sinNumeroEquipo, principal, seminuevos, remanufacturado, refacciones };
   }, [allPrinters]);
 
-  // Filtrado de impresoras
+  // Helper: Extraer número de espacio y posible sufijo para orden numérico natural ascendente (0 a N)
+  const parseSpaceForNaturalSort = (spaceStr) => {
+    if (!spaceStr || typeof spaceStr !== 'string') {
+      return { hasSpace: false, num: 999999, suffix: '', original: '' };
+    }
+    const clean = spaceStr.trim().toUpperCase();
+    if (!clean || clean === 'SIN ASIGNAR' || clean === 'GENERAL') {
+      return { hasSpace: false, num: 999999, suffix: clean, original: clean };
+    }
+
+    // Extraer número inicial y posible sufijo/letra (ej. "14 D", "14D", "3 I", "0", "1")
+    const match = clean.match(/^(\d+)\s*(.*)$/);
+    if (match) {
+      return {
+        hasSpace: true,
+        num: parseInt(match[1], 10),
+        suffix: match[2].trim(),
+        original: clean
+      };
+    }
+
+    return { hasSpace: true, num: 999998, suffix: clean, original: clean };
+  };
+
+  // Filtrado y Ordenamiento Numérico Natural (0 ➔ N) de impresoras
   const filteredPrinters = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
-    return allPrinters.filter(p => {
+    const filtered = allPrinters.filter(p => {
       // Filtro por texto
       if (query) {
         const matchesSerial = (p.serial || '').toLowerCase().includes(query);
@@ -132,7 +156,118 @@ export default function MasterInventoryView({
 
       return true;
     });
+
+    // Ordenamiento numérico natural ascendente (0, 1, 2... 10... hasta donde haya máquinas)
+    return filtered.sort((a, b) => {
+      // Si no se filtró una fila específica, agrupar primero por Fila
+      if (rowFilter === 'ALL') {
+        const rowA = (a.warehouseRow || '').trim();
+        const rowB = (b.warehouseRow || '').trim();
+        if (rowA !== rowB) {
+          if (rowA === 'Sin Asignar' || !rowA) return 1;
+          if (rowB === 'Sin Asignar' || !rowB) return -1;
+          const matchA = rowA.match(/^(\D*)(\d+)/);
+          const matchB = rowB.match(/^(\D*)(\d+)/);
+          if (matchA && matchB && matchA[1] === matchB[1]) {
+            return parseInt(matchA[2], 10) - parseInt(matchB[2], 10);
+          }
+          return rowA.localeCompare(rowB, undefined, { numeric: true });
+        }
+      }
+
+      // Ordenar por Espacio de menor a mayor (del 0 en adelante)
+      const spaceA = parseSpaceForNaturalSort(a.warehouseSpace);
+      const spaceB = parseSpaceForNaturalSort(b.warehouseSpace);
+
+      // Con espacio asignado primero, 'Sin Asignar' al final
+      if (spaceA.hasSpace && !spaceB.hasSpace) return -1;
+      if (!spaceA.hasSpace && spaceB.hasSpace) return 1;
+
+      // Orden numérico ascendente
+      if (spaceA.num !== spaceB.num) {
+        return spaceA.num - spaceB.num;
+      }
+
+      // Desempate por letra/sufijo (ej. 14 D vs 14 I)
+      if (spaceA.suffix !== spaceB.suffix) {
+        return spaceA.suffix.localeCompare(spaceB.suffix);
+      }
+
+      // Desempate por número de equipo o serie
+      const intA = Number(a.internalNumber) || 0;
+      const intB = Number(b.internalNumber) || 0;
+      if (intA !== intB && intA > 0 && intB > 0) return intA - intB;
+
+      return (a.serial || '').localeCompare(b.serial || '');
+    });
   }, [allPrinters, searchQuery, warehouseFilter, rowFilter, statusFilter, systemStateFilter]);
+
+  // Análisis de espacios llenos y vacíos cuando se filtra una fila en concreto
+  const rowSlotAnalysis = useMemo(() => {
+    if (rowFilter === 'ALL') return null;
+
+    // Obtener máquinas en esta fila
+    const rowPrinters = allPrinters.filter(p => {
+      const pRow = (p.warehouseRow || '').trim();
+      if (pRow !== rowFilter) return false;
+      if (warehouseFilter !== 'ALL' && (p.warehouseName || '') !== warehouseFilter) return false;
+      return true;
+    });
+
+    const occupiedBySpace = new Map();
+    let maxSpaceNum = 0;
+    let minSpaceNum = 1;
+    const detectedSuffixes = new Set();
+
+    rowPrinters.forEach(p => {
+      const parsed = parseSpaceForNaturalSort(p.warehouseSpace);
+      if (parsed.hasSpace) {
+        const key = parsed.original;
+        if (!occupiedBySpace.has(key)) {
+          occupiedBySpace.set(key, []);
+        }
+        occupiedBySpace.get(key).push(p);
+
+        if (parsed.num < 999000) {
+          if (parsed.num > maxSpaceNum) maxSpaceNum = parsed.num;
+          if (parsed.num < minSpaceNum && parsed.num >= 0) minSpaceNum = parsed.num;
+        }
+        if (parsed.suffix) detectedSuffixes.add(parsed.suffix);
+      }
+    });
+
+    const suffixes = detectedSuffixes.size > 0 ? Array.from(detectedSuffixes) : [''];
+    const topLimit = Math.max(maxSpaceNum, 10);
+    const slots = [];
+
+    for (let n = minSpaceNum; n <= topLimit; n++) {
+      for (const suff of suffixes) {
+        const slotKey = suff ? `${n} ${suff}`.trim() : `${n}`;
+        const altKey = suff ? `${n}${suff}` : `${n}`;
+        const occupants = occupiedBySpace.get(slotKey) || occupiedBySpace.get(altKey) || [];
+
+        slots.push({
+          slotNumber: n,
+          suffix: suff,
+          slotName: slotKey,
+          isOccupied: occupants.length > 0,
+          occupants
+        });
+      }
+    }
+
+    const occupiedCount = rowPrinters.filter(p => p.warehouseSpace && p.warehouseSpace.trim() && p.warehouseSpace !== 'Sin Asignar').length;
+    const emptySlots = slots.filter(s => !s.isOccupied);
+
+    return {
+      rowName: rowFilter,
+      warehouseName: warehouseFilter !== 'ALL' ? warehouseFilter : 'Todos los almacenes',
+      totalOccupied: occupiedCount,
+      totalEmpty: emptySlots.length,
+      emptySlotNames: emptySlots.map(s => s.slotName),
+      slots
+    };
+  }, [allPrinters, rowFilter, warehouseFilter]);
 
   // Paginación
   const totalPages = Math.ceil(filteredPrinters.length / itemsPerPage) || 1;
@@ -426,16 +561,16 @@ export default function MasterInventoryView({
               Cargar o Actualizar Archivo Maestro de Inventario
             </h2>
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-              Sube el archivo Excel con las <strong className="text-white">3 primeras columnas</strong> (<em>Clave, Número de serie, Número de equipo</em>) para registrar o relacionar equipos, o con las <strong className="text-white">6 o 7 columnas completas</strong> (incluyendo <em>Almacén, Fila, Espacio, Estado</em>) para actualizar ubicaciones y estados de todo el almacén.
+              Sube tu archivo Excel o CSV con columnas flexibles: <strong className="text-white">Número de Serie (obligatorio)</strong>, junto con <strong className="text-white">Número de SANTI / Equipo</strong> y <strong className="text-white">Estado</strong> (opcionales). El sistema actualizará las series existentes sin borrar sus ubicaciones físicas en almacén y agregará las máquinas nuevas.
             </p>
             <div className="flex flex-wrap items-center gap-2.5 mt-3 text-[11px] text-slate-300">
               <span className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 px-2.5 py-1 rounded-lg">
                 <span className="w-2 h-2 rounded-full bg-blue-400"></span>
-                Opción A: 3 Columnas (Clave, Serie, No. de Equipo)
+                SANTI / No. Equipo: Vincula y actualiza series
               </span>
               <span className="flex items-center gap-1.5 bg-slate-800/90 border border-slate-700 px-2.5 py-1 rounded-lg">
                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                Opción B: 6 o 7 Columnas (+ Ubicación y Estado)
+                Estado y Ubicaciones: Conserva o actualiza
               </span>
             </div>
           </div>
@@ -448,7 +583,7 @@ export default function MasterInventoryView({
               className={`bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition shadow-sm flex items-center justify-center gap-2 ${
                 isUploading ? 'opacity-60 cursor-not-allowed' : ''
               }`}
-              title="Sube un archivo para agregar o actualizar equipos existentes sin eliminar bajas"
+              title="Sube un archivo para actualizar números de SANTI, Estado o agregar equipos nuevos sin eliminar bajas"
             >
               {isUploading ? (
                 <>
@@ -460,7 +595,7 @@ export default function MasterInventoryView({
                   <svg className="w-4 h-4 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                   </svg>
-                  <span>Subir Archivo Maestro (Excel)</span>
+                  <span>Actualizar / Cargar Datos (Excel / SANTI)</span>
                 </>
               )}
             </button>
@@ -474,23 +609,38 @@ export default function MasterInventoryView({
               <svg className="w-4 h-4 text-amber-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              <span>Actualizar (Bajas por Diferencia)</span>
+              <span>Actualizar con Bajas por Diferencia</span>
             </button>
 
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={handleOpenDepartures}
-                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center justify-center gap-1.5 border border-slate-700"
-                title="Ver historial de bajas de los últimos 30 días"
+                onClick={() => {
+                  if (onInventoryChange) onInventoryChange();
+                }}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 px-2.5 rounded-xl transition flex items-center justify-center gap-1 border border-slate-700"
+                title="Recargar inventario para ver los últimos cambios de los operadores en tiempo real"
               >
-                <span>📋 Bajas (30 d)</span>
+                <svg className="w-3.5 h-3.5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Refrescar</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => InventoryController.exportInventoryReportToExcel(allPrinters)}
-                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2 px-3 rounded-xl transition flex items-center justify-center gap-1.5 border border-slate-600"
+                onClick={handleOpenDepartures}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold py-2 px-2.5 rounded-xl transition flex items-center justify-center gap-1 border border-slate-700"
+                title="Ver historial de bajas de los últimos 30 días"
+              >
+                <span>📋 Bajas</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => InventoryController.exportInventoryReportToExcel(filteredPrinters)}
+                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold py-2 px-2.5 rounded-xl transition flex items-center justify-center gap-1 border border-slate-600"
+                title="Descargar reporte en Excel (respetando filtros y orden numérico natural)"
               >
                 <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -530,10 +680,12 @@ export default function MasterInventoryView({
             </div>
             <div>
               <p className="font-bold text-emerald-950 text-sm">
-                ¡Reconciliación de "{reconcileResult.fileName}" completada con éxito!
+                ¡Actualización de "{reconcileResult.fileName}" completada con éxito!
               </p>
               <p className="text-emerald-800 mt-0.5">
-                Procesadas: <strong>{reconcileResult.total}</strong> | Vinculadas/Actualizadas con No. de Equipo: <strong>{reconcileResult.updated}</strong> | Nuevas agregadas: <strong>{reconcileResult.added}</strong>
+                Total procesadas: <strong>{reconcileResult.total}</strong> | 
+                Actualizadas (SANTI / Estado / Ubicación): <strong>{reconcileResult.updated}</strong> | 
+                Nuevas máquinas agregadas: <strong>{reconcileResult.added}</strong>
               </p>
             </div>
           </div>
@@ -768,6 +920,113 @@ export default function MasterInventoryView({
           </select>
         </div>
       </div>
+
+      {/* MAPA VISUAL DE ESPACIOS LLENOS Y VACÍOS (SOLO CUANDO SE FILTRA UNA FILA CONCRETA) */}
+      {rowSlotAnalysis && (
+        <div className="bg-slate-900 border border-slate-700 rounded-3xl p-4.5 text-white shadow-lg animate-fade-in">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-slate-800 pb-3">
+            <div className="flex items-center gap-2.5">
+              <span className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block">
+                  Mapa de Ocupación por Fila
+                </span>
+                <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
+                  <span>{rowSlotAnalysis.rowName}</span>
+                  <span className="text-xs font-normal text-slate-400 font-sans">
+                    ({rowSlotAnalysis.warehouseName})
+                  </span>
+                </h3>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 text-xs flex-wrap">
+              <span className="bg-emerald-950/80 text-emerald-300 border border-emerald-600/50 px-3 py-1 rounded-xl font-bold flex items-center gap-1.5 shadow-2xs">
+                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                <span>Ocupados: {rowSlotAnalysis.totalOccupied}</span>
+              </span>
+              <span className="bg-amber-950/80 text-amber-300 border border-amber-600/50 px-3 py-1 rounded-xl font-bold flex items-center gap-1.5 shadow-2xs">
+                <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                <span>Vacíos / Libres: {rowSlotAnalysis.totalEmpty}</span>
+              </span>
+            </div>
+          </div>
+
+          {/* Tira horizontal deslizable con todos los espacios numerados (0 a N) */}
+          <div className="mt-3.5">
+            <p className="text-[11px] text-slate-400 font-medium mb-2 flex items-center justify-between">
+              <span>Distribución física de espacios (orden natural):</span>
+              <span className="text-[10px] text-slate-500">Desliza horizontalmente para ver todos ➔</span>
+            </p>
+
+            <div className="flex gap-2.5 overflow-x-auto pb-2 pt-1 scrollbar-thin">
+              {rowSlotAnalysis.slots.map((slot, idx) => (
+                <div
+                  key={idx}
+                  className={`shrink-0 min-w-[95px] rounded-2xl p-2.5 text-center border transition select-none ${
+                    slot.isOccupied
+                      ? 'bg-emerald-950/50 border-emerald-500/60 text-emerald-100 shadow-sm'
+                      : 'bg-slate-950/80 border-dashed border-slate-700 text-slate-400 hover:border-amber-400/60'
+                  }`}
+                  title={slot.isOccupied 
+                    ? `Espacio ${slot.slotName} OCUPADO por: ${slot.occupants.map(o => o.serial).join(', ')}` 
+                    : `Espacio ${slot.slotName} LIBRE / VACÍO`
+                  }
+                >
+                  <span className={`block font-mono text-xs font-black ${
+                    slot.isOccupied ? 'text-emerald-300' : 'text-amber-400'
+                  }`}>
+                    [{slot.slotName}]
+                  </span>
+
+                  {slot.isOccupied ? (
+                    <div className="mt-1.5">
+                      <span className="text-[10px] font-black bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded-md block truncate">
+                        🟢 LLENO
+                      </span>
+                      <span className="text-[10px] font-mono font-bold text-white block truncate mt-1">
+                        {slot.occupants[0]?.serial}
+                      </span>
+                      {slot.occupants[0]?.internalNumber && (
+                        <span className="text-[9px] font-bold text-emerald-400 block truncate">
+                          #{slot.occupants[0].internalNumber}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="mt-1.5">
+                      <span className="text-[10px] font-bold bg-slate-800/80 text-slate-400 border border-dashed border-slate-600 px-1.5 py-0.5 rounded-md block">
+                        ⚪ VACÍO
+                      </span>
+                      <span className="text-[9px] text-amber-300/80 font-medium block mt-1">
+                        Disponible
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Resumen de huecos disponibles para colocar equipo nuevo */}
+          {rowSlotAnalysis.totalEmpty > 0 ? (
+            <div className="mt-2.5 pt-2.5 border-t border-slate-800 text-xs text-amber-200/90 flex items-center gap-2 flex-wrap">
+              <span className="font-bold flex items-center gap-1">
+                <span>💡</span> Espacios libres en esta fila:
+              </span>
+              <span className="font-mono text-white font-bold bg-slate-800 px-2.5 py-0.5 rounded-lg border border-slate-700 text-[11px]">
+                {rowSlotAnalysis.emptySlotNames.slice(0, 15).join(', ')}
+                {rowSlotAnalysis.emptySlotNames.length > 15 ? ` y ${rowSlotAnalysis.emptySlotNames.length - 15} más...` : ''}
+              </span>
+            </div>
+          ) : (
+            <div className="mt-2.5 pt-2.5 border-t border-slate-800 text-xs text-emerald-300/90 flex items-center gap-1.5">
+              <span>✓</span>
+              <span>Todos los espacios analizados en esta fila están ocupados.</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* TABLA PRINCIPAL: LAS 7 COLUMNAS OFICIALES */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">

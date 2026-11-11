@@ -79,16 +79,27 @@ export async function extractSeriesFromExcel(file) {
                 foundMaterial = colIdx;
               }
 
-              // 3. NÚMERO DE EQUIPO
+              // 3. NÚMERO DE EQUIPO / SANTI / ECONÓMICO
               else if (
+                norm === 'santi' ||
+                norm === 'no santi' ||
+                norm === 'no. santi' ||
+                norm === 'numero santi' ||
+                norm === 'num santi' ||
+                norm === 'id santi' ||
+                norm === 'economico' ||
+                norm === 'no economico' ||
+                norm === 'no. economico' ||
                 norm === 'numero de equipo' || 
                 norm === 'no de equipo' || 
                 norm === 'no equipo' || 
                 norm === 'num de equipo' || 
                 norm === 'numero equipo' || 
                 norm === 'equipo' || 
+                norm.includes('santi') ||
                 norm.includes('equipo') || 
-                norm.includes('internal number')
+                norm.includes('internal number') ||
+                norm.includes('economico')
               ) {
                 foundInternal = colIdx;
               }
@@ -180,7 +191,9 @@ export async function extractSeriesFromExcel(file) {
                 ? String(internalNumRaw).trim()
                 : null;
 
-              const systemStatus = PrinterModel.normalizeSystemStatus(statusRaw);
+              const systemStatus = (statusRaw && String(statusRaw).trim() !== '')
+                ? PrinterModel.normalizeSystemStatus(statusRaw)
+                : null;
 
               items.push({
                 serial: serialString,
