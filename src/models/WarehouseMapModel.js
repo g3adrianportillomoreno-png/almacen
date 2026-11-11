@@ -23,12 +23,6 @@ export class WarehouseMapModel {
   ];
 
   constructor(data = {}) {
-    const isStateName = (nm) => {
-      if (!nm) return false;
-      const s = String(nm).toLowerCase();
-      return s.includes('seminuevo') || s.includes('refaccion') || s.includes('operacion') || s.includes('reman') || s === 'principal';
-    };
-
     // Si data es un array antiguo de filas directas, migrar a formato multi-almacén
     if (Array.isArray(data)) {
       this.warehouses = [
@@ -42,29 +36,6 @@ export class WarehouseMapModel {
     } else {
       this.warehouses = WarehouseMapModel.DEFAULT_WAREHOUSES;
       this.activeWarehouseId = 'alm-1';
-    }
-
-    // Limpieza de seguridad: Si existen pestañas de almacén nombradas como estados de proceso, purgarlas y mover sus filas a Almacén 1
-    if (this.warehouses && Array.isArray(this.warehouses)) {
-      const stateWhs = this.warehouses.filter(w => isStateName(w.name));
-      if (stateWhs.length > 0) {
-        const alm1 = this.warehouses.find(w => w.name === 'Almacén 1' || w.id === 'alm-1');
-        if (alm1) {
-          stateWhs.forEach(sw => {
-            if (sw.rows && Array.isArray(sw.rows)) {
-              sw.rows.forEach(r => {
-                if (!alm1.rows.some(existing => existing.name.toLowerCase() === r.name.toLowerCase())) {
-                  alm1.rows.push(r);
-                }
-              });
-            }
-          });
-        }
-        this.warehouses = this.warehouses.filter(w => !isStateName(w.name));
-        if (!this.warehouses.some(w => w.id === this.activeWarehouseId)) {
-          this.activeWarehouseId = this.warehouses[0]?.id || 'alm-1';
-        }
-      }
     }
   }
 
@@ -233,13 +204,7 @@ export class WarehouseMapModel {
     const cleanRowName = (rowName || '').trim();
     if (!cleanRowName) return this;
 
-    let cleanWhName = (warehouseNameOrId || '').trim();
-    if (cleanWhName) {
-      const s = cleanWhName.toLowerCase();
-      if (s.includes('seminuevo') || s.includes('refaccion') || s.includes('operacion') || s.includes('reman') || s === 'principal') {
-        cleanWhName = 'Almacén 1';
-      }
-    }
+    const cleanWhName = (warehouseNameOrId || '').trim();
     let currentWarehouses = this.warehouses.map(w => ({
       ...w,
       rows: [...(w.rows || [])]

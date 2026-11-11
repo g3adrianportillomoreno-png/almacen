@@ -1227,20 +1227,6 @@ export class InventoryRepository {
     const cache = this.getMetadataCache();
     cache.serials = cache.serials || {};
 
-    const isSystemStateName = (val) => {
-      if (!val) return false;
-      const s = String(val).trim().toLowerCase();
-      return (
-        s === 'seminuevos' ||
-        s === 'seminuevo' ||
-        s.includes('seminuevo') ||
-        s.includes('refaccion') ||
-        s.includes('operacion') ||
-        s.includes('reman') ||
-        s === 'principal'
-      );
-    };
-
     const cleanItems = [];
     const serialsSet = new Set();
 
@@ -1250,7 +1236,7 @@ export class InventoryRepository {
       serialsSet.add(serialUpper);
 
       const hasExplicitInternal = item.internalNumber !== undefined && item.internalNumber !== null && String(item.internalNumber).trim() !== '';
-      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '' && !isSystemStateName(item.warehouseName));
+      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '');
       const hasExplicitRow = Boolean(item.warehouseRow && String(item.warehouseRow).trim() !== '' && String(item.warehouseRow).trim() !== 'Sin Asignar');
       const hasExplicitSpace = Boolean(item.warehouseSpace !== null && item.warehouseSpace !== undefined && String(item.warehouseSpace).trim() !== '');
       const hasExplicitSystemStatus = Boolean(item.systemStatus && String(item.systemStatus).trim() !== '');
@@ -1328,8 +1314,8 @@ export class InventoryRepository {
               updatePayload.internal_number = numVal;
             }
 
-            // 3. Ubicación física: SOLO si vino en el archivo (y validando que el almacén no sea un estado)
-            if (c.rawWh && !isSystemStateName(c.rawWh)) {
+            // 3. Ubicación física: SOLO si vino explícitamente en el archivo
+            if (c.rawWh) {
               updatePayload.warehouse_name = c.rawWh;
             }
             if (c.rawRow && c.rawRow !== 'Sin Asignar') {
@@ -1349,7 +1335,7 @@ export class InventoryRepository {
             const updatedCache = { ...localCached };
             if (c.rawMaterial) updatedCache.material = c.rawMaterial;
             if (c.rawInternal !== null) updatedCache.internalNumber = c.rawInternal;
-            if (c.rawWh && !isSystemStateName(c.rawWh)) updatedCache.warehouseName = c.rawWh;
+            if (c.rawWh) updatedCache.warehouseName = c.rawWh;
             if (c.rawRow && c.rawRow !== 'Sin Asignar') updatedCache.warehouseRow = c.rawRow;
             if (c.rawSpace !== null) updatedCache.warehouseSpace = c.rawSpace;
             if (c.rawSystemStatus) updatedCache.systemStatus = c.rawSystemStatus;
@@ -1368,7 +1354,7 @@ export class InventoryRepository {
             added++;
             if (defaultBatchId) {
               const numVal = c.rawInternal !== null && !isNaN(Number(c.rawInternal)) ? Number(c.rawInternal) : null;
-              const whVal = (c.rawWh && !isSystemStateName(c.rawWh)) ? c.rawWh : 'Almacén 1';
+              const whVal = c.rawWh || 'Almacén 1';
               const rowVal = c.rawRow || 'Sin Asignar';
               const spaceVal = c.rawSpace !== null ? c.rawSpace : '';
               const sysStatus = c.rawSystemStatus || 'Principal';

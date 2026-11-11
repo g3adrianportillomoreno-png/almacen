@@ -153,16 +153,10 @@ export class WarehouseMapController {
    */
   static syncWarehousesFromPrinters(mapModel, allPrinters = []) {
     if (!mapModel || !Array.isArray(allPrinters)) return mapModel;
-    const isSystemState = (val) => {
-      if (!val) return false;
-      const s = String(val).trim().toLowerCase();
-      return s.includes('seminuevo') || s.includes('refaccion') || s.includes('operacion') || s.includes('reman') || s === 'principal';
-    };
     let currentModel = mapModel;
     for (const p of allPrinters) {
       if (p.warehouseRow && p.warehouseRow.trim() && p.warehouseRow !== 'Sin Asignar') {
-        const whRaw = p.warehouseName && p.warehouseName.trim() ? p.warehouseName.trim() : null;
-        const wh = (whRaw && !isSystemState(whRaw)) ? whRaw : 'Almacén 1';
+        const wh = p.warehouseName && p.warehouseName.trim() ? p.warehouseName.trim() : null;
         currentModel = currentModel.ensureRowExists(p.warehouseRow, wh);
       }
     }

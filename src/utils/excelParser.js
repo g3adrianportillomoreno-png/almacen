@@ -173,13 +173,6 @@ export async function extractSeriesFromExcel(file) {
 
         const items = [];
         const seenSerials = new Set();
-        
-        // Helper para comprobar si un valor corresponde a un estado de proceso en vez de un almacén físico
-        const isSystemStateVal = (val) => {
-          if (!val) return false;
-          const s = String(val).trim().toLowerCase();
-          return s.includes('seminuevo') || s.includes('refaccion') || s.includes('operacion') || s.includes('reman') || s === 'principal';
-        };
 
         for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i];
@@ -207,18 +200,8 @@ export async function extractSeriesFromExcel(file) {
                 ? String(internalNumRaw).trim()
                 : null;
 
-              // Proteger para que los estados no se confundan con almacenes físicos
-              let cleanWh = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
-              let candidateStatus = statusRaw && String(statusRaw).trim() !== '' ? statusRaw : null;
-
-              if (cleanWh && isSystemStateVal(cleanWh)) {
-                if (!candidateStatus) {
-                  candidateStatus = cleanWh;
-                }
-                cleanWh = null; // No permitir que un estado sustituya el nombre de almacén
-              }
-
-              const systemStatus = candidateStatus ? PrinterModel.normalizeSystemStatus(candidateStatus) : null;
+              const cleanWh = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
+              const systemStatus = (statusRaw && String(statusRaw).trim() !== '') ? PrinterModel.normalizeSystemStatus(statusRaw) : null;
 
               items.push({
                 serial: serialString,

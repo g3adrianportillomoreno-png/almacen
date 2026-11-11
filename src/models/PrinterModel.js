@@ -202,13 +202,7 @@ export class PrinterModel {
   static fromDb(dbItem, checklistInfo = {}, metadataCache = {}) {
     const serial = (dbItem.serial_number || dbItem.serial || '').toUpperCase();
     const meta = metadataCache[serial] || {};
-    let warehouseName = dbItem.warehouse_name || meta.warehouseName || 'Almacén 1';
-    if (warehouseName) {
-      const wLower = warehouseName.toLowerCase();
-      if (wLower.includes('seminuevo') || wLower.includes('refaccion') || wLower.includes('reman') || wLower === 'principal') {
-        warehouseName = 'Almacén 1';
-      }
-    }
+    const warehouseName = dbItem.warehouse_name || meta.warehouseName || 'Almacén 1';
     const warehouseSpace = dbItem.warehouse_space || meta.warehouseSpace || '';
     const assignedAt = dbItem.assigned_at || meta.assignedAt || null;
     const docName = dbItem.document_name || meta.documentName || dbItem.documentName || '';
