@@ -1227,6 +1227,20 @@ export class InventoryRepository {
     const cache = this.getMetadataCache();
     cache.serials = cache.serials || {};
 
+    const isSystemStateName = (val) => {
+      if (!val) return false;
+      const s = String(val).trim().toLowerCase();
+      return (
+        s === 'seminuevos' ||
+        s === 'seminuevo' ||
+        s.includes('seminuevo') ||
+        s.includes('refaccion') ||
+        s.includes('operacion') ||
+        s.includes('reman') ||
+        s === 'principal'
+      );
+    };
+
     const cleanItems = [];
     const serialsSet = new Set();
 
@@ -1236,14 +1250,21 @@ export class InventoryRepository {
       serialsSet.add(serialUpper);
 
       const hasExplicitInternal = item.internalNumber !== undefined && item.internalNumber !== null && String(item.internalNumber).trim() !== '';
-      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '');
+      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '' && !isSystemStateName(item.warehouseName));
       const hasExplicitRow = Boolean(item.warehouseRow && String(item.warehouseRow).trim() !== '' && String(item.warehouseRow).trim() !== 'Sin Asignar');
       const hasExplicitSpace = Boolean(item.warehouseSpace !== null && item.warehouseSpace !== undefined && String(item.warehouseSpace).trim() !== '');
       const hasExplicitSystemStatus = Boolean(item.systemStatus && String(item.systemStatus).trim() !== '');
+      const hasExplicitMaterial = Boolean(
+        item.material &&
+        String(item.material).trim() !== '' &&
+        item.material !== 'MODELO GENÉRICO' &&
+        item.material !== 'Sin Modelo' &&
+        item.material !== 'MODELO GENERAL'
+      );
 
       cleanItems.push({
         serialUpper,
-        rawMaterial: item.material,
+        rawMaterial: hasExplicitMaterial ? String(item.material).trim() : null,
         rawInternal: hasExplicitInternal ? item.internalNumber : null,
         rawWh: hasExplicitWh ? String(item.warehouseName).trim() : null,
         rawRow: hasExplicitRow ? String(item.warehouseRow).trim() : null,
@@ -1252,7 +1273,7 @@ export class InventoryRepository {
       });
     }
 
-    // 3. Sincronizar con Supabase en chunks de 80 registros preservando siempre los espacios existentes en la nube
+    // 3. Sincronizar con Supabase en chunks de 80 registros preservando siempre los datos no incluidos en el Excel
     let updated = 0;
     let added = 0;
     const CHUNK_SIZE = 80;
@@ -1292,76 +1313,89 @@ export class InventoryRepository {
             dbSysStatus = parts[1] || null;
           }
 
-          const finalMaterial = (c.rawMaterial && c.rawMaterial !== 'Sin Modelo' && c.rawMaterial !== 'MODELO GENERAL')
-            ? c.rawMaterial
-            : (dbRow?.material_model || localCached.material || 'Sin Modelo');
-
-          const finalInternal = c.rawInternal !== null
-            ? c.rawInternal
-            : (dbRow?.internal_number ?? localCached.internalNumber ?? null);
-
-          const finalWh = c.rawWh
-            || dbRow?.warehouse_name
-            || localCached.warehouseName
-            || 'Almacén 1';
-
-          const dbRowHasValidRow = dbRow?.warehouse_row && dbRow.warehouse_row !== 'Sin Asignar';
-          const localHasValidRow = localCached.warehouseRow && localCached.warehouseRow !== 'Sin Asignar';
-          const finalRow = c.rawRow
-            || (dbRowHasValidRow ? dbRow.warehouse_row : null)
-            || (localHasValidRow ? localCached.warehouseRow : null)
-            || 'Sin Asignar';
-
-          const finalSpace = c.rawSpace !== null
-            ? c.rawSpace
-            : (dbRow?.warehouse_space || localCached.warehouseSpace || '');
-
-          const finalOpStatus = dbOpStatus || localCached.status || 'DISPONIBLE';
-          const finalSystemStatus = c.rawSystemStatus || dbSysStatus || localCached.systemStatus || 'Principal';
-          const encodedStatus = `${finalOpStatus}|${finalSystemStatus}`;
-          const numVal = finalInternal !== null && !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
-
-          // Actualizar caché local con la fusión nube + Excel
-          cache.serials[c.serialUpper] = {
-            ...localCached,
-            material: finalMaterial,
-            warehouseName: finalWh,
-            warehouseRow: finalRow,
-            warehouseSpace: finalSpace,
-            internalNumber: finalInternal,
-            systemStatus: finalSystemStatus,
-            isScanned: true,
-            status: finalOpStatus,
-            assignedAt: localCached.assignedAt || new Date().toISOString()
-          };
-
           if (dbRow) {
             updated++;
-            toUpdatePromises.push(
-              supabase
-                .from('expected_series')
-                .update({
-                  material_model: finalMaterial,
-                  internal_number: numVal,
-                  warehouse_name: finalWh,
-                  warehouse_row: finalRow,
-                  warehouse_space: finalSpace,
-                  printer_status: encodedStatus,
-                  is_scanned: true
-                })
-                .eq('serial_number', c.serialUpper)
-            );
+            const updatePayload = {};
+
+            // 1. Modelo: SOLO si vino explícitamente en el archivo y no es genérico
+            if (c.rawMaterial) {
+              updatePayload.material_model = c.rawMaterial;
+            }
+
+            // 2. Número de Equipo / SANTI / Económico: SOLO si vino en el archivo
+            if (c.rawInternal !== null) {
+              const numVal = !isNaN(Number(c.rawInternal)) ? Number(c.rawInternal) : null;
+              updatePayload.internal_number = numVal;
+            }
+
+            // 3. Ubicación física: SOLO si vino en el archivo (y validando que el almacén no sea un estado)
+            if (c.rawWh && !isSystemStateName(c.rawWh)) {
+              updatePayload.warehouse_name = c.rawWh;
+            }
+            if (c.rawRow && c.rawRow !== 'Sin Asignar') {
+              updatePayload.warehouse_row = c.rawRow;
+            }
+            if (c.rawSpace !== null) {
+              updatePayload.warehouse_space = c.rawSpace;
+            }
+
+            // 4. Estado de Proceso / Sistema: SOLO si vino en el archivo
+            if (c.rawSystemStatus) {
+              const currentOp = dbOpStatus || localCached.status || 'DISPONIBLE';
+              updatePayload.printer_status = `${currentOp}|${c.rawSystemStatus}`;
+            }
+
+            // Actualizar caché local de forma selectiva (solo lo que vino en el archivo)
+            const updatedCache = { ...localCached };
+            if (c.rawMaterial) updatedCache.material = c.rawMaterial;
+            if (c.rawInternal !== null) updatedCache.internalNumber = c.rawInternal;
+            if (c.rawWh && !isSystemStateName(c.rawWh)) updatedCache.warehouseName = c.rawWh;
+            if (c.rawRow && c.rawRow !== 'Sin Asignar') updatedCache.warehouseRow = c.rawRow;
+            if (c.rawSpace !== null) updatedCache.warehouseSpace = c.rawSpace;
+            if (c.rawSystemStatus) updatedCache.systemStatus = c.rawSystemStatus;
+            cache.serials[c.serialUpper] = updatedCache;
+
+            // Solo disparar actualización a Supabase si hubo cambios reales
+            if (Object.keys(updatePayload).length > 0) {
+              toUpdatePromises.push(
+                supabase
+                  .from('expected_series')
+                  .update(updatePayload)
+                  .eq('serial_number', c.serialUpper)
+              );
+            }
           } else {
             added++;
             if (defaultBatchId) {
+              const numVal = c.rawInternal !== null && !isNaN(Number(c.rawInternal)) ? Number(c.rawInternal) : null;
+              const whVal = (c.rawWh && !isSystemStateName(c.rawWh)) ? c.rawWh : 'Almacén 1';
+              const rowVal = c.rawRow || 'Sin Asignar';
+              const spaceVal = c.rawSpace !== null ? c.rawSpace : '';
+              const sysStatus = c.rawSystemStatus || 'Principal';
+              const encodedStatus = `DISPONIBLE|${sysStatus}`;
+              const matVal = c.rawMaterial || 'Sin Modelo';
+
+              cache.serials[c.serialUpper] = {
+                ...localCached,
+                material: matVal,
+                warehouseName: whVal,
+                warehouseRow: rowVal,
+                warehouseSpace: spaceVal,
+                internalNumber: c.rawInternal,
+                systemStatus: sysStatus,
+                isScanned: true,
+                status: 'DISPONIBLE',
+                assignedAt: localCached.assignedAt || new Date().toISOString()
+              };
+
               toInsert.push({
                 checklist_id: defaultBatchId,
                 serial_number: c.serialUpper,
-                material_model: finalMaterial,
+                material_model: matVal,
                 internal_number: numVal,
-                warehouse_name: finalWh,
-                warehouse_row: finalRow,
-                warehouse_space: finalSpace,
+                warehouse_name: whVal,
+                warehouse_row: rowVal,
+                warehouse_space: spaceVal,
                 printer_status: encodedStatus,
                 is_scanned: true
               });

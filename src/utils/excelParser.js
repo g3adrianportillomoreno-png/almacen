@@ -104,35 +104,8 @@ export async function extractSeriesFromExcel(file) {
                 foundInternal = colIdx;
               }
 
-              // 4. ALMACÉN
-              else if (
-                norm === 'almacen' || 
-                norm === 'almacenes' || 
-                norm.includes('almacen')
-              ) {
-                foundWarehouse = colIdx;
-              }
-
-              // 5. FILA
-              else if (
-                norm === 'fila' || 
-                norm === 'filas' || 
-                norm.includes('fila')
-              ) {
-                foundRow = colIdx;
-              }
-
-              // 6. ESPACIO
-              else if (
-                norm === 'espacio' || 
-                norm === 'espacios' || 
-                norm === 'posicion' || 
-                norm.includes('espacio')
-              ) {
-                foundSpace = colIdx;
-              }
-
-              // 7. ESTADO (SISTEMA / PROCESO)
+              // 4. ESTADO (SISTEMA / PROCESO: Seminuevos, Refacciones, Remanufacturado, Principal)
+              // Evaluamos Estado antes de Almacén para evitar que "ESTADO ALMACEN" se tome como bodega física
               else if (
                 norm === 'estado' || 
                 norm === 'status' || 
@@ -141,10 +114,42 @@ export async function extractSeriesFromExcel(file) {
                 norm === 'proceso' || 
                 norm === 'etapa' ||
                 norm.includes('estado') || 
-                norm.includes('status') ||
-                norm.includes('estatus')
+                norm.includes('status') || 
+                norm.includes('estatus') ||
+                norm.includes('proceso')
               ) {
                 foundStatus = colIdx;
+              }
+
+              // 5. ALMACÉN FÍSICO (Almacén 1, Almacén 2, Bodega, etc.)
+              else if (
+                norm === 'almacen' || 
+                norm === 'almacenes' || 
+                norm === 'bodega' ||
+                norm === 'bodegas' ||
+                norm.includes('almacen') ||
+                norm.includes('bodega')
+              ) {
+                foundWarehouse = colIdx;
+              }
+
+              // 6. FILA
+              else if (
+                norm === 'fila' || 
+                norm === 'filas' || 
+                norm.includes('fila')
+              ) {
+                foundRow = colIdx;
+              }
+
+              // 7. ESPACIO
+              else if (
+                norm === 'espacio' || 
+                norm === 'espacios' || 
+                norm === 'posicion' || 
+                norm.includes('espacio')
+              ) {
+                foundSpace = colIdx;
               }
             });
 
@@ -169,12 +174,23 @@ export async function extractSeriesFromExcel(file) {
         const items = [];
         const seenSerials = new Set();
         
+        // Helper para comprobar si un valor corresponde a un estado de proceso en vez de un almacén físico
+        const isSystemStateVal = (val) => {
+          if (!val) return false;
+          const s = String(val).trim().toLowerCase();
+          return s.includes('seminuevo') || s.includes('refaccion') || s.includes('operacion') || s.includes('reman') || s === 'principal';
+        };
+
         for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i];
           if (!row || !Array.isArray(row)) continue;
 
           const serieRaw = row[serialIndex];
-          const materialRaw = materialIndex !== -1 ? row[materialIndex] : 'MODELO GENÉRICO';
+          const hasMaterialCol = materialIndex !== -1;
+          const materialRaw = (hasMaterialCol && row[materialIndex] !== undefined && row[materialIndex] !== null && String(row[materialIndex]).trim() !== '')
+            ? String(row[materialIndex]).trim().toUpperCase()
+            : null;
+
           const internalNumRaw = internalNumberIndex !== -1 ? row[internalNumberIndex] : null;
           const warehouseRaw = warehouseIndex !== -1 ? row[warehouseIndex] : null;
           const rowRaw = rowIndex !== -1 ? row[rowIndex] : null;
@@ -191,17 +207,26 @@ export async function extractSeriesFromExcel(file) {
                 ? String(internalNumRaw).trim()
                 : null;
 
-              const systemStatus = (statusRaw && String(statusRaw).trim() !== '')
-                ? PrinterModel.normalizeSystemStatus(statusRaw)
-                : null;
+              // Proteger para que los estados no se confundan con almacenes físicos
+              let cleanWh = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
+              let candidateStatus = statusRaw && String(statusRaw).trim() !== '' ? statusRaw : null;
+
+              if (cleanWh && isSystemStateVal(cleanWh)) {
+                if (!candidateStatus) {
+                  candidateStatus = cleanWh;
+                }
+                cleanWh = null; // No permitir que un estado sustituya el nombre de almacén
+              }
+
+              const systemStatus = candidateStatus ? PrinterModel.normalizeSystemStatus(candidateStatus) : null;
 
               items.push({
                 serial: serialString,
-                material: String(materialRaw || 'MODELO GENÉRICO').trim().toUpperCase(),
+                material: materialRaw, // null si la columna de modelo no vino en el Excel
                 internalNumber: internalNumberFormatted,
-                warehouseName: warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null,
+                warehouseName: cleanWh,
                 warehouseRow: rowRaw && String(rowRaw).trim() !== '' ? String(rowRaw).trim() : null,
-                warehouseSpace: spaceRaw && String(spaceRaw).trim() !== '' ? String(spaceRaw).trim() : null,
+                warehouseSpace: spaceRaw !== null && spaceRaw !== undefined && String(spaceRaw).trim() !== '' ? String(spaceRaw).trim() : null,
                 systemStatus: systemStatus
               });
             }
