@@ -496,6 +496,7 @@ export function parseSeriesFromText(rawText) {
   const model5Counts = {};
   const plantCounts = {};
   const pedimentoToPrefix9 = {};
+  const prefix9Counts = {};
   const seq3Counts = {};
   const seq4Counts = {};
   const validSeq6Set = new Set();
@@ -512,6 +513,7 @@ export function parseSeriesFromText(rawText) {
 
       model5Counts[m5] = (model5Counts[m5] || 0) + 1;
       plantCounts[plant] = (plantCounts[plant] || 0) + 1;
+      prefix9Counts[prefix9] = (prefix9Counts[prefix9] || 0) + 1;
       seq3Counts[s3] = (seq3Counts[s3] || 0) + 1;
       seq4Counts[s4] = (seq4Counts[s4] || 0) + 1;
       validSeq6Set.add(seq6);
@@ -540,10 +542,19 @@ export function parseSeriesFromText(rawText) {
     }
   }
 
+  let dominantPrefix9 = null;
+  let maxP9 = 0;
+  for (const [p9, cnt] of Object.entries(prefix9Counts)) {
+    if (cnt > maxP9 && cnt >= 2) {
+      maxP9 = cnt;
+      dominantPrefix9 = p9;
+    }
+  }
+
   const validSeq6Nums = Array.from(validSeq6Set).map((s) => parseInt(s, 10));
 
   // 4. Reparador Maestro de Series Brother (Normaliza a 15 caracteres exactos)
-  const normalizeBrotherSerial = (rawCandidate) => {
+  const normalizeBrotherSerial = (rawCandidate, entryPedimento = null) => {
     let clean = rawCandidate.replace(/[^A-Z0-9]/gi, '').toUpperCase();
 
     // Reparar 'U' inicial solo cuando el OCR leyó '0', 'O', 'V' o 'J' seguido de los 4-5 dígitos del código de modelo Brother
@@ -615,37 +626,61 @@ export function parseSeriesFromText(rawText) {
       } else {
         const last6 = clean.slice(-6).split('').map(fixDigit).join('');
         if (/^\d{6}$/.test(last6)) {
-          const prefixPart = clean.slice(0, clean.length - 6);
-          let bestCandidate = null;
+          const expectedPrefix9 = (entryPedimento && pedimentoToPrefix9[entryPedimento]) || dominantPrefix9;
+          // Si conocemos el prefijo esperado de 9 caracteres por pedimento o consenso del lote, y concuerda con la raíz del modelo
+          if (expectedPrefix9 && clean.startsWith(expectedPrefix9.slice(0, 6))) {
+            clean = expectedPrefix9 + last6;
+          } else {
+            const prefixPart = clean.slice(0, clean.length - 6);
+            let bestCandidate = null;
+            const charsToRemove = prefixPart.length - 9;
 
-          for (let removeIdx = prefixPart.length - 1; removeIdx >= 1; removeIdx--) {
-            const candidate9 = prefixPart.slice(0, removeIdx) + prefixPart.slice(removeIdx + 1);
-            if (candidate9.length !== 9) continue;
+            const evaluateCand9 = (cand9) => {
+              const pDigits = cand9.slice(1, 6).split('').map(fixDigit).join('');
+              let monthChar = cand9[6];
+              if (monthChar === '0' || monthChar === 'O') monthChar = 'D';
+              if (monthChar === '8') monthChar = 'B';
+              if (monthChar === '6') monthChar = 'G';
 
-            const pDigits = candidate9.slice(1, 6).split('').map(fixDigit).join('');
-            let monthChar = candidate9[6];
-            if (monthChar === '0' || monthChar === 'O') monthChar = 'D';
-            if (monthChar === '8') monthChar = 'B';
-            if (monthChar === '6') monthChar = 'G';
+              const yearDigit = fixDigit(cand9[7]);
+              let plantChar = cand9[8];
+              if (dominantPlant && !/[A-Z]/.test(plantChar)) {
+                plantChar = dominantPlant;
+              }
 
-            const yearDigit = fixDigit(candidate9[7]);
-            let plantChar = candidate9[8];
-            if (dominantPlant && !/[A-Z]/.test(plantChar)) {
-              plantChar = dominantPlant;
-            }
+              if (/^\d{5}$/.test(pDigits) && /[A-Z]/.test(monthChar) && /^\d$/.test(yearDigit) && /[A-Z]/.test(plantChar)) {
+                const built = 'U' + pDigits + monthChar + yearDigit + plantChar + last6;
+                if (!bestCandidate) bestCandidate = built;
+                if (dominantModel5 && pDigits === dominantModel5 && (!dominantPlant || plantChar === dominantPlant)) {
+                  bestCandidate = built;
+                  return true;
+                }
+              }
+              return false;
+            };
 
-            if (/^\d{5}$/.test(pDigits) && /[A-Z]/.test(monthChar) && /^\d$/.test(yearDigit) && /[A-Z]/.test(plantChar)) {
-              const built = 'U' + pDigits + monthChar + yearDigit + plantChar + last6;
-              if (!bestCandidate) bestCandidate = built;
-              if (dominantModel5 && pDigits === dominantModel5 && (!dominantPlant || plantChar === dominantPlant)) {
-                bestCandidate = built;
-                break;
+            if (charsToRemove === 1) {
+              for (let removeIdx = prefixPart.length - 1; removeIdx >= 1; removeIdx--) {
+                const candidate9 = prefixPart.slice(0, removeIdx) + prefixPart.slice(removeIdx + 1);
+                if (evaluateCand9(candidate9)) break;
+              }
+            } else if (charsToRemove === 2) {
+              for (let rm1 = prefixPart.length - 1; rm1 >= 1; rm1--) {
+                let found = false;
+                for (let rm2 = rm1 - 1; rm2 >= 1; rm2--) {
+                  const candidate9 = prefixPart.slice(0, rm2) + prefixPart.slice(rm2 + 1, rm1) + prefixPart.slice(rm1 + 1);
+                  if (evaluateCand9(candidate9)) {
+                    found = true;
+                    break;
+                  }
+                }
+                if (found) break;
               }
             }
-          }
 
-          if (bestCandidate) {
-            clean = bestCandidate;
+            if (bestCandidate) {
+              clean = bestCandidate;
+            }
           }
         }
       }
@@ -678,7 +713,7 @@ export function parseSeriesFromText(rawText) {
   const normalizedList = [];
   for (const entry of rawEntries) {
     const rawOriginal = entry.rawSerial.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    let clean = normalizeBrotherSerial(rawOriginal);
+    let clean = normalizeBrotherSerial(rawOriginal, entry.pedimento);
 
     if (entry.pedimento && pedimentoToPrefix9[entry.pedimento] && clean.length === 15) {
       const expectedPrefix9 = pedimentoToPrefix9[entry.pedimento];
