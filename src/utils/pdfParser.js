@@ -416,14 +416,25 @@ export function parseSeriesFromText(rawText) {
     return map[upper] || (/\d/.test(upper) ? upper : upper);
   };
 
+  // Detección de cantidad total declarada en el documento (ej. "50 PZAS", "Total Articulos: 50 PZAS", "TOTAL: 50")
+  let declaredTotal = null;
+  const totalMatch = rawText.match(/(?:TOTAL(?:\s+DE)?\s*(?:ARTICULOS|PIEZAS|ITEMS|EQUIPOS|UNIDADES)?|CANTIDAD|QTY)?[:\s]*(\d+)\s*(?:PZAS|PZA|PZS|PIEZAS|UNIDADES|UNITS|PCS)\b/i) ||
+    rawText.match(/\bTOTAL(?:\s+DE)?\s*(?:ARTICULOS|PIEZAS|ITEMS)?[:\s]+(\d+)\b/i);
+  if (totalMatch) {
+    const val = parseInt(totalMatch[1], 10);
+    if (!isNaN(val) && val > 0 && val <= 5000) {
+      declaredTotal = val;
+    }
+  }
+
   const rawEntries = []; // { rawSerial, pedimento }
   const lines = rawText.split(/\r?\n/);
 
   // 1. Extraer candidatos línea por línea considerando columnas de pedimento, fecha (incluso 0000-00-00) o inicio directo con serie Brother
   for (const line of lines) {
-    const pedMatch = line.match(/\b(\d{4}-+\d{6,8})\b/);
-    const dateMatch = line.match(/\b((?:202\d|19\d\d|0000)-+\d{2}-+\d{2})\b/);
-    const directSerialLine = /^\s*[U0OVJ]\d{4,5}[A-Z0-9]{7,11}\b/i.test(line);
+    const pedMatch = line.match(/\b(\d{4}\s*-+\s*\d{6,8})\b/);
+    const dateMatch = line.match(/\b((?:202\d|19\d\d|0000)\s*-+\s*\d{2}\s*-+\s*\d{2})\b/);
+    const directSerialLine = /^\s*[U0OVJ]\d{4,5}[A-Z0-9]{7,12}\b/i.test(line);
 
     if (pedMatch || dateMatch || directSerialLine) {
       let cutIdx = -1;
@@ -433,7 +444,7 @@ export function parseSeriesFromText(rawText) {
         cutIdx = line.indexOf(dateMatch[1]);
       }
       const leftPart = (cutIdx > 0 ? line.slice(0, cutIdx) : line).trim();
-      const normalizedPed = pedMatch ? pedMatch[1].replace(/-+/g, '-') : null;
+      const normalizedPed = pedMatch ? pedMatch[1].replace(/\s+/g, '').replace(/-+/g, '-') : null;
 
       const tokens = leftPart.split(/\s+/).filter(Boolean);
       let temp = '';
@@ -446,9 +457,9 @@ export function parseSeriesFromText(rawText) {
           continue;
         }
 
-        if (cleanTok.length >= 13 && cleanTok.length <= 17) {
+        if (cleanTok.length >= 13 && cleanTok.length <= 18) {
           if (temp) {
-            if (temp.length >= 13 && temp.length <= 17) {
+            if (temp.length >= 13 && temp.length <= 18) {
               rawEntries.push({ rawSerial: temp, pedimento: normalizedPed });
             }
             temp = '';
@@ -461,11 +472,11 @@ export function parseSeriesFromText(rawText) {
             }
           } else {
             const combined = temp + cleanTok;
-            if (combined.length >= 13 && combined.length <= 17) {
+            if (combined.length >= 13 && combined.length <= 18) {
               rawEntries.push({ rawSerial: combined, pedimento: normalizedPed });
               temp = '';
             } else {
-              if (temp.length >= 13 && temp.length <= 17) {
+              if (temp.length >= 13 && temp.length <= 18) {
                 rawEntries.push({ rawSerial: temp, pedimento: normalizedPed });
               }
               temp = /^[U0OVJ]\d{2,}/i.test(cleanTok) ? cleanTok : '';
@@ -474,7 +485,7 @@ export function parseSeriesFromText(rawText) {
         }
       }
 
-      if (temp && temp.length >= 13 && temp.length <= 17) {
+      if (temp && temp.length >= 13 && temp.length <= 18) {
         rawEntries.push({ rawSerial: temp, pedimento: normalizedPed });
       }
     }
@@ -562,8 +573,8 @@ export function parseSeriesFromText(rawText) {
       clean = 'U' + clean.slice(1);
     }
 
-    // CASO A: 16 o 17 caracteres (el escáner insertó caracteres o manchas fantasma)
-    if ((clean.length === 16 || clean.length === 17) && clean.startsWith('U')) {
+    // CASO A: 16 a 18 caracteres (el escáner insertó caracteres o manchas fantasma)
+    if ((clean.length >= 16 && clean.length <= 18) && clean.startsWith('U')) {
       const pDigits9 = clean.slice(1, 6).split('').map(fixDigit).join('');
       let mChar9 = clean[6];
       if (mChar9 === '0' || mChar9 === 'O') mChar9 = 'D';
@@ -676,6 +687,21 @@ export function parseSeriesFromText(rawText) {
                 }
                 if (found) break;
               }
+            } else if (charsToRemove === 3) {
+              for (let rm1 = prefixPart.length - 1; rm1 >= 1; rm1--) {
+                let found = false;
+                for (let rm2 = rm1 - 1; rm2 >= 1; rm2--) {
+                  for (let rm3 = rm2 - 1; rm3 >= 1; rm3--) {
+                    const candidate9 = prefixPart.slice(0, rm3) + prefixPart.slice(rm3 + 1, rm2) + prefixPart.slice(rm2 + 1, rm1) + prefixPart.slice(rm1 + 1);
+                    if (evaluateCand9(candidate9)) {
+                      found = true;
+                      break;
+                    }
+                  }
+                  if (found) break;
+                }
+                if (found) break;
+              }
             }
 
             if (bestCandidate) {
@@ -741,6 +767,22 @@ export function parseSeriesFromText(rawText) {
       /^U\d{4,5}[A-Z0-9]+$/.test(clean)
     ) {
       normalizedList.push({ clean, rawOriginal });
+    }
+  }
+
+  // 5B. Si el documento declara una cantidad total (ej. "50 PZAS") y faltaron series por capturar,
+  // escanear el texto completo buscando cualquier serie Brother omitida por líneas mal formateadas
+  if (declaredTotal && normalizedList.length < declaredTotal) {
+    const existingCleanSet = new Set(normalizedList.map(item => item.clean));
+    const allBrotherMatches = rawText.matchAll(/\b([U0OVJ]\d{4,5}[A-Z0-9]{7,13})\b/gi);
+    for (const match of allBrotherMatches) {
+      const cand = match[1].trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+      const cleaned = normalizeBrotherSerial(cand);
+      if (cleaned.length === 15 && !existingCleanSet.has(cleaned)) {
+        existingCleanSet.add(cleaned);
+        normalizedList.push({ clean: cleaned, rawOriginal: cand });
+        if (normalizedList.length >= declaredTotal) break;
+      }
     }
   }
 
@@ -1090,6 +1132,7 @@ export function parseSeriesFromText(rawText) {
     }
   }
 
+  items.declaredTotal = declaredTotal;
   return items;
 }
 

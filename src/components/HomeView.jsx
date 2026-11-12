@@ -247,7 +247,8 @@ export default function HomeView({
           name: file.name,
           count: extracted.length,
           addedCount: addedFromFile,
-          repairedCount: repairedInFile
+          repairedCount: repairedInFile,
+          declaredTotal: extracted.declaredTotal || null
         });
       }
 
@@ -1069,6 +1070,15 @@ export default function HomeView({
                     <div key={i} className="flex justify-between items-center text-slate-700 px-1">
                       <span className="truncate font-medium max-w-[240px]">{i + 1}. {f.name}</span>
                       <div className="flex items-center gap-2 shrink-0">
+                        {f.declaredTotal && (
+                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                            f.addedCount === f.declaredTotal
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                              : 'bg-amber-100 text-amber-900 border border-amber-300'
+                          }`}>
+                            {f.addedCount === f.declaredTotal ? `✓ ${f.addedCount}/${f.declaredTotal} pzas` : `⚠️ ${f.addedCount}/${f.declaredTotal} pzas`}
+                          </span>
+                        )}
                         {f.repairedCount > 0 && (
                           <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
                             ✨ {f.repairedCount} reparadas
