@@ -177,6 +177,7 @@ export default function BajasSessionView({
 
     // 4. Agregar a la sesión activa
     soundEffects.playScanSuccess();
+    const nowScanIso = new Date().toISOString();
     const newItem = {
       serial: matched.serial,
       material: matched.material || 'Sin Modelo',
@@ -188,7 +189,8 @@ export default function BajasSessionView({
       batchName: matched.batchName || matched.checklistName || '',
       checklistId: matched.checklistId || null,
       wasAlreadyBaja,
-      scannedAt: new Date().toISOString()
+      scannedAt: nowScanIso,
+      bajaAt: nowScanIso
     };
 
     setActiveSession(prev => ({

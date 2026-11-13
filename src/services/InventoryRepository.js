@@ -580,6 +580,8 @@ export class InventoryRepository {
       if (!serial) continue;
       serialsToUpdate.push(serial);
 
+      const itemBajaTime = item.scannedAt || item.bajaAt || new Date().toISOString();
+
       const existing = cache.serials[serial] || {};
       cache.serials[serial] = {
         ...existing,
@@ -589,7 +591,7 @@ export class InventoryRepository {
         warehouseSpace: item.warehouseSpace || existing.warehouseSpace || '',
         internalNumber: item.internalNumber ?? existing.internalNumber ?? null,
         status: 'BAJA',
-        bajaAt: nowIso,
+        bajaAt: itemBajaTime,
         bajaReason: reason,
         bajaOperator: operator,
         isScanned: true
@@ -604,7 +606,7 @@ export class InventoryRepository {
         warehouseSpace: item.warehouseSpace || existing.warehouseSpace || '',
         systemStatus: existing.systemStatus || 'Principal',
         reason: reason,
-        departure_date: nowIso
+        departure_date: itemBajaTime
       });
     }
 
@@ -640,17 +642,22 @@ export class InventoryRepository {
       targetScope: sessionInfo.targetScope || 'ALL',
       targetLoteName: sessionInfo.targetLoteName || 'Todo el Inventario',
       itemsCount: items.length,
-      items: items.map(it => ({
-        serial: it.serial,
-        material: it.material,
-        internalNumber: it.internalNumber,
-        warehouseName: it.warehouseName,
-        warehouseRow: it.warehouseRow,
-        warehouseSpace: it.warehouseSpace,
-        batchFolio: it.batchFolio,
-        batchName: it.batchName,
-        scannedAt: it.scannedAt || nowIso
-      }))
+      closedAt: new Date().toISOString(),
+      items: items.map(it => {
+        const itemTime = it.scannedAt || it.bajaAt || new Date().toISOString();
+        return {
+          serial: it.serial,
+          material: it.material,
+          internalNumber: it.internalNumber,
+          warehouseName: it.warehouseName,
+          warehouseRow: it.warehouseRow,
+          warehouseSpace: it.warehouseSpace,
+          batchFolio: it.batchFolio,
+          batchName: it.batchName,
+          scannedAt: itemTime,
+          bajaAt: itemTime
+        };
+      })
     };
 
     this.saveBajasSession(sessionRecord);

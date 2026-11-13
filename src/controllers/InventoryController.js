@@ -296,21 +296,38 @@ export class InventoryController {
       return;
     }
 
-    const dataRows = departures.map((d, idx) => ({
-      'No.': idx + 1,
-      'Número de Serie': d.serial || '',
-      'Clave / Modelo': d.material || '',
-      'Número de Equipo': d.internal_number || '',
-      'Último Almacén': d.warehouse_name || '',
-      'Última Fila': d.warehouse_row || '',
-      'Último Espacio': d.warehouse_space || '',
-      'Estado Previo': d.system_status || 'Principal',
-      'Motivo': d.reason || 'Baja de inventario',
-      'Fecha y Hora de Baja': d.departure_date ? new Date(d.departure_date).toLocaleString('es-MX') : ''
-    }));
+    const downloadTimeStr = new Date().toLocaleString('es-MX', { hour12: true });
+
+    const dataRows = departures.map((d, idx) => {
+      const depDate = d.departure_date ? new Date(d.departure_date) : (d.bajaAt ? new Date(d.bajaAt) : null);
+      const isValid = depDate && !isNaN(depDate.getTime());
+      return {
+        'No.': idx + 1,
+        'Número de Serie': d.serial || '',
+        'Clave / Modelo': d.material || '',
+        'Número de Equipo': d.internal_number || '',
+        'Último Almacén': d.warehouse_name || '',
+        'Última Fila': d.warehouse_row || '',
+        'Último Espacio': d.warehouse_space || '',
+        'Estado Previo': d.system_status || 'Principal',
+        'Motivo': d.reason || 'Baja de inventario',
+        'Fecha de Baja': isValid ? depDate.toLocaleDateString('es-MX') : '',
+        'Hora en que se dio de Baja': isValid ? depDate.toLocaleTimeString('es-MX', { hour12: true }) : '',
+        'Fecha y Hora de Baja': isValid ? depDate.toLocaleString('es-MX', { hour12: true }) : ''
+      };
+    });
 
     const wb = XLSX.utils.book_new();
 
+    // Hoja Resumen
+    const resumenRows = [
+      { 'CAMPO': 'REPORTE DE BAJAS DE INVENTARIO (30 DÍAS)', 'VALOR': '' },
+      { 'CAMPO': 'FECHA Y HORA DE DESCARGA DEL REPORTE', 'VALOR': downloadTimeStr },
+      { 'CAMPO': 'TOTAL EQUIPOS DADOS DE BAJA', 'VALOR': departures.length }
+    ];
+    const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
+    wsResumen['!cols'] = [{ wch: 38 }, { wch: 35 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
     const ws = XLSX.utils.json_to_sheet(dataRows);
     ws['!cols'] = [
@@ -321,9 +338,11 @@ export class InventoryController {
       { wch: 16 },
       { wch: 14 },
       { wch: 16 },
+      { wch: 22 },
       { wch: 25 },
-      { wch: 30 },
-      { wch: 22 }
+      { wch: 16 },
+      { wch: 26 },
+      { wch: 24 }
     ];
     XLSX.utils.book_append_sheet(wb, ws, "HISTORIAL_BAJAS_30_DIAS");
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -521,13 +540,17 @@ export class InventoryController {
     });
 
     const dataBajas = sortedBajas.map((p, idx) => {
+      const bajaDateObj = p.bajaAt ? new Date(p.bajaAt) : (p.scannedAt ? new Date(p.scannedAt) : null);
+      const isValid = bajaDateObj && !isNaN(bajaDateObj.getTime());
       const row = {
         'NO.': idx + 1,
         'CLAVE': p.material || '',
         'NUMERO DE SERIE': p.serial || '',
         'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
         'ESTADO': 'DADA DE BAJA',
-        'FECHA Y HORA DE BAJA': p.bajaAt ? new Date(p.bajaAt).toLocaleString('es-MX') : new Date().toLocaleString('es-MX'),
+        'FECHA DE BAJA': isValid ? bajaDateObj.toLocaleDateString('es-MX') : 'No registrada',
+        'HORA EN QUE SE DIO DE BAJA': isValid ? bajaDateObj.toLocaleTimeString('es-MX', { hour12: true }) : 'No registrada',
+        'FECHA Y HORA DE BAJA': isValid ? bajaDateObj.toLocaleString('es-MX', { hour12: true }) : 'No registrada',
         'MOTIVO': p.bajaReason || 'Baja de checklist'
       };
       if (hasMultipleDocs) {
@@ -543,6 +566,8 @@ export class InventoryController {
         'NUMERO DE SERIE': 'SIN EQUIPOS DADOS DE BAJA',
         'NUMERO DE EQUIPO': '',
         'ESTADO': 'NINGUNO',
+        'FECHA DE BAJA': '',
+        'HORA EN QUE SE DIO DE BAJA': '',
         'FECHA Y HORA DE BAJA': '',
         'MOTIVO': '',
         ...(hasMultipleDocs ? { 'DOCUMENTO DE ORIGEN': '' } : {})
@@ -554,6 +579,8 @@ export class InventoryController {
       { wch: 22 },
       { wch: 20 },
       { wch: 18 },
+      { wch: 16 },
+      { wch: 26 },
       { wch: 24 },
       { wch: 26 },
       ...(hasMultipleDocs ? [{ wch: 32 }] : [])
@@ -644,7 +671,8 @@ export class InventoryController {
     }
 
     const wb = XLSX.utils.book_new();
-    const dateFormatted = new Date(sessionRecord.date).toLocaleString('es-MX');
+    const downloadTimeStr = new Date().toLocaleString('es-MX', { hour12: true });
+    const sessionCloseTimeStr = sessionRecord.date ? new Date(sessionRecord.date).toLocaleString('es-MX', { hour12: true }) : downloadTimeStr;
 
     // Desglose por modelo
     const modelCounts = {};
@@ -659,7 +687,8 @@ export class InventoryController {
     // 1. HOJA RESUMEN
     const resumenRows = [
       { 'CAMPO': 'FOLIO DE SESIÓN', 'VALOR': sessionRecord.folio || 'N/A' },
-      { 'CAMPO': 'FECHA Y HORA DE CIERRE', 'VALOR': dateFormatted },
+      { 'CAMPO': 'FECHA Y HORA DE DESCARGA DEL REPORTE', 'VALOR': downloadTimeStr },
+      { 'CAMPO': 'FECHA Y HORA DE CIERRE DE SESIÓN', 'VALOR': sessionCloseTimeStr },
       { 'CAMPO': 'ÁMBITO / LOTE', 'VALOR': sessionRecord.targetLoteName || 'Todo el Inventario' },
       { 'CAMPO': 'MOTIVO GENERAL', 'VALOR': sessionRecord.reason || 'Salida de almacén' },
       { 'CAMPO': 'OPERADOR / RESPONSABLE', 'VALOR': sessionRecord.operator || 'Operador' },
@@ -673,23 +702,30 @@ export class InventoryController {
     ];
 
     const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
-    wsResumen['!cols'] = [{ wch: 35 }, { wch: 35 }];
+    wsResumen['!cols'] = [{ wch: 42 }, { wch: 35 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN_BAJAS");
 
     // 2. HOJA DETALLE DE BAJAS
-    const detailRows = sessionRecord.items.map((it, idx) => ({
-      'NO.': idx + 1,
-      'NÚMERO DE SERIE': it.serial || '',
-      'MODELO': it.material || '',
-      '# EQUIPO': it.internalNumber || '',
-      'LOTE ORIGEN': it.batchFolio ? `${it.batchFolio} - ${it.batchName || ''}` : (it.batchName || 'Inventario'),
-      'ALMACÉN': it.warehouseName || 'Almacén 1',
-      'FILA': it.warehouseRow || 'Sin Asignar',
-      'ESPACIO': it.warehouseSpace || '',
-      'MOTIVO': sessionRecord.reason || 'Salida de almacén',
-      'FECHA Y HORA': dateFormatted,
-      'HORA ESCANEO': it.scannedAt ? new Date(it.scannedAt).toLocaleTimeString('es-MX') : ''
-    }));
+    const detailRows = sessionRecord.items.map((it, idx) => {
+      const itemTimestamp = it.scannedAt || it.bajaAt || sessionRecord.date || new Date().toISOString();
+      const dateObj = new Date(itemTimestamp);
+      const isValid = !isNaN(dateObj.getTime());
+
+      return {
+        'NO.': idx + 1,
+        'NÚMERO DE SERIE': it.serial || '',
+        'MODELO': it.material || '',
+        '# EQUIPO': it.internalNumber || '',
+        'LOTE ORIGEN': it.batchFolio ? `${it.batchFolio} - ${it.batchName || ''}` : (it.batchName || 'Inventario'),
+        'ALMACÉN': it.warehouseName || 'Almacén 1',
+        'FILA': it.warehouseRow || 'Sin Asignar',
+        'ESPACIO': it.warehouseSpace || '',
+        'MOTIVO': sessionRecord.reason || 'Salida de almacén',
+        'FECHA DE BAJA': isValid ? dateObj.toLocaleDateString('es-MX') : '',
+        'HORA EN QUE SE DIO DE BAJA': isValid ? dateObj.toLocaleTimeString('es-MX', { hour12: true }) : '',
+        'FECHA Y HORA DE BAJA': isValid ? dateObj.toLocaleString('es-MX', { hour12: true }) : ''
+      };
+    });
 
     const wsDetail = XLSX.utils.json_to_sheet(detailRows);
     wsDetail['!cols'] = [
@@ -702,13 +738,14 @@ export class InventoryController {
       { wch: 14 },
       { wch: 12 },
       { wch: 26 },
-      { wch: 22 },
-      { wch: 14 }
+      { wch: 16 },
+      { wch: 26 },
+      { wch: 24 }
     ];
     XLSX.utils.book_append_sheet(wb, wsDetail, "EQUIPOS_DADOS_DE_BAJA");
 
     const safeFolio = (sessionRecord.folio || 'BAJA').replace(/[^a-zA-Z0-9_-]/g, '_');
-    const safeDate = new Date(sessionRecord.date).toISOString().slice(0, 10);
+    const safeDate = new Date(sessionRecord.date || Date.now()).toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Reporte_${safeFolio}_${safeDate}.xlsx`);
   }
 
@@ -722,19 +759,27 @@ export class InventoryController {
     }
 
     const wb = XLSX.utils.book_new();
+    const downloadTimeStr = new Date().toLocaleString('es-MX', { hour12: true });
 
-    const dataRows = departures.map((d, idx) => ({
-      'NO.': idx + 1,
-      'FECHA Y HORA': d.departure_date ? new Date(d.departure_date).toLocaleString('es-MX') : '',
-      'NÚMERO DE SERIE': d.serial || '',
-      'MODELO': d.material || '',
-      '# EQUIPO': d.internal_number || '',
-      'LOTE / ORIGEN': d.batchFolio ? `${d.batchFolio} (${d.batchName || ''})` : (d.batchName || 'General'),
-      'ALMACÉN': d.warehouse_name || '',
-      'FILA': d.warehouse_row || '',
-      'ESPACIO': d.warehouse_space || '',
-      'MOTIVO': d.reason || 'Baja de almacén'
-    }));
+    const dataRows = departures.map((d, idx) => {
+      const depDate = d.departure_date ? new Date(d.departure_date) : (d.bajaAt ? new Date(d.bajaAt) : null);
+      const isValid = depDate && !isNaN(depDate.getTime());
+
+      return {
+        'NO.': idx + 1,
+        'NÚMERO DE SERIE': d.serial || '',
+        'MODELO': d.material || '',
+        '# EQUIPO': d.internal_number || '',
+        'LOTE / ORIGEN': d.batchFolio ? `${d.batchFolio} (${d.batchName || ''})` : (d.batchName || 'General'),
+        'ALMACÉN': d.warehouse_name || '',
+        'FILA': d.warehouse_row || '',
+        'ESPACIO': d.warehouse_space || '',
+        'MOTIVO': d.reason || 'Baja de almacén',
+        'FECHA DE BAJA': isValid ? depDate.toLocaleDateString('es-MX') : '',
+        'HORA EN QUE SE DIO DE BAJA': isValid ? depDate.toLocaleTimeString('es-MX', { hour12: true }) : '',
+        'FECHA Y HORA DE BAJA': isValid ? depDate.toLocaleString('es-MX', { hour12: true }) : ''
+      };
+    });
 
     // Desglose por modelo
     const modelCounts = {};
@@ -745,6 +790,7 @@ export class InventoryController {
 
     const resumenRows = [
       { 'CAMPO': 'REPORTE DE BAJAS POR FECHA', 'VALOR': '' },
+      { 'CAMPO': 'FECHA Y HORA DE DESCARGA DEL REPORTE', 'VALOR': downloadTimeStr },
       { 'CAMPO': 'PERIODO', 'VALOR': `${startDate || 'Inicio'} hasta ${endDate || 'Hoy'}` },
       { 'CAMPO': 'FILTRO LOTE', 'VALOR': filterLote === 'ALL' ? 'Todos los Lotes' : filterLote },
       { 'CAMPO': 'TOTAL EQUIPOS', 'VALOR': departures.length },
@@ -754,13 +800,12 @@ export class InventoryController {
     ];
 
     const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
-    wsResumen['!cols'] = [{ wch: 32 }, { wch: 35 }];
+    wsResumen['!cols'] = [{ wch: 42 }, { wch: 35 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
     const wsData = XLSX.utils.json_to_sheet(dataRows);
     wsData['!cols'] = [
       { wch: 6 },
-      { wch: 22 },
       { wch: 22 },
       { wch: 25 },
       { wch: 12 },
@@ -768,7 +813,10 @@ export class InventoryController {
       { wch: 14 },
       { wch: 14 },
       { wch: 12 },
-      { wch: 26 }
+      { wch: 26 },
+      { wch: 16 },
+      { wch: 26 },
+      { wch: 24 }
     ];
     XLSX.utils.book_append_sheet(wb, wsData, "DETALLE_BAJAS");
 

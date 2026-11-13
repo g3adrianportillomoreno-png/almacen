@@ -56,10 +56,14 @@ export async function extractSeriesFromExcel(file) {
                 norm === 'numero de serie' || 
                 norm === 'no de serie' || 
                 norm === 'num de serie' ||
+                norm === 'no serie' ||
+                norm === 'num serie' ||
                 norm === 'serial number' || 
                 norm === 'serie' || 
                 norm === 'serial' ||
                 norm === 'sn' ||
+                norm === 's n' ||
+                norm === 'n s' ||
                 norm.includes('serie') ||
                 norm.includes('serial')
               ) {
@@ -68,12 +72,17 @@ export async function extractSeriesFromExcel(file) {
 
               // 2. CLAVE / MODELO
               else if (
-                norm === 'clave' ||
                 norm === 'modelo' ||
+                norm === 'model' ||
+                norm === 'clave' ||
                 norm === 'material' ||
                 norm === 'clave modelo' ||
-                norm.includes('clave') ||
+                norm === 'modelo de equipo' ||
+                norm === 'modelo impresora' ||
+                norm === 'producto' ||
                 norm.includes('modelo') ||
+                norm.includes('model') ||
+                norm.includes('clave') ||
                 norm.includes('material')
               ) {
                 foundMaterial = colIdx;
@@ -167,12 +176,53 @@ export async function extractSeriesFromExcel(file) {
           }
         }
 
+        // Si no se encontró encabezado formal, intentar detección heurística por contenido de columnas
+        if (serialIndex === -1 && rows.length > 0) {
+          const sampleRows = rows.slice(0, 15).filter(r => Array.isArray(r) && r.length > 0);
+          const maxCols = Math.max(...sampleRows.map(r => r.length));
+          let bestSerialCol = -1;
+          let bestMaterialCol = -1;
+          let maxSerialHits = 0;
+
+          for (let c = 0; c < maxCols; c++) {
+            let serialHits = 0;
+            for (let r = 0; r < sampleRows.length; r++) {
+              const val = String(sampleRows[r]?.[c] || '').trim().toUpperCase();
+              if (!val) continue;
+              // Detecta series típicas (Brother U..., o alfanuméricos de 7 a 18 caracteres con letras y dígitos)
+              if (
+                (/^U\d{4,5}[A-Z0-9]{7,12}$/i.test(val) || (/^[A-Z0-9]{7,18}$/i.test(val) && (/[A-Z]/.test(val) || val.length >= 8))) &&
+                !/^(MODELO|SERIE|CLAVE|ALMACEN|FILA|ESPACIO|ESTADO|FECHA|TOTAL|DOCUMENTO)/i.test(val)
+              ) {
+                serialHits++;
+              }
+            }
+            if (serialHits > maxSerialHits && serialHits >= 1) {
+              maxSerialHits = serialHits;
+              bestSerialCol = c;
+            }
+          }
+
+          if (bestSerialCol !== -1) {
+            serialIndex = bestSerialCol;
+            for (let c = 0; c < maxCols; c++) {
+              if (c !== serialIndex) {
+                bestMaterialCol = c;
+                break;
+              }
+            }
+            materialIndex = bestMaterialCol;
+            headerRowIndex = -1; // Procesar desde la fila 0
+          }
+        }
+
         if (serialIndex === -1) {
-          throw new Error('No se encontró la columna de serie en el Excel. Debe llamarse "NUMERO DE SERIE", "SERIE" o "SERIAL NUMBER".');
+          throw new Error('No se encontró la columna de serie en el Excel. Asegúrate de incluir las columnas "MODELO" y "NUMERO DE SERIE".');
         }
 
         const items = [];
         const seenSerials = new Set();
+        let dominantModel = null;
 
         for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i];
@@ -180,9 +230,15 @@ export async function extractSeriesFromExcel(file) {
 
           const serieRaw = row[serialIndex];
           const hasMaterialCol = materialIndex !== -1;
-          const materialRaw = (hasMaterialCol && row[materialIndex] !== undefined && row[materialIndex] !== null && String(row[materialIndex]).trim() !== '')
+          let materialRaw = (hasMaterialCol && row[materialIndex] !== undefined && row[materialIndex] !== null && String(row[materialIndex]).trim() !== '')
             ? String(row[materialIndex]).trim().toUpperCase()
             : null;
+
+          if (materialRaw) {
+            dominantModel = materialRaw;
+          } else if (dominantModel) {
+            materialRaw = dominantModel;
+          }
 
           const internalNumRaw = internalNumberIndex !== -1 ? row[internalNumberIndex] : null;
           const warehouseRaw = warehouseIndex !== -1 ? row[warehouseIndex] : null;
@@ -193,6 +249,11 @@ export async function extractSeriesFromExcel(file) {
           if (serieRaw !== undefined && serieRaw !== null && String(serieRaw).trim() !== '') {
             const serialString = String(serieRaw).trim().toUpperCase();
             
+            // Ignorar filas que sean cabeceras repetidas en el medio del documento
+            if (/^(NUMERO DE SERIE|NO DE SERIE|SERIE|SERIAL NUMBER)$/i.test(serialString)) {
+              continue;
+            }
+
             if (!seenSerials.has(serialString)) {
               seenSerials.add(serialString);
 
@@ -227,4 +288,28 @@ export async function extractSeriesFromExcel(file) {
     
     reader.readAsArrayBuffer(file);
   });
+}
+
+/**
+ * Descarga una plantilla oficial en Excel para subir recepciones/checklists
+ * con las columnas requeridas: MODELO y NUMERO DE SERIE.
+ */
+export function downloadReceptionExcelTemplate() {
+  const wb = XLSX.utils.book_new();
+  const sampleData = [
+    { 'MODELO': 'DCPL5660DN', 'NUMERO DE SERIE': 'U66654F6N666164', 'NUMERO DE EQUIPO': '' },
+    { 'MODELO': 'DCPL5660DN', 'NUMERO DE SERIE': 'U66654F6N666167', 'NUMERO DE EQUIPO': '' },
+    { 'MODELO': 'BP-70C31', 'NUMERO DE SERIE': '55067613', 'NUMERO DE EQUIPO': '101' },
+    { 'MODELO': 'MX-M365N', 'NUMERO DE SERIE': '7500354800', 'NUMERO DE EQUIPO': '102' }
+  ];
+
+  const ws = XLSX.utils.json_to_sheet(sampleData);
+  ws['!cols'] = [
+    { wch: 25 },
+    { wch: 25 },
+    { wch: 25 }
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "RECEPCION");
+  XLSX.writeFile(wb, "Plantilla_Recepcion_Almacen.xlsx");
 }

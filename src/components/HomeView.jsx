@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo } from 'react';
-import { extractSeriesFromExcel } from '../utils/excelParser';
+import { extractSeriesFromExcel, downloadReceptionExcelTemplate } from '../utils/excelParser';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { ChecklistController } from '../controllers/ChecklistController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
@@ -570,29 +570,40 @@ export default function HomeView({
         />
 
         {/* Botón: Subir Checklist de Recepción */}
-        <button 
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isProcessingFile}
-          className={`flex items-center gap-3.5 bg-white border border-slate-200 hover:border-red-400 p-4 rounded-xl shadow-xs hover:shadow-sm transition-all group text-left ${isProcessingFile ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          {isProcessingFile ? (
-            <div className="w-11 h-11 bg-slate-100 text-slate-500 rounded-lg flex items-center justify-center animate-spin border-2 border-slate-300 border-t-red-600 shrink-0"></div>
-          ) : (
-            <div className="w-11 h-11 bg-red-50 text-red-600 rounded-lg flex items-center justify-center group-hover:bg-red-600 group-hover:text-white transition-colors shrink-0">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-              </svg>
+        <div className="flex flex-col gap-1.5">
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isProcessingFile}
+            className={`flex items-center gap-3.5 bg-white border border-slate-200 hover:border-red-400 p-4 rounded-xl shadow-xs hover:shadow-sm transition-all group text-left ${isProcessingFile ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            {isProcessingFile ? (
+              <div className="w-11 h-11 bg-slate-100 text-slate-500 rounded-lg flex items-center justify-center animate-spin border-2 border-slate-300 border-t-red-600 shrink-0"></div>
+            ) : (
+              <div className="w-11 h-11 bg-red-50 text-red-600 rounded-lg flex items-center justify-center group-hover:bg-red-600 group-hover:text-white transition-colors shrink-0">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                </svg>
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <span className="text-sm font-semibold text-slate-800 group-hover:text-red-700 block truncate">
+                {isProcessingFile ? (processingProgress || 'Leyendo documento(s)...') : 'Subir Recepción (PDF o Excel)'}
+              </span>
+              <span className="text-xs text-slate-500 block mt-0.5 font-normal">
+                PDF escaneado o Excel con columnas: <strong>MODELO</strong> y <strong>NUMERO DE SERIE</strong>
+              </span>
             </div>
-          )}
-          <div>
-            <span className="text-sm font-semibold text-slate-800 group-hover:text-red-700 block">
-              {isProcessingFile ? (processingProgress || 'Leyendo documento(s)...') : 'Subir Checklist de Recepción (1 o varios PDFs)'}
-            </span>
-            <span className="text-xs text-slate-500 block mt-0.5 font-normal">
-              Selecciona uno o varios archivos para unirlos en un checklist
-            </span>
-          </div>
-        </button>
+          </button>
+          <button
+            type="button"
+            onClick={downloadReceptionExcelTemplate}
+            className="text-[11px] font-semibold text-slate-500 hover:text-emerald-700 hover:underline flex items-center gap-1.5 px-2 self-start cursor-pointer transition"
+            title="Descargar plantilla de Excel con columnas MODELO y NUMERO DE SERIE"
+          >
+            <span>📥</span>
+            <span>Descargar plantilla Excel (Modelo y Serie)</span>
+          </button>
+        </div>
 
         {/* Indicador de Disponibilidad de Checklist */}
         {hasAvailableChecklist ? (
@@ -1099,7 +1110,7 @@ export default function HomeView({
                   className="py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
                 >
                   <span>➕</span>
-                  <span>{isProcessingFile ? (processingProgress || 'Leyendo...') : 'Agregar otro PDF / Doc'}</span>
+                  <span>{isProcessingFile ? (processingProgress || 'Leyendo...') : 'Agregar otro PDF o Excel'}</span>
                 </button>
 
                 <button
