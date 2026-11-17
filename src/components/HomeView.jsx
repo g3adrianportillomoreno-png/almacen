@@ -5,6 +5,7 @@ import { ChecklistController } from '../controllers/ChecklistController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import WarehouseMapView from './WarehouseMapView.jsx';
 import WarehouseAssignmentView from './WarehouseAssignmentView.jsx';
+import CheckpointModal from './CheckpointModal.jsx';
 
 export default function HomeView({ 
   batches = [], 
@@ -49,6 +50,9 @@ export default function HomeView({
   // Modal de seguridad para borrar lote con contraseña
   const [deleteModalBatch, setDeleteModalBatch] = useState(null);
   const [deletePasswordInput, setDeletePasswordInput] = useState('');
+
+  // Modal de Checkpoints / Puntos de Restauración de Recepciones
+  const [showCheckpointsModal, setShowCheckpointsModal] = useState(false);
 
   // Buscador por modelo en la pantalla principal
   const [quickModelQuery, setQuickModelQuery] = useState('');
@@ -841,6 +845,16 @@ export default function HomeView({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCheckpointsModal(true)}
+                  className="text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 px-2.5 py-1 rounded-lg transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  title="Gestionar los 5 espacios de checkpoints / puntos de restauración de Recepciones"
+                >
+                  <span>💾</span>
+                  <span>Checkpoints (5 Espacios)</span>
+                </button>
+
                 {receptionBatches.length >= 2 && (
                   <button
                     type="button"
@@ -1680,6 +1694,17 @@ export default function HomeView({
           </form>
         </div>
       )}
+
+      {/* Modal de Checkpoints / Puntos de Restauración de Recepciones */}
+      <CheckpointModal
+        isOpen={showCheckpointsModal}
+        onClose={() => setShowCheckpointsModal(false)}
+        category="RECEPTIONS"
+        currentBatches={receptionBatches}
+        onRestored={() => {
+          if (onStatusChange) onStatusChange();
+        }}
+      />
 
     </div>
   );

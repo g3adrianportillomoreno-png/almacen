@@ -3,6 +3,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { extractSeriesFromExcel } from '../utils/excelParser.js';
 import SpaceCollisionModal from './SpaceCollisionModal.jsx';
+import CheckpointModal from './CheckpointModal.jsx';
 
 export default function MasterInventoryView({
   allPrinters = [],
@@ -46,6 +47,9 @@ export default function MasterInventoryView({
   const [showDeparturesModal, setShowDeparturesModal] = useState(false);
   const [departuresList, setDeparturesList] = useState([]);
   const [isLoadingDepartures, setIsLoadingDepartures] = useState(false);
+
+  // Modal de Checkpoints / Puntos de Restauración
+  const [showCheckpointsModal, setShowCheckpointsModal] = useState(false);
 
   // Paginación
   const [currentPage, setCurrentPage] = useState(1);
@@ -610,6 +614,16 @@ export default function MasterInventoryView({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               <span>Actualizar con Bajas por Diferencia</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowCheckpointsModal(true)}
+              className="bg-purple-700 hover:bg-purple-600 text-white text-xs font-bold py-2.5 px-4 rounded-xl transition shadow-sm flex items-center justify-center gap-2"
+              title="Gestionar los 5 espacios de checkpoints / puntos de restauración manuales del Inventario Maestro"
+            >
+              <span className="text-sm">💾</span>
+              <span>Checkpoints Maestro (5 Espacios)</span>
             </button>
 
             <div className="flex gap-2">
@@ -1732,6 +1746,17 @@ export default function MasterInventoryView({
           </div>
         </div>
       )}
+
+      {/* Modal de Checkpoints / Puntos de Restauración del Maestro */}
+      <CheckpointModal
+        isOpen={showCheckpointsModal}
+        onClose={() => setShowCheckpointsModal(false)}
+        category="MASTER"
+        currentPrinters={allPrinters}
+        onRestored={() => {
+          if (onInventoryChange) onInventoryChange();
+        }}
+      />
     </div>
   );
 }
