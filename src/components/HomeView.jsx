@@ -6,6 +6,7 @@ import { WarehouseMapController } from '../controllers/WarehouseMapController.js
 import WarehouseMapView from './WarehouseMapView.jsx';
 import WarehouseAssignmentView from './WarehouseAssignmentView.jsx';
 import CheckpointModal from './CheckpointModal.jsx';
+import BajasTableViewModal from './BajasTableViewModal.jsx';
 
 export default function HomeView({ 
   batches = [], 
@@ -53,6 +54,9 @@ export default function HomeView({
 
   // Modal de Checkpoints / Puntos de Restauración de Recepciones
   const [showCheckpointsModal, setShowCheckpointsModal] = useState(false);
+
+  // Modal para consultar tabla de bajas en pantalla de un lote sin descargar
+  const [selectedBatchForBajasView, setSelectedBatchForBajasView] = useState(null);
 
   // Buscador por modelo en la pantalla principal
   const [quickModelQuery, setQuickModelQuery] = useState('');
@@ -940,9 +944,18 @@ export default function HomeView({
                         <div className="flex items-center gap-3 shrink-0">
                           <div className="text-right">
                             {batchBajasCount > 0 && (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-black text-rose-800 bg-rose-100 border border-rose-300 px-2 py-0.5 rounded-md mr-1.5 shadow-2xs">
-                                📦 {batchBajasCount} {batchBajasCount === 1 ? 'baja' : 'bajas'}
-                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedBatchForBajasView(batch);
+                                }}
+                                className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-800 bg-rose-50 hover:bg-rose-100 border border-rose-300 hover:border-rose-400 px-2.5 py-1 rounded-md mr-1.5 shadow-2xs transition cursor-pointer"
+                                title="Ver tabla detallada de bajas de este lote directamente en pantalla sin descargar archivo"
+                              >
+                                <span>👁️</span>
+                                <span>Ver {batchBajasCount} {batchBajasCount === 1 ? 'baja' : 'bajas'}</span>
+                              </button>
                             )}
                             {isFullCompleted ? (
                               <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2.5 py-1 rounded-md shadow-2xs">
@@ -1704,6 +1717,16 @@ export default function HomeView({
         onRestored={() => {
           if (onStatusChange) onStatusChange();
         }}
+      />
+
+      {/* Modal para Consultar Tabla de Bajas en Pantalla (sin descargar Excel) */}
+      <BajasTableViewModal
+        isOpen={Boolean(selectedBatchForBajasView)}
+        onClose={() => setSelectedBatchForBajasView(null)}
+        title={`Tabla de Bajas — ${selectedBatchForBajasView?.folio || 'Lote'}`}
+        subtitle={selectedBatchForBajasView?.cleanName || selectedBatchForBajasView?.name || ''}
+        items={(selectedBatchForBajasView?.expectedSeries || []).filter(p => p.isBaja || p.status === 'BAJA')}
+        batchDetails={selectedBatchForBajasView}
       />
 
     </div>

@@ -3,6 +3,7 @@ import { InventoryController } from '../controllers/InventoryController.js';
 import { findSerialMatch, extractSerialFromScanned, cleanSerialCore } from '../utils/serialMatcher.js';
 import { soundEffects } from '../utils/soundEffects.js';
 import CameraScanner from './CameraScanner.jsx';
+import BajasTableViewModal from './BajasTableViewModal.jsx';
 
 export default function BajasSessionView({
   batches = [],
@@ -53,6 +54,9 @@ export default function BajasSessionView({
   const [departuresHistory, setDeparturesHistory] = useState([]);
   const [bajasSessionsHistory, setBajasSessionsHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Sesión cerrada seleccionada para ver su tabla de equipos en pantalla
+  const [selectedSessionForViewing, setSelectedSessionForViewing] = useState(null);
 
   const scanInputRef = useRef(null);
 
@@ -909,7 +913,8 @@ export default function BajasSessionView({
                   <thead className="bg-slate-100 text-slate-600 font-bold text-[11px] uppercase sticky top-0">
                     <tr>
                       <th className="py-2.5 px-3">#</th>
-                      <th className="py-2.5 px-3">Fecha y Hora</th>
+                      <th className="py-2.5 px-3">Hora de Detección</th>
+                      <th className="py-2.5 px-3">Fecha de Baja</th>
                       <th className="py-2.5 px-3">Número de Serie</th>
                       <th className="py-2.5 px-3">Modelo</th>
                       <th className="py-2.5 px-3"># Equipo</th>
@@ -919,30 +924,48 @@ export default function BajasSessionView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 font-medium">
-                    {filteredDepartures.map((d, idx) => (
-                      <tr key={d.serial || idx} className="hover:bg-slate-50 transition">
-                        <td className="py-2 px-3 text-slate-400 font-bold">{idx + 1}</td>
-                        <td className="py-2 px-3 text-slate-600 font-mono text-[11px]">
-                          {d.departure_date ? new Date(d.departure_date).toLocaleString('es-MX') : '-'}
-                        </td>
-                        <td className="py-2 px-3 font-mono font-bold text-rose-800">{d.serial}</td>
-                        <td className="py-2 px-3 text-slate-700">{d.material}</td>
-                        <td className="py-2 px-3">
-                          {d.internal_number ? (
-                            <span className="bg-slate-800 text-white font-bold text-[10px] px-1.5 py-0.2 rounded">
-                              #{d.internal_number}
+                    {filteredDepartures.map((d, idx) => {
+                      let formattedDate = '-';
+                      let formattedTime = '-';
+                      if (d.departure_date) {
+                        const dt = new Date(d.departure_date);
+                        if (!isNaN(dt.getTime())) {
+                          formattedDate = dt.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                          formattedTime = dt.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+                        }
+                      }
+
+                      return (
+                        <tr key={d.serial || idx} className="hover:bg-slate-50 transition">
+                          <td className="py-2 px-3 text-slate-400 font-bold">{idx + 1}</td>
+                          <td className="py-2 px-3 font-mono font-bold text-rose-900">
+                            <span className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded text-[11px]">
+                              <span>🕒</span>
+                              <span>{formattedTime}</span>
                             </span>
-                          ) : '-'}
-                        </td>
-                        <td className="py-2 px-3 text-slate-600">{d.batchFolio || d.batchName || 'General'}</td>
-                        <td className="py-2 px-3 text-slate-600">
-                          {d.warehouse_row && d.warehouse_row !== 'Sin Asignar'
-                            ? `${d.warehouse_row} ${d.warehouse_space ? `[${d.warehouse_space}]` : ''}`
-                            : 'Sin Asignar'}
-                        </td>
-                        <td className="py-2 px-3 text-slate-600 italic">{d.reason || 'Baja de almacén'}</td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="py-2 px-3 text-slate-600 font-mono text-[11px]">
+                            {formattedDate}
+                          </td>
+                          <td className="py-2 px-3 font-mono font-bold text-rose-800 select-all">{d.serial}</td>
+                          <td className="py-2 px-3 text-slate-700">{d.material}</td>
+                          <td className="py-2 px-3">
+                            {d.internal_number ? (
+                              <span className="bg-slate-800 text-white font-bold text-[10px] px-1.5 py-0.2 rounded">
+                                #{d.internal_number}
+                              </span>
+                            ) : '-'}
+                          </td>
+                          <td className="py-2 px-3 text-slate-600">{d.batchFolio || d.batchName || 'General'}</td>
+                          <td className="py-2 px-3 text-slate-600">
+                            {d.warehouse_row && d.warehouse_row !== 'Sin Asignar'
+                              ? `${d.warehouse_row} ${d.warehouse_space ? `[${d.warehouse_space}]` : ''}`
+                              : 'Sin Asignar'}
+                          </td>
+                          <td className="py-2 px-3 text-slate-600 italic">{d.reason || 'Baja de almacén'}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -979,14 +1002,26 @@ export default function BajasSessionView({
                       </p>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => InventoryController.exportBajasSessionExcel(sess)}
-                      className="mt-1 w-full bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 font-bold text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
-                    >
-                      <span>📥</span>
-                      <span>Descargar Excel de esta Sesión</span>
-                    </button>
+                    <div className="flex flex-col gap-1.5 mt-2">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedSessionForViewing(sess)}
+                        className="w-full bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-300 font-bold text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                        title="Consultar la tabla de equipos de esta sesión directamente en pantalla sin descargar Excel"
+                      >
+                        <span>👁️</span>
+                        <span>Ver Tabla en Pantalla ({sess.itemsCount})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => InventoryController.exportBajasSessionExcel(sess)}
+                        className="w-full bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 font-semibold text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                      >
+                        <span>📥</span>
+                        <span>Descargar Excel</span>
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1067,6 +1102,16 @@ export default function BajasSessionView({
           </div>
         </div>
       )}
+
+      {/* Modal para Consultar Tabla de Bajas de una Sesión Cerrada en Pantalla */}
+      <BajasTableViewModal
+        isOpen={Boolean(selectedSessionForViewing)}
+        onClose={() => setSelectedSessionForViewing(null)}
+        title={`Detalle de Sesión — ${selectedSessionForViewing?.folio || ''}`}
+        subtitle={`${selectedSessionForViewing?.targetLoteName || ''} • Motivo: ${selectedSessionForViewing?.reason || ''}`}
+        items={selectedSessionForViewing?.items || []}
+        onExportExcel={() => InventoryController.exportBajasSessionExcel(selectedSessionForViewing)}
+      />
 
     </div>
   );

@@ -1,6 +1,6 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { soundEffects } from '../utils/soundEffects.js';
+import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 
 export default function ChecklistBajasModal({
@@ -19,6 +19,7 @@ export default function ChecklistBajasModal({
     return now.toISOString().slice(0, 16);
   });
   const [bajaReason, setBajaReason] = useState('Salida de almacén');
+  const [bajasSearchQuery, setBajasSearchQuery] = useState('');
   const [searchCatalogQuery, setSearchCatalogQuery] = useState('');
   const [notification, setNotification] = useState(null); // { type: 'success' | 'error' | 'warning', text: string }
 
@@ -40,6 +41,20 @@ export default function ChecklistBajasModal({
     return expected.filter(p => p.isBaja || p.status === 'BAJA');
   }, [expected]);
 
+  // Lista filtrada de bajas para la tablita estilo Excel
+  const filteredBajas = useMemo(() => {
+    const q = bajasSearchQuery.trim().toLowerCase();
+    if (!q) return bajasList;
+    return bajasList.filter(p => 
+      (p.serial || '').toLowerCase().includes(q) ||
+      (p.material || '').toLowerCase().includes(q) ||
+      String(p.internalNumber || '').includes(q) ||
+      (p.bajaReason || '').toLowerCase().includes(q) ||
+      (p.warehouseRow || '').toLowerCase().includes(q) ||
+      (p.warehouseSpace || '').toLowerCase().includes(q)
+    );
+  }, [bajasList, bajasSearchQuery]);
+
   // Lista filtrada del catálogo de este checklist
   const filteredCatalog = useMemo(() => {
     const q = searchCatalogQuery.trim().toLowerCase();
@@ -58,7 +73,7 @@ export default function ChecklistBajasModal({
     }, 4000);
   };
 
-  // Procesar escaneo o confirmación de baja
+  // Procesar escaneo o confirmación de baja con hora exacta al segundo
   const handleProcessBaja = async (scannedCode) => {
     if (!scannedCode || !scannedCode.trim()) return;
     const code = scannedCode.trim().toUpperCase();
@@ -79,8 +94,8 @@ export default function ChecklistBajasModal({
       return;
     }
 
-    // Registrar baja
-    const dateToUse = bajaDateInput ? new Date(bajaDateInput).toISOString() : new Date().toISOString();
+    // Registrar baja con la hora exacta al segundo en que se detectó
+    const dateToUse = new Date().toISOString();
     soundEffects.playScanSuccess();
     
     if (onMarkBaja) {
@@ -108,13 +123,13 @@ export default function ChecklistBajasModal({
   if (!isOpen || !batchDetails) return null;
 
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 animate-fade-in">
-      <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden text-slate-800">
+    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-xs z-50 flex items-center justify-center p-2 sm:p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl sm:rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden text-slate-800">
         
         {/* CABECERA DEL MODAL */}
-        <div className="bg-gradient-to-r from-rose-900 via-rose-800 to-slate-900 text-white p-5 sm:p-6 flex items-start justify-between gap-4">
+        <div className="bg-gradient-to-r from-rose-900 via-rose-800 to-slate-900 text-white p-4 sm:p-5 flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center text-xl shrink-0 shadow-inner">
+            <div className="w-10 h-10 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center text-xl shrink-0 shadow-inner">
               📦
             </div>
             <div>
@@ -126,16 +141,13 @@ export default function ChecklistBajasModal({
                   {batchDetails.folio}
                 </span>
               </div>
-              <h2 className="text-lg sm:text-xl font-black text-white mt-0.5 tracking-tight">
+              <h2 className="text-base sm:text-lg font-black text-white mt-0.5 tracking-tight">
                 Gestión de Bajas del Checklist
               </h2>
-              <p className="text-xs text-rose-200/80 mt-0.5 truncate max-w-md">
-                {batchDetails.cleanName || batchDetails.name}
-              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2">
             {onOpenModoBajas && (
               <button
                 type="button"
@@ -143,95 +155,82 @@ export default function ChecklistBajasModal({
                   onClose();
                   onOpenModoBajas();
                 }}
-                className="text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 border border-rose-400 px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
-                title="Abrir en Modo Bajas a pantalla completa para escanear y cerrar sesión"
+                className="hidden sm:flex text-xs font-bold bg-white/10 hover:bg-white/20 border border-white/20 text-white px-3 py-1.5 rounded-xl transition items-center gap-1.5 cursor-pointer"
+                title="Abrir sesión en Modo Bajas a pantalla completa"
               >
                 <span>🔴</span>
-                <span className="hidden sm:inline">Modo Bajas Completo</span>
+                <span>Ir a Modo Bajas</span>
               </button>
             )}
-
             <button
-              type="button"
               onClick={onClose}
-              className="text-white/70 hover:text-white bg-white/10 hover:bg-white/20 rounded-xl p-2 transition text-sm cursor-pointer shrink-0"
-              title="Cerrar modal"
+              className="text-white/70 hover:text-white hover:bg-white/10 rounded-lg p-1.5 transition text-lg leading-none cursor-pointer"
+              title="Cerrar"
             >
               ✕
             </button>
           </div>
         </div>
 
-        {/* NOTIFICACIÓN / ALERTA TEMPORAL */}
+        {/* NOTIFICACIÓN FLOTANTE TEMPORAL */}
         {notification && (
-          <div className={`px-4 py-2.5 text-xs font-bold flex items-center justify-between transition animate-fade-in ${
-            notification.type === 'success' ? 'bg-emerald-600 text-white' :
-            notification.type === 'error' ? 'bg-rose-600 text-white' :
-            'bg-amber-500 text-slate-950 font-black'
+          <div className={`py-2 px-4 text-xs font-bold text-center flex items-center justify-center gap-2 animate-fade-in ${
+            notification.type === 'success' 
+              ? 'bg-emerald-600 text-white' 
+              : notification.type === 'warning' 
+                ? 'bg-amber-500 text-slate-900' 
+                : 'bg-rose-600 text-white'
           }`}>
             <span>{notification.text}</span>
-            <button type="button" onClick={() => setNotification(null)} className="text-xs opacity-75 hover:opacity-100">✕</button>
           </div>
         )}
 
-        {/* ÁREA DE DISPARO RÁPIDO PARA DAR DE BAJA */}
-        <div className="p-4 sm:p-5 bg-rose-50/50 border-b border-rose-100">
-          <form
+        {/* ZONA DE ESCANEO RÁPIDO */}
+        <div className="p-4 bg-rose-50/70 border-b border-rose-100 flex flex-col gap-2.5">
+          <form 
             onSubmit={(e) => {
               e.preventDefault();
               handleProcessBaja(scanInput);
             }}
-            className="flex flex-col gap-3"
+            className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5"
           >
-            <div className="flex flex-col sm:flex-row gap-2">
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  ref={scanInputRef}
-                  value={scanInput}
-                  onChange={(e) => setScanInput(e.target.value)}
-                  placeholder="ESCANEAR O ESCRIBIR SERIE PARA DAR DE BAJA..."
-                  className="w-full bg-white border-2 border-rose-300 focus:border-rose-600 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold uppercase text-slate-900 outline-none placeholder-slate-400 shadow-2xs"
-                />
-              </div>
+            <div className="relative flex-1">
+              <span className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-rose-400 font-bold">
+                🔫
+              </span>
+              <input
+                ref={scanInputRef}
+                type="text"
+                autoComplete="off"
+                placeholder="Escanea el código de barras o escribe el número de serie..."
+                value={scanInput}
+                onChange={(e) => setScanInput(e.target.value)}
+                className="w-full bg-white border-2 border-rose-300 focus:border-rose-600 focus:ring-2 focus:ring-rose-200 rounded-xl pl-10 pr-3 py-2 text-xs font-mono font-bold text-slate-900 uppercase outline-none shadow-xs transition"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Motivo (ej. Venta, Taller, Garantía)..."
+                value={bajaReason}
+                onChange={(e) => setBajaReason(e.target.value)}
+                className="bg-white border border-rose-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 outline-none w-44 shrink-0"
+              />
 
               <button
                 type="submit"
-                className="bg-rose-700 hover:bg-rose-800 text-white font-bold px-5 py-2.5 rounded-xl text-xs transition shadow-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0 active:scale-95"
+                className="bg-rose-700 hover:bg-rose-800 active:scale-95 text-white font-black text-xs px-4 py-2 rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer shrink-0"
               >
                 <span>📦</span>
                 <span>Dar de Baja</span>
               </button>
             </div>
-
-            {/* Ajustes de Fecha y Motivo */}
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <div className="flex items-center gap-1.5 bg-white border border-rose-200 px-2.5 py-1.5 rounded-lg text-slate-700">
-                <span className="text-[11px] font-bold text-slate-500 uppercase">Fecha Salida:</span>
-                <input
-                  type="datetime-local"
-                  value={bajaDateInput}
-                  onChange={(e) => setBajaDateInput(e.target.value)}
-                  className="text-xs font-semibold text-slate-800 bg-transparent outline-none"
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-white border border-rose-200 px-2.5 py-1.5 rounded-lg text-slate-700 flex-1 min-w-[200px]">
-                <span className="text-[11px] font-bold text-slate-500 uppercase shrink-0">Motivo:</span>
-                <input
-                  type="text"
-                  value={bajaReason}
-                  onChange={(e) => setBajaReason(e.target.value)}
-                  placeholder="Ej. Salida de almacén, garantía..."
-                  className="text-xs text-slate-800 bg-transparent outline-none w-full"
-                />
-              </div>
-            </div>
           </form>
         </div>
 
         {/* PESTAÑAS DE NAVEGACIÓN DENTRO DEL MODAL */}
-        <div className="flex items-center justify-between px-5 pt-3 border-b border-slate-200 bg-slate-50/60">
+        <div className="flex items-center justify-between px-4 sm:px-5 pt-3 border-b border-slate-200 bg-slate-50/70">
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -242,7 +241,7 @@ export default function ChecklistBajasModal({
                   : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
             >
-              <span>Equipos Dados de Baja</span>
+              <span>📊 Tabla de Bajas en Pantalla</span>
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-black ${
                 activeTab === 'bajas' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-600'
               }`}>
@@ -259,7 +258,7 @@ export default function ChecklistBajasModal({
                   : 'border-transparent text-slate-500 hover:text-slate-700'
               }`}
             >
-              <span>Seleccionar de la Lista</span>
+              <span>📋 Catálogo del Lote</span>
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-black ${
                 activeTab === 'catalogo' ? 'bg-rose-100 text-rose-800' : 'bg-slate-200 text-slate-600'
               }`}>
@@ -269,12 +268,12 @@ export default function ChecklistBajasModal({
           </div>
 
           <div className="text-[11px] font-semibold text-slate-500 hidden sm:block">
-            {bajasList.length} de {expected.length} dados de baja
+            {bajasList.length} de {expected.length} dados de baja ({Math.round((bajasList.length / (expected.length || 1)) * 100)}%)
           </div>
         </div>
 
         {/* CUERPO DEL CONTENIDO SEGÚN LA PESTAÑA */}
-        <div className="p-4 sm:p-5 overflow-y-auto flex-1">
+        <div className="p-3 sm:p-4 overflow-y-auto flex-1 bg-white">
           {activeTab === 'bajas' ? (
             bajasList.length === 0 ? (
               <div className="text-center py-12 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
@@ -283,62 +282,114 @@ export default function ChecklistBajasModal({
                 </div>
                 <p className="text-sm font-bold text-slate-700">No hay equipos dados de baja en este checklist</p>
                 <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                  Escanea la pistola lectora o escribe el número de serie arriba para marcar la salida del equipo con su fecha.
+                  Escanea la pistola lectora o escribe el número de serie arriba para marcar la salida del equipo.
                 </p>
               </div>
             ) : (
-              <div className="flex flex-col gap-2.5">
-                {bajasList.map((item, idx) => (
-                  <div
-                    key={item.serial || idx}
-                    className="p-3 bg-white rounded-xl border border-rose-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 hover:border-rose-300 transition shadow-2xs"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono font-black text-rose-800 text-sm">
-                          {item.serial}
-                        </span>
-                        {item.internalNumber && (
-                          <span className="bg-slate-800 text-white font-bold text-[10px] px-1.5 py-0.2 rounded">
-                            #{item.internalNumber}
-                          </span>
-                        )}
-                        <span className="bg-rose-100 text-rose-800 border border-rose-300 text-[10px] font-bold px-2 py-0.5 rounded-full">
-                          DADA DE BAJA
-                        </span>
-                        {item.documentName && (
-                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-medium truncate max-w-[150px]">
-                            📄 {item.documentName}
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1">
-                        <span>Modelo: <strong className="text-slate-700">{item.material}</strong></span>
-                        {item.bajaAt && (
-                          <span className="text-rose-700 font-medium">
-                            Fecha Salida: <strong>{new Date(item.bajaAt).toLocaleString('es-MX')}</strong>
-                          </span>
-                        )}
-                        {item.bajaReason && (
-                          <span className="text-slate-500 italic">
-                            ({item.bajaReason})
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleRevertBaja(item.serial)}
-                      className="text-xs text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-3 py-1.5 rounded-lg font-bold transition flex items-center gap-1 cursor-pointer shrink-0"
-                      title="Cancelar baja y regresar la serie a disponible"
-                    >
-                      <span>↩</span>
-                      <span>Cancelar Baja</span>
-                    </button>
+              <div className="flex flex-col gap-3">
+                {/* Buscador dentro de las bajas */}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="relative flex-1 max-w-md">
+                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 text-xs">
+                      🔍
+                    </span>
+                    <input
+                      type="text"
+                      value={bajasSearchQuery}
+                      onChange={(e) => setBajasSearchQuery(e.target.value)}
+                      placeholder="Filtrar por serie, modelo, Santi..."
+                      className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-300 focus:border-rose-500 rounded-xl text-xs font-medium text-slate-800 outline-none"
+                    />
                   </div>
-                ))}
+                  <span className="text-xs text-slate-500">
+                    Mostrando <strong>{filteredBajas.length}</strong> de {bajasList.length}
+                  </span>
+                </div>
+
+                {/* TABLITA ESTILO EXCEL */}
+                <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-2xs">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead className="bg-slate-100 text-slate-700 font-bold text-[11px] uppercase tracking-wider sticky top-0 border-b border-slate-200">
+                      <tr>
+                        <th className="py-2 px-2.5 w-10 text-center">#</th>
+                        <th className="py-2 px-2.5 min-w-[130px]">Hora Exacta</th>
+                        <th className="py-2 px-2.5 min-w-[100px]">Fecha</th>
+                        <th className="py-2 px-2.5 min-w-[140px]">Número de Serie</th>
+                        <th className="py-2 px-2.5 min-w-[160px]">Modelo</th>
+                        <th className="py-2 px-2.5 min-w-[80px]"># Santi</th>
+                        <th className="py-2 px-2.5 min-w-[140px]">Ubicación</th>
+                        <th className="py-2 px-2.5 min-w-[140px]">Motivo</th>
+                        <th className="py-2 px-2.5 w-24 text-center">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-medium">
+                      {filteredBajas.map((item, idx) => {
+                        const rawTime = item.scannedAt || item.bajaAt || item.assignedAt;
+                        let formattedDate = '-';
+                        let formattedTime = '-';
+                        if (rawTime) {
+                          const d = new Date(rawTime);
+                          if (!isNaN(d.getTime())) {
+                            formattedDate = d.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' });
+                            formattedTime = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+                          }
+                        }
+
+                        const whRow = item.warehouseRow && item.warehouseRow !== 'Sin Asignar' 
+                          ? `${item.warehouseRow} ${item.warehouseSpace ? `[${item.warehouseSpace}]` : ''}`
+                          : 'Sin Asignar';
+
+                        return (
+                          <tr key={item.serial || idx} className="hover:bg-rose-50/40 transition">
+                            <td className="py-2 px-2.5 text-center text-slate-400 font-mono text-[11px]">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2 px-2.5 font-mono font-bold text-rose-900">
+                              <span className="inline-flex items-center gap-1 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded text-[11px]">
+                                <span>🕒</span>
+                                <span>{formattedTime}</span>
+                              </span>
+                            </td>
+                            <td className="py-2 px-2.5 text-slate-600 font-mono text-[11px]">
+                              {formattedDate}
+                            </td>
+                            <td className="py-2 px-2.5 font-mono font-bold text-slate-900 select-all">
+                              {item.serial}
+                            </td>
+                            <td className="py-2 px-2.5 text-slate-700 font-semibold truncate max-w-[200px]" title={item.material}>
+                              {item.material}
+                            </td>
+                            <td className="py-2 px-2.5">
+                              {item.internalNumber ? (
+                                <span className="bg-slate-800 text-white font-bold text-[10px] px-1.5 py-0.5 rounded">
+                                  #{item.internalNumber}
+                                </span>
+                              ) : (
+                                <span className="text-slate-300">-</span>
+                              )}
+                            </td>
+                            <td className="py-2 px-2.5 text-slate-600 text-[11px]">
+                              {whRow}
+                            </td>
+                            <td className="py-2 px-2.5 text-slate-600 italic text-[11px] truncate max-w-[160px]" title={item.bajaReason || 'Salida'}>
+                              {item.bajaReason || 'Salida'}
+                            </td>
+                            <td className="py-2 px-2.5 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleRevertBaja(item.serial)}
+                                className="text-[10px] text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 border border-slate-300 px-2 py-1 rounded-md font-bold transition cursor-pointer"
+                                title="Cancelar baja y regresar la serie a disponible"
+                              >
+                                ↩ Cancelar
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )
           ) : (
@@ -395,7 +446,7 @@ export default function ChecklistBajasModal({
                           <button
                             type="button"
                             onClick={() => handleRevertBaja(item.serial)}
-                            className="text-xs text-slate-600 hover:text-slate-900 bg-white border border-slate-300 px-2.5 py-1 rounded-lg font-semibold transition"
+                            className="text-xs text-slate-600 hover:text-slate-900 bg-white border border-slate-300 px-2.5 py-1 rounded-lg font-semibold transition cursor-pointer"
                           >
                             ↩ Cancelar
                           </button>
@@ -419,12 +470,12 @@ export default function ChecklistBajasModal({
         </div>
 
         {/* PIE DEL MODAL CON ACCIONES */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="p-3.5 sm:p-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => InventoryController.exportChecklistReportToExcel(batchDetails)}
-              className="w-full sm:w-auto text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-4 py-2 rounded-xl transition flex items-center justify-center gap-1.5 shadow-2xs"
+              className="w-full sm:w-auto text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 px-4 py-2 rounded-xl transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
               title="Descargar Excel actualizado con la hoja de Bajas y sus fechas"
             >
               <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -447,4 +498,3 @@ export default function ChecklistBajasModal({
     </div>
   );
 }
-

@@ -469,13 +469,15 @@ export class InventoryRepository {
       return cache.serials[serial];
     }
 
-    // 3. Actualizar en Supabase
+    // 3. Actualizar en Supabase con hora exacta de detección
     try {
       const { error } = await supabase
         .from('expected_series')
         .update({
           printer_status: 'BAJA',
-          is_scanned: true
+          is_scanned: true,
+          scanned_at: nowIso,
+          assigned_at: nowIso
         })
         .eq('checklist_id', checklistId)
         .eq('serial_number', serial);
@@ -496,6 +498,23 @@ export class InventoryRepository {
         bajaDate: nowIso,
         reason
       });
+    }
+
+    // 4. Registrar permanentemente en la tabla de salidas (inventory_departures)
+    try {
+      await this.logDepartures([{
+        serial,
+        material: existing.material || 'Sin Modelo',
+        internalNumber: existing.internalNumber ?? null,
+        warehouseName: existing.warehouseName || 'Almacén 1',
+        warehouseRow: existing.warehouseRow || 'Sin Asignar',
+        warehouseSpace: existing.warehouseSpace || '',
+        systemStatus: existing.systemStatus || 'Principal',
+        reason: reason || 'Baja de checklist',
+        departure_date: nowIso
+      }], reason || 'Baja de checklist');
+    } catch (e) {
+      console.warn('Nota registrando baja en inventory_departures:', e);
     }
 
     return cache.serials[serial];
@@ -624,7 +643,9 @@ export class InventoryRepository {
           .from('expected_series')
           .update({
             printer_status: 'BAJA',
-            is_scanned: true
+            is_scanned: true,
+            scanned_at: nowIso,
+            assigned_at: nowIso
           })
           .in('serial_number', chunk);
       } catch (e) {

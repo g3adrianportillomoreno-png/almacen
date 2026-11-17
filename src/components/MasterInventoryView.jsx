@@ -1704,7 +1704,7 @@ export default function MasterInventoryView({
                     {departuresList.map((dep, idx) => (
                       <tr key={idx} className="hover:bg-slate-50">
                         <td className="py-2 px-3 font-medium text-slate-600 whitespace-nowrap">
-                          {dep.departure_date ? new Date(dep.departure_date).toLocaleDateString('es-MX', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'}
+                          {dep.departure_date ? new Date(dep.departure_date).toLocaleDateString('es-MX', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'N/A'}
                         </td>
                         <td className="py-2 px-3 font-mono font-bold text-slate-900">
                           {dep.serial}

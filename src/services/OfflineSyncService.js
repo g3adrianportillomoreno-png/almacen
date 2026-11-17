@@ -411,12 +411,15 @@ class OfflineSyncServiceImpl {
       }
 
       case 'MARK_CHECKLIST_BAJA': {
-        const { checklistId, serialNumber } = payload;
+        const { checklistId, serialNumber, bajaDate } = payload;
+        const scanTime = bajaDate || new Date().toISOString();
         const { error } = await supabase
           .from('expected_series')
           .update({
             printer_status: 'BAJA',
-            is_scanned: true
+            is_scanned: true,
+            scanned_at: scanTime,
+            assigned_at: scanTime
           })
           .eq('checklist_id', checklistId)
           .eq('serial_number', serialNumber);

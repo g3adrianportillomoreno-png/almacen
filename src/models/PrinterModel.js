@@ -206,17 +206,18 @@ export class PrinterModel {
     const warehouseSpace = dbItem.warehouse_space || meta.warehouseSpace || '';
     const assignedAt = dbItem.assigned_at || meta.assignedAt || null;
     const docName = dbItem.document_name || meta.documentName || dbItem.documentName || '';
-    const bajaAt = dbItem.departure_date || dbItem.baja_at || meta.bajaAt || null;
-    const bajaReason = dbItem.departure_reason || dbItem.baja_reason || meta.bajaReason || '';
-    const internalNum = dbItem.internal_number !== undefined && dbItem.internal_number !== null
-      ? dbItem.internal_number
-      : (meta.internalNumber ?? null);
-
     const decoded = PrinterModel.decodePrinterStatusAndSystemState(
       dbItem.printer_status,
       dbItem.system_status,
       meta
     );
+
+    const isBajaState = decoded.status === 'BAJA' || meta.status === 'BAJA' || String(dbItem.printer_status || '').toUpperCase().startsWith('BAJA');
+    const bajaAt = dbItem.departure_date || dbItem.baja_at || meta.bajaAt || (isBajaState ? (dbItem.scanned_at || dbItem.assigned_at) : null) || null;
+    const bajaReason = dbItem.departure_reason || dbItem.baja_reason || meta.bajaReason || '';
+    const internalNum = dbItem.internal_number !== undefined && dbItem.internal_number !== null
+      ? dbItem.internal_number
+      : (meta.internalNumber ?? null);
 
     return new PrinterModel({
       id: dbItem.id,
