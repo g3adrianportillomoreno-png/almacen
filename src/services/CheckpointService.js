@@ -101,6 +101,7 @@ function saveLocalMeta(meta) {
 /**
  * Servicio Centralizado de Checkpoints (Puntos de Restauración Manuales)
  * Maneja exactamente 5 espacios independientes para Inventario Maestro y para Recepciones.
+ * Sincronizado en la nube (Supabase) y localmente (IndexedDB).
  */
 export class CheckpointService {
   /**
@@ -117,15 +118,43 @@ export class CheckpointService {
     const safeCategory = category.toUpperCase();
     const meta = getLocalMeta();
 
-    // Intentar sincronizar metadatos desde Supabase si la tabla existe
+    // 1. Sincronizar metadatos desde Supabase (warehouse_map_config)
     try {
-      const { data: cloudData, error } = await supabase
+      const prefix = `checkpoint_${safeCategory}_`;
+      const { data: cloudRows, error } = await supabase
+        .from('warehouse_map_config')
+        .select('id, layout, updated_at')
+        .like('id', `${prefix}%`);
+
+      if (!error && Array.isArray(cloudRows)) {
+        for (const row of cloudRows) {
+          const slotId = row.id.replace('checkpoint_', '');
+          const info = row.layout || {};
+          meta[slotId] = {
+            id: slotId,
+            category: safeCategory,
+            slotIndex: info.slotIndex,
+            name: info.name,
+            itemCount: info.itemCount,
+            createdAt: info.createdAt || row.updated_at,
+            updatedAt: row.updated_at
+          };
+        }
+        saveLocalMeta(meta);
+      }
+    } catch {
+      // Usar datos locales si la red falla
+    }
+
+    // 2. Intentar también system_checkpoints si existe
+    try {
+      const { data: dedicatedData, error: dedErr } = await supabase
         .from('system_checkpoints')
         .select('id, category, slot_index, name, item_count, created_at, updated_at')
         .eq('category', safeCategory);
 
-      if (!error && Array.isArray(cloudData)) {
-        for (const row of cloudData) {
+      if (!dedErr && Array.isArray(dedicatedData)) {
+        for (const row of dedicatedData) {
           meta[row.id] = {
             id: row.id,
             category: row.category,
@@ -139,7 +168,7 @@ export class CheckpointService {
         saveLocalMeta(meta);
       }
     } catch {
-      // Supabase offline o tabla no creada aún; usar datos locales
+      // Ignorar si aún no existe
     }
 
     const slots = [];
@@ -185,6 +214,7 @@ export class CheckpointService {
     }
 
     const slotId = `${safeCategory}_${slotIndex}`;
+    const cloudKey = `checkpoint_${slotId}`;
     const nowIso = new Date().toISOString();
     const finalName = (name || '').trim() || `Punto #${slotIndex} (${new Date().toLocaleDateString('es-MX')})`;
 
@@ -215,7 +245,27 @@ export class CheckpointService {
     };
     saveLocalMeta(meta);
 
-    // 3. Intentar sincronizar en Supabase si la tabla existe
+    // 3. Sincronizar en Supabase (warehouse_map_config) - Activo de inmediato en la nube
+    try {
+      await supabase
+        .from('warehouse_map_config')
+        .upsert({
+          id: cloudKey,
+          layout: {
+            slotIndex,
+            category: safeCategory,
+            name: finalName,
+            itemCount: itemCount || 0,
+            data: snapshotData,
+            createdAt: nowIso
+          },
+          updated_at: nowIso
+        });
+    } catch (e) {
+      console.warn('Error sincronizando checkpoint en warehouse_map_config:', e);
+    }
+
+    // 4. Intentar guardar en system_checkpoints si la tabla dedicada existe
     try {
       await supabase
         .from('system_checkpoints')
@@ -229,8 +279,8 @@ export class CheckpointService {
           created_at: nowIso,
           updated_at: nowIso
         });
-    } catch (e) {
-      console.warn('Nota: Sincronización en la nube de checkpoint no disponible o pendiente de migración SQL:', e);
+    } catch {
+      // Ignorar
     }
 
     return meta[slotId];
@@ -242,6 +292,7 @@ export class CheckpointService {
   static async deleteCheckpoint(category, slotIndex) {
     const safeCategory = category.toUpperCase();
     const slotId = `${safeCategory}_${slotIndex}`;
+    const cloudKey = `checkpoint_${slotId}`;
 
     // 1. Eliminar de IndexedDB
     await idbDelete(slotId);
@@ -251,7 +302,17 @@ export class CheckpointService {
     delete meta[slotId];
     saveLocalMeta(meta);
 
-    // 3. Eliminar de Supabase si existe
+    // 3. Eliminar de Supabase (warehouse_map_config)
+    try {
+      await supabase
+        .from('warehouse_map_config')
+        .delete()
+        .eq('id', cloudKey);
+    } catch (e) {
+      console.warn('Error eliminando de warehouse_map_config:', e);
+    }
+
+    // 4. Eliminar de system_checkpoints si existe
     try {
       await supabase
         .from('system_checkpoints')
@@ -269,6 +330,7 @@ export class CheckpointService {
   static async getCheckpointData(category, slotIndex) {
     const safeCategory = category.toUpperCase();
     const slotId = `${safeCategory}_${slotIndex}`;
+    const cloudKey = `checkpoint_${slotId}`;
 
     // 1. Intentar leer de IndexedDB local
     let record = await idbGet(slotId);
@@ -276,7 +338,35 @@ export class CheckpointService {
       return record;
     }
 
-    // 2. Si no está en IndexedDB local (ej. se creó en otra PC), intentar descargar de Supabase
+    // 2. Si no está en IndexedDB local (ej. se creó en otra PC), descargar de Supabase (warehouse_map_config)
+    try {
+      const { data: cloudRow, error: cloudErr } = await supabase
+        .from('warehouse_map_config')
+        .select('id, layout, updated_at')
+        .eq('id', cloudKey)
+        .maybeSingle();
+
+      if (!cloudErr && cloudRow && cloudRow.layout && cloudRow.layout.data) {
+        const payload = cloudRow.layout;
+        const restoredRecord = {
+          id: slotId,
+          category: safeCategory,
+          slot_index: slotIndex,
+          name: payload.name,
+          item_count: payload.itemCount,
+          data: payload.data,
+          created_at: payload.createdAt || cloudRow.updated_at,
+          updated_at: cloudRow.updated_at
+        };
+        // Cachear en IndexedDB local
+        await idbPut(restoredRecord);
+        return restoredRecord;
+      }
+    } catch (e) {
+      console.warn('Error descargando checkpoint desde warehouse_map_config:', e);
+    }
+
+    // 3. Fallback a system_checkpoints si existe
     try {
       const { data, error } = await supabase
         .from('system_checkpoints')
@@ -285,12 +375,11 @@ export class CheckpointService {
         .maybeSingle();
 
       if (!error && data && data.data) {
-        // Cachear en IndexedDB local para lecturas futuras
         await idbPut(data);
         return data;
       }
     } catch (e) {
-      console.warn('Error leyendo checkpoint desde Supabase:', e);
+      console.warn('Error leyendo checkpoint desde system_checkpoints:', e);
     }
 
     return null;
