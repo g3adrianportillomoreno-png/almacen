@@ -16055,7 +16055,10 @@
     "espacio": "01-02",
     "almacen": "Principal",
     "stock_min": 30,
-    "stock_max": 60
+    "stock_max": 60,
+    "barcodes": [
+      "6920952323115"
+    ]
   },
   {
     "id": 1148,

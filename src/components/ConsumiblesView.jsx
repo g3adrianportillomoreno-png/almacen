@@ -111,6 +111,7 @@ export default function ConsumiblesView() {
       const sec = String(it.seccion || '').toLowerCase();
       const anaq = String(it.anaquel || '').toLowerCase();
       const esp = String(it.espacio || '').toLowerCase();
+      const barcodes = Array.isArray(it.barcodes) ? it.barcodes.join(' ').toLowerCase() : '';
 
       return (
         clave.includes(q) ||
@@ -118,7 +119,8 @@ export default function ConsumiblesView() {
         cat.includes(q) ||
         sec.includes(q) ||
         anaq.includes(q) ||
-        esp.includes(q)
+        esp.includes(q) ||
+        barcodes.includes(q)
       );
     });
   }, [catalog, searchQuery, selectedCategory, selectedSeccion, selectedStockStatus]);
@@ -128,15 +130,34 @@ export default function ConsumiblesView() {
     e.preventDefault();
     if (!scanInput.trim()) return;
 
-    const { match, candidates } = ConsumiblesController.findMatch(scanInput, catalog);
+    const { match, candidates, matchedByBarcode } = ConsumiblesController.findMatch(scanInput, catalog);
     if (match) {
       soundEffects.playScanSuccess();
       setHighlightedItem(match);
-      showToast('success', `✓ Encontrado: ${match.clave} - Ubicación: ${match.seccion || 'N/A'} [${match.anaquel || 'N/A'}]`);
+      const barcodeNote = matchedByBarcode ? ` (por código de barras ${scanInput.trim()})` : '';
+      showToast('success', `✓ Encontrado: ${match.clave}${barcodeNote} - Ubicación: ${match.seccion || 'N/A'} [${match.anaquel || 'N/A'}]`);
       setScanInput('');
     } else {
       soundEffects.playScanError();
-      showToast('error', `❌ No se encontró ningún consumible que coincida con "${scanInput}".`);
+      const codeToLink = scanInput.trim();
+      const confirmLink = window.confirm(
+        `El código "${codeToLink}" no está registrado todavía.\n\n¿Deseas vincularlo ahora a un consumible existente (ej. IK03847)?`
+      );
+      if (confirmLink) {
+        const targetClave = window.prompt(`Introduce la clave del consumible a vincular con "${codeToLink}" (ej. IK03847):`);
+        if (targetClave && targetClave.trim()) {
+          ConsumiblesController.linkBarcode(codeToLink, targetClave.trim()).then(updated => {
+            if (updated) {
+              setCatalog(prev => prev.map(c => c.id === updated.id ? updated : c));
+              setHighlightedItem(updated);
+              showToast('success', `✓ ¡Código ${codeToLink} vinculado permanentemente a ${updated.clave}!`);
+            } else {
+              showToast('error', `No se encontró ningún consumible con clave "${targetClave}".`);
+            }
+          });
+        }
+      }
+      setScanInput('');
     }
   };
 
@@ -360,6 +381,38 @@ export default function ConsumiblesView() {
                   <span>Zona: <strong className="text-slate-700">{highlightedItem.zona}</strong></span>
                 )}
               </div>
+
+              {/* Códigos de barras vinculados */}
+              <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                <span className="text-[11px] font-bold text-slate-500 uppercase">Códigos vinculados:</span>
+                {Array.isArray(highlightedItem.barcodes) && highlightedItem.barcodes.length > 0 ? (
+                  highlightedItem.barcodes.map(b => (
+                    <span key={b} className="bg-amber-100 text-amber-900 border border-amber-300 font-mono text-[11px] font-bold px-2 py-0.5 rounded">
+                      {b}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-[11px] text-slate-400 italic">Ningún código adicional</span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const code = window.prompt(`Ingresa o escanea el código de barras para "${highlightedItem.clave}":`);
+                    if (code && code.trim()) {
+                      ConsumiblesController.linkBarcode(code.trim(), highlightedItem.id).then(updated => {
+                        if (updated) {
+                          setCatalog(prev => prev.map(c => c.id === updated.id ? updated : c));
+                          setHighlightedItem(updated);
+                          showToast('success', `✓ Código ${code.trim()} vinculado a ${updated.clave}`);
+                        }
+                      });
+                    }
+                  }}
+                  className="text-[11px] text-amber-700 hover:text-amber-800 font-bold underline cursor-pointer ml-1"
+                >
+                  + Vincular código
+                </button>
+              </div>
               <div>
                 <button
                   type="button"
@@ -546,7 +599,12 @@ export default function ConsumiblesView() {
                       </td>
 
                       <td className="py-2.5 px-3 font-mono font-bold text-slate-900 select-all">
-                        {item.clave}
+                        <div>{item.clave}</div>
+                        {Array.isArray(item.barcodes) && item.barcodes.length > 0 && (
+                          <div className="text-[10px] text-amber-700 font-normal">
+                            🔗 {item.barcodes[0]}
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-2.5 px-3 text-slate-800 font-medium truncate max-w-sm" title={item.nombre}>

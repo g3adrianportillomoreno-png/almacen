@@ -3,10 +3,49 @@ import defaultConsumibles from '../utils/consumiblesDefaultData.json';
 import { supabase } from '../utils/supabaseClient.js';
 import * as XLSX from 'xlsx';
 
-const STORAGE_KEY = 'cdm_consumibles_catalog_v1';
-const SUPABASE_CONFIG_KEY = 'consumibles_catalog_v1';
+const STORAGE_KEY = 'cdm_consumibles_catalog_v2';
+const ALIASES_STORAGE_KEY = 'cdm_consumibles_barcode_aliases_v2';
+const SUPABASE_CONFIG_KEY = 'consumibles_catalog_v2';
+const SUPABASE_ALIASES_KEY = 'consumibles_barcode_aliases_v2';
 
 export class ConsumiblesRepository {
+  /**
+   * Obtiene el diccionario de alias de códigos de barras { [barcode]: clave }
+   */
+  static getBarcodeAliases() {
+    try {
+      const raw = localStorage.getItem(ALIASES_STORAGE_KEY);
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn('Error leyendo barcode aliases:', e);
+    }
+    // Inicial por defecto (ej. IK03847 vinculado a 6920952323115)
+    const initial = {
+      '6920952323115': 'IK03847'
+    };
+    try {
+      localStorage.setItem(ALIASES_STORAGE_KEY, JSON.stringify(initial));
+    } catch (e) {}
+    return initial;
+  }
+
+  static async saveBarcodeAliases(aliases) {
+    try {
+      localStorage.setItem(ALIASES_STORAGE_KEY, JSON.stringify(aliases));
+      await supabase
+        .from('warehouse_map_config')
+        .upsert({
+          id: SUPABASE_ALIASES_KEY,
+          config: aliases,
+          updated_at: new Date().toISOString()
+        });
+    } catch (e) {
+      console.warn('Error guardando barcode aliases:', e);
+    }
+  }
+
   /**
    * Obtiene todos los consumibles (de localStorage, Supabase o precarga inicial)
    */
@@ -17,7 +56,6 @@ export class ConsumiblesRepository {
       if (localRaw) {
         const parsed = JSON.parse(localRaw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          // Si tenemos datos locales, los devolvemos y en segundo plano verificamos Supabase
           this.syncFromSupabaseInBackground();
           return parsed;
         }
@@ -42,10 +80,9 @@ export class ConsumiblesRepository {
       console.warn('Error cargando consumibles de Supabase:', e);
     }
 
-    // 3. Fallback inicial con los 1359 consumibles del archivo por defecto
+    // 3. Fallback inicial con el catálogo por defecto
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultConsumibles));
-      // Intentar subir a Supabase para inicializar la nube
       this.syncToSupabase(defaultConsumibles).catch(() => {});
       return defaultConsumibles;
     } catch (e) {
@@ -68,8 +105,21 @@ export class ConsumiblesRepository {
       if (!error && data?.config && Array.isArray(data.config) && data.config.length > 0) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data.config));
       }
+
+      // Sincronizar también los aliases
+      const { data: aliasData } = await supabase
+        .from('warehouse_map_config')
+        .select('config')
+        .eq('id', SUPABASE_ALIASES_KEY)
+        .maybeSingle();
+
+      if (aliasData?.config) {
+        const localAliases = this.getBarcodeAliases();
+        const merged = { ...localAliases, ...aliasData.config };
+        localStorage.setItem(ALIASES_STORAGE_KEY, JSON.stringify(merged));
+      }
     } catch (e) {
-      // Sincronización silenciosa
+      // Silencioso
     }
   }
 
@@ -99,6 +149,55 @@ export class ConsumiblesRepository {
     } catch (e) {
       console.warn('Error sincronizando consumibles a Supabase:', e);
     }
+  }
+
+  /**
+   * Vincula permanentemente un código de barras (ej. EAN 6920952323115) a un consumible
+   */
+  static async linkBarcodeToConsumible(rawBarcode, claveOrId) {
+    if (!rawBarcode || !claveOrId) return null;
+    const barcode = String(rawBarcode).trim();
+    const cleanBarcode = barcode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    const catalog = await this.getAllConsumibles();
+    let targetItem = null;
+
+    const updatedCatalog = catalog.map(item => {
+      const isMatch = (
+        String(item.id) === String(claveOrId) ||
+        String(item.clave).trim().toUpperCase() === String(claveOrId).trim().toUpperCase()
+      );
+
+      if (isMatch) {
+        const existingBarcodes = Array.isArray(item.barcodes) ? item.barcodes : [];
+        if (!existingBarcodes.includes(barcode)) {
+          existingBarcodes.push(barcode);
+        }
+        targetItem = {
+          ...item,
+          barcodes: existingBarcodes,
+          updatedAt: new Date().toISOString()
+        };
+        return targetItem;
+      }
+      return item;
+    });
+
+    if (!targetItem) {
+      console.warn(`No se encontró consumible con clave o id ${claveOrId}`);
+      return null;
+    }
+
+    // Guardar catálogo actualizado
+    await this.saveAllConsumibles(updatedCatalog);
+
+    // Guardar en mapa rápido de aliases
+    const aliases = this.getBarcodeAliases();
+    aliases[cleanBarcode] = targetItem.clave;
+    aliases[barcode] = targetItem.clave;
+    await this.saveBarcodeAliases(aliases);
+
+    return targetItem;
   }
 
   /**
@@ -138,9 +237,10 @@ export class ConsumiblesRepository {
       throw new Error('El archivo no contiene filas de datos.');
     }
 
+    const aliases = this.getBarcodeAliases();
     const cleanItems = [];
+
     rawRows.forEach((r, idx) => {
-      // Encontrar campo Clave
       const rawClave = r['Clave'] || r['CLAVE'] || r['clave'] || r['Codigo'] || r['Código'] || r['Serie'] || '';
       if (!rawClave || String(rawClave).trim().toUpperCase() === 'TOTAL') {
         return;
@@ -158,6 +258,22 @@ export class ConsumiblesRepository {
       const stock_min = Number(r['Stock Min.'] || r['Stock Min'] || r['Stock_Min'] || r['Minimo']) || 0;
       const stock_max = Number(r['Stock Max.'] || r['Stock Max'] || r['Stock_Max'] || r['Maximo']) || 0;
 
+      // Extraer posibles códigos de barras del Excel
+      const rawBarcode = r['Código de barras'] || r['Codigo de barras'] || r['Código de Barras'] || r['EAN'] || r['UPC'] || r['Número de serie'] || '';
+      const barcodes = [];
+      if (rawBarcode && String(rawBarcode).trim()) {
+        const b = String(rawBarcode).trim();
+        barcodes.push(b);
+        aliases[b] = clave;
+      }
+
+      // Si ya existía un alias previo para esta clave
+      Object.entries(aliases).forEach(([bCode, cClave]) => {
+        if (cClave === clave && !barcodes.includes(bCode)) {
+          barcodes.push(bCode);
+        }
+      });
+
       cleanItems.push({
         id: idx + 1,
         clave,
@@ -171,6 +287,7 @@ export class ConsumiblesRepository {
         almacen,
         stock_min,
         stock_max,
+        barcodes,
         updatedAt: new Date().toISOString()
       });
     });
@@ -180,6 +297,7 @@ export class ConsumiblesRepository {
     }
 
     await this.saveAllConsumibles(cleanItems);
+    await this.saveBarcodeAliases(aliases);
     return cleanItems;
   }
 
@@ -195,6 +313,7 @@ export class ConsumiblesRepository {
     const rows = items.map((it, idx) => ({
       'No.': idx + 1,
       'Clave': it.clave || '',
+      'Códigos de Barras Vinculados': Array.isArray(it.barcodes) ? it.barcodes.join(', ') : '',
       'Nombre': it.nombre || '',
       'Categoría': it.categoria || '',
       'Existencias': it.existencias ?? 0,
@@ -212,6 +331,7 @@ export class ConsumiblesRepository {
     ws['!cols'] = [
       { wch: 6 },
       { wch: 18 },
+      { wch: 25 },
       { wch: 45 },
       { wch: 22 },
       { wch: 12 },
