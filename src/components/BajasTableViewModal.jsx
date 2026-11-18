@@ -36,6 +36,7 @@ export default function BajasTableViewModal({
       const row = (it.warehouseRow || it.warehouse_row || '').toLowerCase();
       const space = (it.warehouseSpace || it.warehouse_space || '').toLowerCase();
       const reason = (it.bajaReason || it.reason || '').toLowerCase();
+      const reqBy = (it.requestedBy || it.requested_by || '').toLowerCase();
 
       // Filtro por modelo
       if (modelFilter !== 'ALL' && (it.material || it.material_model) !== modelFilter) {
@@ -48,6 +49,7 @@ export default function BajasTableViewModal({
         serial.includes(q) ||
         material.includes(q) ||
         internal.includes(q) ||
+        reqBy.includes(q) ||
         wh.includes(q) ||
         row.includes(q) ||
         space.includes(q) ||
@@ -203,8 +205,7 @@ export default function BajasTableViewModal({
                   <th className="py-2.5 px-3 min-w-[150px]">Número de Serie</th>
                   <th className="py-2.5 px-3 min-w-[160px]">Modelo</th>
                   <th className="py-2.5 px-3 min-w-[90px]"># Santi</th>
-                  <th className="py-2.5 px-3 min-w-[160px]">Última Ubicación</th>
-                  <th className="py-2.5 px-3 min-w-[110px]">Estado Sistema</th>
+                  <th className="py-2.5 px-3 min-w-[150px]">Nombre que solicita</th>
                   <th className="py-2.5 px-3 min-w-[160px]">Motivo</th>
                   {onCancelBaja && (
                     <th className="py-2.5 px-3 w-28 text-center">Acción</th>
@@ -290,21 +291,11 @@ export default function BajasTableViewModal({
                         )}
                       </td>
 
-                      {/* Ubicación */}
-                      <td className="py-2.5 px-3 text-slate-600">
-                        {whRow && whRow !== 'Sin Asignar' ? (
-                          <span className="font-medium">
-                            {whName} &bull; {whRow} {whSpace ? `[${whSpace}]` : ''}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic">Sin Asignar</span>
-                        )}
-                      </td>
-
-                      {/* Estado Sistema */}
+                      {/* Nombre que solicita */}
                       <td className="py-2.5 px-3">
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200">
-                          {systemStatus}
+                        <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2.5 py-0.5 rounded-md text-[11px] font-bold">
+                          <span>👤</span>
+                          <span>{item.requestedBy || item.requested_by || 'Sin especificar'}</span>
                         </span>
                       </td>
 

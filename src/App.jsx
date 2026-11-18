@@ -22,6 +22,7 @@ import OperatorMobileView from './components/OperatorMobileView';
 import MercadoLibreView from './components/MercadoLibreView';
 import MercadoLibreScanView from './components/MercadoLibreScanView';
 import BajasSessionView from './components/BajasSessionView';
+import ConsumiblesView from './components/ConsumiblesView';
 import { RealtimeSyncService } from './services/RealtimeSyncService';
 import { supabase } from './utils/supabaseClient';
 
@@ -368,7 +369,7 @@ function App() {
   };
 
   // Marcar una serie del checklist como baja (salida de almacén)
-  const handleMarkChecklistBaja = async (serial, bajaDate, reason, specificBatchId = null) => {
+  const handleMarkChecklistBaja = async (serial, bajaDate, reason, specificBatchId = null, requestedBy = null) => {
     const targetBatchId = specificBatchId || activeBatchId;
     if (!targetBatchId || !serial) return;
 
@@ -385,6 +386,7 @@ function App() {
             status: 'BAJA',
             bajaAt: dateVal,
             bajaReason: reason,
+            requestedBy: requestedBy,
             isScanned: true
           };
         }
@@ -399,7 +401,7 @@ function App() {
     }));
 
     try {
-      await ChecklistController.markChecklistPrinterBaja(targetBatchId, sUpper, dateVal, reason);
+      await ChecklistController.markChecklistPrinterBaja(targetBatchId, sUpper, dateVal, reason, requestedBy);
     } catch (err) {
       console.error('Error al registrar baja de checklist:', err);
     }
@@ -740,6 +742,11 @@ function App() {
                 }}
                 onBack={() => setView('masterInventory')}
               />
+            )}
+
+            {/* Vista 10: Módulo de Consumibles y Refacciones */}
+            {view === 'consumibles' && (
+              <ConsumiblesView />
             )}
           </>
         )}

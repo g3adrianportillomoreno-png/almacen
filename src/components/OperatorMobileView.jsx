@@ -11,6 +11,7 @@ import { soundEffects, isSoundMuted, toggleSoundMute } from '../utils/soundEffec
 import { getNextSpace, adjustNumericRow, adjustNumericSpace } from '../utils/locationUtils.js';
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 import BajasSessionView from './BajasSessionView.jsx';
+import ConsumiblesOperatorScanView from './ConsumiblesOperatorScanView.jsx';
 import OfflineSyncBanner from './OfflineSyncBanner.jsx';
 import useOfflineSync from '../hooks/useOfflineSync.js';
 
@@ -761,9 +762,9 @@ export default function OperatorMobileView({
         </div>
       )}
 
-      {/* SELECTOR DE MODO: 4 PESTAÑAS (LECTURA, CHECKLISTS, MERCADO LIBRE, BAJAS) */}
+      {/* SELECTOR DE MODO: 5 PESTAÑAS (LECTURA, CHECKLISTS, MERCADO LIBRE, BAJAS, CONSUMIBLES) */}
       <div className="p-3 bg-slate-950/60 border-b border-slate-800">
-        <div className="grid grid-cols-4 gap-1 bg-slate-900 p-1 rounded-2xl border border-slate-800">
+        <div className="grid grid-cols-5 gap-1 bg-slate-900 p-1 rounded-2xl border border-slate-800">
           <button
             onClick={() => {
               setOperatorTab('reading');
@@ -785,7 +786,7 @@ export default function OperatorMobileView({
               setActiveMlBatchId(null);
             }}
             className={`py-2 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold transition flex items-center justify-center gap-1 ${
-              (operatorTab === 'checklists' || activeChecklistId) && operatorTab !== 'bajas'
+              (operatorTab === 'checklists' || activeChecklistId) && operatorTab !== 'bajas' && operatorTab !== 'consumibles'
                 ? 'bg-red-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-white'
             }`}
@@ -823,11 +824,32 @@ export default function OperatorMobileView({
             <span>🔴</span>
             <span>Bajas</span>
           </button>
+
+          <button
+            onClick={() => {
+              setOperatorTab('consumibles');
+              setActiveChecklistId(null);
+              setActiveMlBatchId(null);
+            }}
+            className={`py-2 px-1 rounded-xl text-[10px] sm:text-[11px] font-bold transition flex items-center justify-center gap-1 ${
+              operatorTab === 'consumibles'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-purple-300 hover:text-white'
+            }`}
+          >
+            <span>🏷️</span>
+            <span>Consumibles</span>
+          </button>
         </div>
       </div>
 
       {/* ÁREA DE CAPTURA PRINCIPAL */}
       <div className="p-4 flex-1 flex flex-col gap-4">
+
+        {/* SI ESTÁ EN MODO CONSUMIBLES */}
+        {operatorTab === 'consumibles' && (
+          <ConsumiblesOperatorScanView />
+        )}
 
         {/* SI ESTÁ EN MODO BAJAS */}
         {operatorTab === 'bajas' && (

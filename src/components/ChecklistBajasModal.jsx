@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { soundEffects } from '../utils/soundEffects.js';
 import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { InventoryController } from '../controllers/InventoryController.js';
+import { getRequesters, addRequester, removeRequester } from '../utils/requestersManager.js';
 
 export default function ChecklistBajasModal({
   isOpen,
@@ -19,6 +20,13 @@ export default function ChecklistBajasModal({
     return now.toISOString().slice(0, 16);
   });
   const [bajaReason, setBajaReason] = useState('Salida de almacén');
+  const [requestersList, setRequestersList] = useState(() => getRequesters());
+  const [selectedRequester, setSelectedRequester] = useState(() => {
+    const list = getRequesters();
+    return list[0] || 'DANIA';
+  });
+  const [showAddRequester, setShowAddRequester] = useState(false);
+  const [newRequesterName, setNewRequesterName] = useState('');
   const [bajasSearchQuery, setBajasSearchQuery] = useState('');
   const [searchCatalogQuery, setSearchCatalogQuery] = useState('');
   const [notification, setNotification] = useState(null); // { type: 'success' | 'error' | 'warning', text: string }
@@ -49,6 +57,7 @@ export default function ChecklistBajasModal({
       (p.serial || '').toLowerCase().includes(q) ||
       (p.material || '').toLowerCase().includes(q) ||
       String(p.internalNumber || '').includes(q) ||
+      (p.requestedBy || p.requested_by || '').toLowerCase().includes(q) ||
       (p.bajaReason || '').toLowerCase().includes(q) ||
       (p.warehouseRow || '').toLowerCase().includes(q) ||
       (p.warehouseSpace || '').toLowerCase().includes(q)
@@ -99,7 +108,7 @@ export default function ChecklistBajasModal({
     soundEffects.playScanSuccess();
     
     if (onMarkBaja) {
-      await onMarkBaja(matchedItem.serial, dateToUse, bajaReason, batchDetails.id);
+      await onMarkBaja(matchedItem.serial, dateToUse, bajaReason, batchDetails.id, selectedRequester);
     }
 
     showNotification('success', `✓ Serie ${matchedItem.serial} dada de baja exitosamente.`);
@@ -209,7 +218,36 @@ export default function ChecklistBajasModal({
               />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Selector de Nombre que solicita */}
+              <div className="flex items-center gap-1 bg-white border border-rose-200 rounded-xl px-2 py-1">
+                <span className="text-[11px] font-bold text-rose-800 shrink-0">👤 Solicita:</span>
+                <select
+                  value={selectedRequester}
+                  onChange={(e) => {
+                    if (e.target.value === '__NEW__') {
+                      setShowAddRequester(true);
+                    } else {
+                      setSelectedRequester(e.target.value);
+                    }
+                  }}
+                  className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                >
+                  {requestersList.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                  <option value="__NEW__">+ Agregar otro nombre...</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowAddRequester(true)}
+                  className="text-xs text-rose-700 hover:text-rose-900 font-black px-1"
+                  title="Agregar nuevo solicitante a la lista"
+                >
+                  ➕
+                </button>
+              </div>
+
               <input
                 type="text"
                 placeholder="Motivo (ej. Venta, Taller, Garantía)..."
@@ -227,6 +265,43 @@ export default function ChecklistBajasModal({
               </button>
             </div>
           </form>
+
+          {/* Modal rápido para agregar nuevo solicitante */}
+          {showAddRequester && (
+            <div className="mt-2 p-3 bg-white rounded-xl border border-rose-300 shadow-sm flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-700">Nuevo Solicitante:</span>
+              <input
+                type="text"
+                placeholder="Escribe el nombre (ej. ROBERTO)..."
+                value={newRequesterName}
+                onChange={(e) => setNewRequesterName(e.target.value.toUpperCase())}
+                className="flex-1 py-1 px-2 border border-slate-300 rounded-lg text-xs font-bold uppercase outline-none"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (newRequesterName.trim()) {
+                    const updated = addRequester(newRequesterName);
+                    setRequestersList(updated);
+                    setSelectedRequester(newRequesterName.trim().toUpperCase());
+                    setNewRequesterName('');
+                    setShowAddRequester(false);
+                  }
+                }}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1 rounded-lg"
+              >
+                Guardar
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddRequester(false)}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs px-2.5 py-1 rounded-lg"
+              >
+                Cancelar
+              </button>
+            </div>
+          )}
         </div>
 
         {/* PESTAÑAS DE NAVEGACIÓN DENTRO DEL MODAL */}
@@ -317,7 +392,7 @@ export default function ChecklistBajasModal({
                         <th className="py-2 px-2.5 min-w-[140px]">Número de Serie</th>
                         <th className="py-2 px-2.5 min-w-[160px]">Modelo</th>
                         <th className="py-2 px-2.5 min-w-[80px]"># Santi</th>
-                        <th className="py-2 px-2.5 min-w-[140px]">Ubicación</th>
+                        <th className="py-2 px-2.5 min-w-[140px]">Nombre que solicita</th>
                         <th className="py-2 px-2.5 min-w-[140px]">Motivo</th>
                         <th className="py-2 px-2.5 w-24 text-center">Acción</th>
                       </tr>
@@ -368,8 +443,11 @@ export default function ChecklistBajasModal({
                                 <span className="text-slate-300">-</span>
                               )}
                             </td>
-                            <td className="py-2 px-2.5 text-slate-600 text-[11px]">
-                              {whRow}
+                            <td className="py-2 px-2.5">
+                              <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                                <span>👤</span>
+                                <span>{item.requestedBy || item.requested_by || 'Sin especificar'}</span>
+                              </span>
                             </td>
                             <td className="py-2 px-2.5 text-slate-600 italic text-[11px] truncate max-w-[160px]" title={item.bajaReason || 'Salida'}>
                               {item.bajaReason || 'Salida'}

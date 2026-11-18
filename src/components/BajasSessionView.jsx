@@ -4,6 +4,7 @@ import { findSerialMatch, extractSerialFromScanned, cleanSerialCore } from '../u
 import { soundEffects } from '../utils/soundEffects.js';
 import CameraScanner from './CameraScanner.jsx';
 import BajasTableViewModal from './BajasTableViewModal.jsx';
+import { getRequesters, addRequester } from '../utils/requestersManager.js';
 
 export default function BajasSessionView({
   batches = [],
@@ -30,6 +31,13 @@ export default function BajasSessionView({
   const [reasonPreset, setReasonPreset] = useState('Salida de almacén');
   const [customReason, setCustomReason] = useState('');
   const [operatorName, setOperatorName] = useState('');
+  const [requestersList, setRequestersList] = useState(() => getRequesters());
+  const [selectedRequester, setSelectedRequester] = useState(() => {
+    const list = getRequesters();
+    return list[0] || 'DANIA';
+  });
+  const [showAddRequester, setShowAddRequester] = useState(false);
+  const [newRequesterName, setNewRequesterName] = useState('');
 
   // Estados durante el escaneo activo
   const [scanInput, setScanInput] = useState('');
@@ -141,6 +149,7 @@ export default function BajasSessionView({
       bajaDate: bajaDateInput ? new Date(bajaDateInput).toISOString() : new Date().toISOString(),
       reason: finalReason,
       operator: operatorName.trim() || 'Operador',
+      requestedBy: selectedRequester || 'Sin especificar',
       items: []
     });
     setScanInput('');
@@ -193,6 +202,7 @@ export default function BajasSessionView({
       batchName: matched.batchName || matched.checklistName || '',
       checklistId: matched.checklistId || null,
       wasAlreadyBaja,
+      requestedBy: activeSession.requestedBy || 'Sin especificar',
       scannedAt: nowScanIso,
       bajaAt: nowScanIso
     };
@@ -233,6 +243,7 @@ export default function BajasSessionView({
         bajaDate: activeSession.bajaDate,
         reason: activeSession.reason,
         operator: activeSession.operator,
+        requestedBy: activeSession.requestedBy,
         targetScope: activeSession.targetScope,
         targetLoteName: activeSession.targetLoteName
       });
@@ -490,6 +501,74 @@ export default function BajasSessionView({
                     className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-medium text-slate-800 outline-none placeholder-slate-400"
                   />
                 </div>
+
+                <div className="sm:col-span-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-rose-800 uppercase">
+                      👤 Nombre que solicita:
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowAddRequester(true)}
+                      className="text-[11px] text-rose-700 hover:underline font-bold"
+                    >
+                      + Agregar nuevo nombre a la lista
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={selectedRequester}
+                      onChange={(e) => {
+                        if (e.target.value === '__NEW__') {
+                          setShowAddRequester(true);
+                        } else {
+                          setSelectedRequester(e.target.value);
+                        }
+                      }}
+                      className="w-full bg-slate-50 border border-rose-300 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 outline-none"
+                    >
+                      {requestersList.map(name => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                      <option value="__NEW__">+ Agregar otro nombre...</option>
+                    </select>
+                  </div>
+
+                  {showAddRequester && (
+                    <div className="mt-2 p-2.5 bg-rose-50 rounded-xl border border-rose-200 flex items-center gap-2">
+                      <input
+                        type="text"
+                        placeholder="Nombre de quien solicita (ej. DANIA, TERESA)..."
+                        value={newRequesterName}
+                        onChange={(e) => setNewRequesterName(e.target.value.toUpperCase())}
+                        className="flex-1 bg-white border border-rose-300 rounded-lg px-2.5 py-1.5 text-xs font-bold uppercase outline-none"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (newRequesterName.trim()) {
+                            const updated = addRequester(newRequesterName);
+                            setRequestersList(updated);
+                            setSelectedRequester(newRequesterName.trim().toUpperCase());
+                            setNewRequesterName('');
+                            setShowAddRequester(false);
+                          }
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg cursor-pointer"
+                      >
+                        Guardar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowAddRequester(false)}
+                        className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs px-2.5 py-1.5 rounded-lg cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* 3. MOTIVO DE LA BAJA */}
@@ -714,7 +793,7 @@ export default function BajasSessionView({
                         <th className="py-2.5 px-3">Modelo</th>
                         <th className="py-2.5 px-3"># Equipo</th>
                         <th className="py-2.5 px-3">Lote Origen</th>
-                        <th className="py-2.5 px-3">Ubicación Previa</th>
+                        <th className="py-2.5 px-3">Nombre que solicita</th>
                         <th className="py-2.5 px-3">Hora</th>
                         <th className="py-2.5 px-3 text-right">Acción</th>
                       </tr>
@@ -739,14 +818,11 @@ export default function BajasSessionView({
                               </span>
                             ) : (it.batchName || 'Inventario')}
                           </td>
-                          <td className="py-2 px-3 text-slate-600">
-                            {it.warehouseRow && it.warehouseRow !== 'Sin Asignar' ? (
-                              <span className="text-blue-700 font-semibold">
-                                {it.warehouseRow} {it.warehouseSpace ? `[${it.warehouseSpace}]` : ''}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic">Sin Asignar</span>
-                            )}
+                          <td className="py-2 px-3">
+                            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                              <span>👤</span>
+                              <span>{it.requestedBy || activeSession.requestedBy || 'Sin especificar'}</span>
+                            </span>
                           </td>
                           <td className="py-2 px-3 text-slate-500 font-mono text-[11px]">
                             {it.scannedAt ? new Date(it.scannedAt).toLocaleTimeString('es-MX') : ''}

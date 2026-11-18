@@ -440,7 +440,7 @@ export class InventoryRepository {
   /**
    * Marca una serie del checklist como baja junto con su fecha (salida de equipo)
    */
-  static async markChecklistPrinterBaja(checklistId, serialNumber, bajaDate = null, reason = 'Baja de checklist') {
+  static async markChecklistPrinterBaja(checklistId, serialNumber, bajaDate = null, reason = 'Baja de checklist', requestedBy = null) {
     const serial = String(serialNumber || '').trim().toUpperCase();
     if (!serial) return null;
     const nowIso = bajaDate ? new Date(bajaDate).toISOString() : new Date().toISOString();
@@ -454,6 +454,7 @@ export class InventoryRepository {
       status: 'BAJA',
       bajaAt: nowIso,
       bajaReason: reason || 'Baja de checklist',
+      requestedBy: requestedBy || existing.requestedBy || null,
       isScanned: true
     };
     this.saveMetadataCache(cache);
@@ -464,7 +465,8 @@ export class InventoryRepository {
         checklistId,
         serialNumber: serial,
         bajaDate: nowIso,
-        reason
+        reason,
+        requestedBy
       });
       return cache.serials[serial];
     }
@@ -487,7 +489,8 @@ export class InventoryRepository {
           checklistId,
           serialNumber: serial,
           bajaDate: nowIso,
-          reason
+          reason,
+          requestedBy
         });
       }
     } catch (err) {
@@ -496,7 +499,8 @@ export class InventoryRepository {
         checklistId,
         serialNumber: serial,
         bajaDate: nowIso,
-        reason
+        reason,
+        requestedBy
       });
     }
 
@@ -511,6 +515,7 @@ export class InventoryRepository {
         warehouseSpace: existing.warehouseSpace || '',
         systemStatus: existing.systemStatus || 'Principal',
         reason: reason || 'Baja de checklist',
+        requested_by: requestedBy || existing.requestedBy || null,
         departure_date: nowIso
       }], reason || 'Baja de checklist');
     } catch (e) {
@@ -602,6 +607,8 @@ export class InventoryRepository {
       const itemBajaTime = item.scannedAt || item.bajaAt || new Date().toISOString();
 
       const existing = cache.serials[serial] || {};
+      const itemRequestedBy = item.requestedBy || sessionInfo.requestedBy || null;
+
       cache.serials[serial] = {
         ...existing,
         material: item.material || existing.material || 'Sin Modelo',
@@ -613,6 +620,7 @@ export class InventoryRepository {
         bajaAt: itemBajaTime,
         bajaReason: reason,
         bajaOperator: operator,
+        requestedBy: itemRequestedBy,
         isScanned: true
       };
 
@@ -625,6 +633,7 @@ export class InventoryRepository {
         warehouseSpace: item.warehouseSpace || existing.warehouseSpace || '',
         systemStatus: existing.systemStatus || 'Principal',
         reason: reason,
+        requested_by: itemRequestedBy,
         departure_date: itemBajaTime
       });
     }
@@ -660,6 +669,7 @@ export class InventoryRepository {
       date: nowIso,
       reason: reason,
       operator: operator,
+      requestedBy: sessionInfo.requestedBy || null,
       targetScope: sessionInfo.targetScope || 'ALL',
       targetLoteName: sessionInfo.targetLoteName || 'Todo el Inventario',
       itemsCount: items.length,
@@ -673,6 +683,7 @@ export class InventoryRepository {
           warehouseName: it.warehouseName,
           warehouseRow: it.warehouseRow,
           warehouseSpace: it.warehouseSpace,
+          requestedBy: it.requestedBy || sessionInfo.requestedBy || null,
           batchFolio: it.batchFolio,
           batchName: it.batchName,
           scannedAt: itemTime,
@@ -1517,7 +1528,8 @@ export class InventoryRepository {
       warehouse_space: p.warehouseSpace || '',
       system_status: p.systemStatus || 'Principal',
       reason: reason,
-      departure_date: nowIso
+      requested_by: p.requested_by || p.requestedBy || null,
+      departure_date: p.departure_date || nowIso
     }));
 
     try {

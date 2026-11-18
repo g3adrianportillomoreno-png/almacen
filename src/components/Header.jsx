@@ -167,6 +167,20 @@ export default function Header({
                 )}
               </button>
 
+              {/* PESTAÑA: CONSUMIBLES */}
+              <button
+                onClick={() => setView('consumibles')}
+                className={`px-3 py-1.5 rounded-lg transition-all flex items-center gap-1.5 ${
+                  currentView === 'consumibles' 
+                    ? 'bg-white text-red-700 shadow-xs font-bold' 
+                    : 'text-red-100 hover:text-white hover:bg-red-800'
+                }`}
+                title="Catálogo de consumibles, ubicación física por anaquel y control de existencias"
+              >
+                <span className="text-sm">🏷️</span>
+                <span>Consumibles</span>
+              </button>
+
               {/* PESTAÑA 5: MODO OPERADOR MÓVIL */}
               <button
                 onClick={() => setView('operator')}
