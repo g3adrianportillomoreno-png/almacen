@@ -120,20 +120,20 @@ export class ConsumiblesController {
       if (cleanClave === cleanQuery) {
         score = 100;
         reason = 'Clave idéntica';
-      } else if (cleanClave.endsWith(cleanQuery) && cleanQuery.length >= 4) {
+      } else if (cleanClave.endsWith(cleanQuery) && cleanQuery.length >= 2) {
         // e.g. "03847" coincide con "IK03847"
         score = 90;
         reason = 'Número de clave coincidente';
-      } else if (cleanClave.startsWith(cleanQuery) && cleanQuery.length >= 4) {
+      } else if (cleanClave.startsWith(cleanQuery) && cleanQuery.length >= 2) {
         score = 85;
         reason = 'Clave comienza con código';
-      } else if (cleanClave.includes(cleanQuery) && cleanQuery.length >= 4) {
+      } else if (cleanClave.includes(cleanQuery) && cleanQuery.length >= 2) {
         score = 75;
         reason = 'Clave contiene código';
-      } else if (cleanQuery.length >= 5 && cleanQuery.includes(cleanClave)) {
+      } else if (cleanQuery.length >= 3 && cleanQuery.includes(cleanClave)) {
         score = 70;
         reason = 'Código contiene clave';
-      } else if (cleanName.includes(cleanQuery) && cleanQuery.length >= 3) {
+      } else if (cleanName.includes(cleanQuery) && cleanQuery.length >= 2) {
         if (itemName.toUpperCase().includes(`(${queryUpper})`)) {
           score = 80;
           reason = 'Modelo exacto en paréntesis';
@@ -159,7 +159,7 @@ export class ConsumiblesController {
     scoredList.sort((a, b) => b.score - a.score);
 
     const best = scoredList[0].item;
-    const candidates = scoredList.slice(0, 6).map(s => s.item);
+    const candidates = scoredList.slice(0, 10).map(s => s.item);
 
     return {
       match: best,
@@ -169,28 +169,102 @@ export class ConsumiblesController {
   }
 
   /**
-   * Búsqueda predictiva rápida para autocompletar mientras el operador escribe
+   * Búsqueda predictiva rápida y ponderada para autocompletar mientras el operador escribe.
+   * Devuelve los candidatos ordenados por relevancia directa en clave y modelo.
    */
-  static searchPredictive(rawText, catalog = [], limit = 8) {
+  static searchPredictive(rawText, catalog = [], limit = 15) {
     if (!rawText || !rawText.trim() || !Array.isArray(catalog)) return [];
-    const text = rawText.trim().toLowerCase();
-    const tokens = text.split(/\s+/).filter(t => t.length > 0);
+    
+    const query = rawText.trim();
+    const queryUpper = query.toUpperCase();
+    const queryLower = query.toLowerCase();
+    const cleanQuery = this.cleanString(query);
+    const tokens = queryLower.split(/\s+/).filter(t => t.length > 0);
 
-    const matches = catalog.filter(item => {
-      const clave = String(item.clave || '').toLowerCase();
-      const nombre = String(item.nombre || '').toLowerCase();
-      const cat = String(item.categoria || '').toLowerCase();
-      const sec = String(item.seccion || '').toLowerCase();
-      const anaq = String(item.anaquel || '').toLowerCase();
-      const barcodes = Array.isArray(item.barcodes) ? item.barcodes.join(' ').toLowerCase() : '';
+    const scored = [];
 
-      const fullHaystack = `${clave} ${nombre} ${cat} ${sec} ${anaq} ${barcodes}`;
+    catalog.forEach(item => {
+      const itemClave = String(item.clave || '').trim();
+      const cleanClave = this.cleanString(itemClave);
+      const claveUpper = itemClave.toUpperCase();
+      const claveLower = itemClave.toLowerCase();
 
-      // Todos los tokens deben estar presentes
-      return tokens.every(tok => fullHaystack.includes(tok));
+      const itemName = String(item.nombre || '').trim();
+      const cleanName = this.cleanString(itemName);
+      const nameUpper = itemName.toUpperCase();
+      const nameLower = itemName.toLowerCase();
+
+      const catLower = String(item.categoria || '').toLowerCase();
+      const secLower = String(item.seccion || '').toLowerCase();
+      const anaqLower = String(item.anaquel || '').toLowerCase();
+      const barcodes = Array.isArray(item.barcodes) ? item.barcodes : [];
+
+      let score = 0;
+      let matchReason = '';
+
+      // 1. Coincidencia en Clave
+      if (claveUpper === queryUpper) {
+        score += 2000;
+        matchReason = 'Clave exacta';
+      } else if (cleanClave === cleanQuery && cleanQuery.length > 0) {
+        score += 1500;
+        matchReason = 'Clave normalizada';
+      } else if (cleanClave.startsWith(cleanQuery) && cleanQuery.length >= 1) {
+        score += 1000 + (cleanQuery.length * 10);
+        matchReason = 'Comienza con clave';
+      } else if (cleanClave.endsWith(cleanQuery) && cleanQuery.length >= 2) {
+        score += 900 + (cleanQuery.length * 10);
+        matchReason = 'Termina con modelo/número';
+      } else if (cleanClave.includes(cleanQuery) && cleanQuery.length >= 2) {
+        score += 700 + (cleanQuery.length * 10);
+        matchReason = 'Clave contiene texto';
+      }
+
+      // 2. Coincidencia en códigos de barra asociados
+      const matchedBarcode = barcodes.find(b => {
+        const cleanB = this.cleanString(b);
+        return cleanB === cleanQuery || String(b).includes(query);
+      });
+      if (matchedBarcode) {
+        score += 800;
+        if (!matchReason) matchReason = `Código vinculado: ${matchedBarcode}`;
+      }
+
+      // 3. Coincidencia en Nombre / Descripción
+      if (nameUpper.includes(`(${queryUpper})`)) {
+        score += 600;
+        if (!matchReason) matchReason = 'Modelo exacto en descripción';
+      } else if (nameUpper.includes(queryUpper)) {
+        score += 400;
+        if (!matchReason) matchReason = 'Texto en descripción';
+      } else if (cleanQuery.length >= 2 && cleanName.includes(cleanQuery)) {
+        score += 300;
+        if (!matchReason) matchReason = 'Coincidencia en nombre';
+      }
+
+      // 4. Tokens múltiples
+      if (tokens.length > 1) {
+        const fullHaystack = `${claveLower} ${nameLower} ${catLower} ${secLower} ${anaqLower} ${barcodes.join(' ').toLowerCase()}`;
+        const allPresent = tokens.every(tok => fullHaystack.includes(tok));
+        if (allPresent) {
+          score += 250;
+          if (!matchReason) matchReason = 'Coinciden palabras';
+        }
+      }
+
+      if (score > 0) {
+        scored.push({
+          ...item,
+          _score: score,
+          _matchReason: matchReason
+        });
+      }
     });
 
-    return matches.slice(0, limit);
+    // Ordenar de mayor a menor relevancia
+    scored.sort((a, b) => b._score - a._score);
+
+    return scored.slice(0, limit);
   }
 
   /**
