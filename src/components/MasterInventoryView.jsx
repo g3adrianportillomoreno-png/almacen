@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from 'react';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { WarehouseMapController } from '../controllers/WarehouseMapController.js';
 import { extractSeriesFromExcel } from '../utils/excelParser.js';
+import { CheckpointService } from '../services/CheckpointService.js';
 import SpaceCollisionModal from './SpaceCollisionModal.jsx';
 import CheckpointModal from './CheckpointModal.jsx';
 
@@ -428,6 +429,9 @@ export default function MasterInventoryView({
     setReconcileResult(null);
 
     try {
+      // 1. Auto-respaldo de seguridad previo a la carga
+      await CheckpointService.createAutoUploadBackup(file.name, 'MASTER', allPrinters);
+
       const extractedRows = await extractSeriesFromExcel(file);
       if (extractedRows.length === 0) {
         alert("No se detectaron series en el documento. Asegúrate de incluir la columna 'NUMERO DE SERIE'.");
@@ -458,6 +462,9 @@ export default function MasterInventoryView({
     if (!file) return;
 
     try {
+      // 1. Auto-respaldo de seguridad previo a la carga
+      await CheckpointService.createAutoUploadBackup(file.name, 'MASTER', allPrinters);
+
       const extractedRows = await extractSeriesFromExcel(file);
       if (extractedRows.length === 0) {
         alert("No se detectaron series en el documento. Asegúrate de incluir la columna 'NUMERO DE SERIE'.");
@@ -492,6 +499,9 @@ export default function MasterInventoryView({
 
     setIsExecutingUpdate(true);
     try {
+      // Auto-respaldo previo a la actualización con bajas
+      await CheckpointService.createAutoUploadBackup(pendingUpdateData.fileName, 'MASTER', allPrinters);
+
       const res = await InventoryController.updateMasterInventoryWithPurge(
         pendingUpdateData.extractedRows,
         pendingUpdateData.removedPrinters

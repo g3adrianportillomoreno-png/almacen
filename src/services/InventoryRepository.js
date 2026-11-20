@@ -1359,17 +1359,10 @@ export class InventoryRepository {
               updatePayload.internal_number = numVal;
             }
 
-            // 3. Ubicación física: SOLO si vino explícitamente en el archivo y no es almacén virtual de SANTI
-            const isVirtualWhVal = (wh) => !wh || /seminuevo/i.test(wh) || /refaccion/i.test(wh) || /operacion/i.test(wh);
-            if (c.rawWh && !isVirtualWhVal(c.rawWh)) {
-              updatePayload.warehouse_name = c.rawWh;
-            }
-            if (c.rawRow && c.rawRow !== 'Sin Asignar') {
-              updatePayload.warehouse_row = c.rawRow;
-            }
-            if (c.rawSpace !== null) {
-              updatePayload.warehouse_space = c.rawSpace;
-            }
+            // 3. Ubicación física: PROTECCIÓN ESTRICTA
+            // Los documentos que se suban (SANTI, reportes, Excel, etc.) NUNCA modifican el almacén físico,
+            // fila o casillero de equipos que ya existen en la base de datos.
+            // Las ubicaciones físicas solo las asignan o modifican los operadores escaneando en bodega.
 
             // 4. Estado de Proceso / Sistema: SOLO si vino en el archivo
             if (c.rawSystemStatus) {
@@ -1377,13 +1370,10 @@ export class InventoryRepository {
               updatePayload.printer_status = `${currentOp}|${c.rawSystemStatus}`;
             }
 
-            // Actualizar caché local de forma selectiva (solo lo que vino en el archivo)
+            // Actualizar caché local de forma selectiva (solo datos de catálogo, nunca ubicación física)
             const updatedCache = { ...localCached };
             if (c.rawMaterial) updatedCache.material = c.rawMaterial;
             if (c.rawInternal !== null) updatedCache.internalNumber = c.rawInternal;
-            if (c.rawWh && !isVirtualWhVal(c.rawWh)) updatedCache.warehouseName = c.rawWh;
-            if (c.rawRow && c.rawRow !== 'Sin Asignar') updatedCache.warehouseRow = c.rawRow;
-            if (c.rawSpace !== null) updatedCache.warehouseSpace = c.rawSpace;
             if (c.rawSystemStatus) updatedCache.systemStatus = c.rawSystemStatus;
             cache.serials[c.serialUpper] = updatedCache;
 

@@ -327,18 +327,17 @@ export class CheckpointService {
   /**
    * Obtiene el snapshot completo guardado en un slot
    */
+  /**
+   * Obtiene el snapshot completo guardado en un slot
+   */
   static async getCheckpointData(category, slotIndex) {
     const safeCategory = category.toUpperCase();
     const slotId = `${safeCategory}_${slotIndex}`;
     const cloudKey = `checkpoint_${slotId}`;
 
-    // 1. Intentar leer de IndexedDB local
-    let record = await idbGet(slotId);
-    if (record && record.data) {
-      return record;
-    }
-
-    // 2. Si no está en IndexedDB local (ej. se creó en otra PC), descargar de Supabase (warehouse_map_config)
+    // 1. Intentar descargar siempre de Supabase (warehouse_map_config) primero
+    // Esto garantiza que el checkpoint contenga todos los registros aunque se consulte desde otra máquina o tras limpiar caché
+    let cloudRecord = null;
     try {
       const { data: cloudRow, error: cloudErr } = await supabase
         .from('warehouse_map_config')
@@ -348,7 +347,7 @@ export class CheckpointService {
 
       if (!cloudErr && cloudRow && cloudRow.layout && cloudRow.layout.data) {
         const payload = cloudRow.layout;
-        const restoredRecord = {
+        cloudRecord = {
           id: slotId,
           category: safeCategory,
           slot_index: slotIndex,
@@ -358,12 +357,24 @@ export class CheckpointService {
           created_at: payload.createdAt || cloudRow.updated_at,
           updated_at: cloudRow.updated_at
         };
-        // Cachear en IndexedDB local
-        await idbPut(restoredRecord);
-        return restoredRecord;
+        // Actualizar caché en IndexedDB local
+        await idbPut(cloudRecord);
       }
     } catch (e) {
       console.warn('Error descargando checkpoint desde warehouse_map_config:', e);
+    }
+
+    if (cloudRecord && cloudRecord.data) {
+      const count = safeCategory === 'MASTER' 
+        ? (cloudRecord.data.printers?.length || 0) 
+        : (cloudRecord.data.batches?.length || 0);
+      if (count > 0) return cloudRecord;
+    }
+
+    // 2. Si falló la red o no estaba en la nube, buscar en IndexedDB local
+    let localRecord = await idbGet(slotId);
+    if (localRecord && localRecord.data) {
+      return localRecord;
     }
 
     // 3. Fallback a system_checkpoints si existe
@@ -382,7 +393,85 @@ export class CheckpointService {
       console.warn('Error leyendo checkpoint desde system_checkpoints:', e);
     }
 
-    return null;
+    return cloudRecord || null;
+  }
+
+  /**
+   * RESPALDO AUTOMÁTICO ANTES DE SUBIR UN ARCHIVO
+   * Guarda de forma automática e inmediata un snapshot en el Espacio #5 antes de procesar cualquier documento,
+   * permitiendo revertir y deshacer cualquier cambio si el archivo no era el esperado.
+   */
+  static async createAutoUploadBackup(fileName, category = 'MASTER', currentData = []) {
+    try {
+      const safeCat = category.toUpperCase();
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+      const dateStr = now.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit' });
+      const cleanFileName = (fileName || 'documento').replace(/\.[^/.]+$/, "");
+      const label = `⚡ Auto-Respaldo previo a "${cleanFileName}" (${dateStr} ${timeStr})`;
+
+      const AUTO_SLOT = 5;
+      if (safeCat === 'MASTER') {
+        const printersData = (currentData || []).map(p => ({
+          serial: (p.serial || p.serial_number || '').trim().toUpperCase(),
+          material: p.material || p.material_model || 'MODELO GENERAL',
+          internalNumber: p.internalNumber !== undefined ? p.internalNumber : (p.internal_number || null),
+          warehouseName: p.warehouseName || p.warehouse_name || 'Almacén 1',
+          warehouseRow: p.warehouseRow || p.warehouse_row || 'Sin Asignar',
+          warehouseSpace: p.warehouseSpace || p.warehouse_space || null,
+          systemStatus: p.systemStatus || 'Principal',
+          printerStatus: p.status || p.printerStatus || 'DISPONIBLE',
+          assignedAt: p.assignedAt || p.assigned_at || null
+        }));
+
+        if (printersData.length > 0) {
+          const cache = InventoryRepository.getMetadataCache();
+          await this.saveCheckpoint('MASTER', AUTO_SLOT, label, {
+            printers: printersData,
+            serialsCache: cache.serials || {}
+          }, printersData.length);
+          console.log(`✓ Auto-Respaldo de Maestro creado en Espacio #${AUTO_SLOT}: ${printersData.length} equipos.`);
+        }
+      } else {
+        const batchesData = (currentData || []).map(b => ({
+          id: b.id,
+          name: b.name,
+          folio: b.folio,
+          consecutiveNumber: b.consecutiveNumber,
+          status: b.status,
+          createdAt: b.createdAt,
+          expectedSeries: (b.expectedSeries || []).map(s => ({
+            serial: s.serial || s.serial_number,
+            material: s.material || s.material_model,
+            internalNumber: s.internalNumber || s.internal_number,
+            warehouseName: s.warehouseName || s.warehouse_name,
+            warehouseRow: s.warehouseRow || s.warehouse_row,
+            warehouseSpace: s.warehouseSpace || s.warehouse_space,
+            systemStatus: s.systemStatus || s.system_status,
+            printerStatus: s.printerStatus || s.printer_status,
+            isScanned: Boolean(s.isScanned || s.is_scanned),
+            scannedAt: s.scannedAt || s.scanned_at,
+            assignedAt: s.assignedAt || s.assigned_at
+          })),
+          unexpectedLogs: (b.unexpectedLogs || []).map(u => ({
+            scannedValue: u.scannedValue || u.scanned_value || String(u),
+            createdAt: u.createdAt || u.created_at
+          }))
+        }));
+
+        const totalItems = batchesData.reduce((acc, b) => acc + (b.expectedSeries?.length || 0), 0);
+        if (totalItems > 0 || batchesData.length > 0) {
+          const cache = InventoryRepository.getMetadataCache();
+          await this.saveCheckpoint('RECEPTIONS', AUTO_SLOT, label, {
+            batches: batchesData,
+            checklistsCache: cache.checklists || {}
+          }, totalItems);
+          console.log(`✓ Auto-Respaldo de Recepciones creado en Espacio #${AUTO_SLOT}: ${totalItems} series.`);
+        }
+      }
+    } catch (e) {
+      console.warn('Nota: no se pudo guardar el auto-respaldo previo a la carga:', e);
+    }
   }
 
   /**
@@ -456,8 +545,9 @@ export class CheckpointService {
           warehouse_name: p.warehouseName || 'Almacén 1',
           warehouse_row: p.warehouseRow || 'Sin Asignar',
           warehouse_space: p.warehouseSpace || null,
-          system_status: p.systemStatus || 'Principal',
-          printer_status: p.printerStatus || p.status || 'DISPONIBLE',
+          printer_status: (p.printerStatus && p.printerStatus.includes('|'))
+            ? p.printerStatus
+            : `${p.printerStatus || p.status || 'DISPONIBLE'}|${p.systemStatus || 'Principal'}`,
           assigned_at: p.assignedAt || new Date().toISOString(),
           is_scanned: true,
           scanned_at: p.assignedAt || new Date().toISOString()
@@ -588,8 +678,9 @@ export class CheckpointService {
               warehouse_name: s.warehouseName || s.warehouse_name || 'Almacén 1',
               warehouse_row: s.warehouseRow || s.warehouse_row || 'Sin Asignar',
               warehouse_space: s.warehouseSpace || s.warehouse_space || null,
-              system_status: s.systemStatus || s.system_status || 'Principal',
-              printer_status: s.printerStatus || s.printer_status || 'DISPONIBLE',
+              printer_status: (s.printerStatus || s.printer_status || 'DISPONIBLE').includes('|')
+                ? (s.printerStatus || s.printer_status)
+                : `${s.printerStatus || s.printer_status || 'DISPONIBLE'}|${s.systemStatus || s.system_status || 'Principal'}`,
               is_scanned: Boolean(s.isScanned || s.is_scanned),
               scanned_at: s.scannedAt || s.scanned_at || null,
               assigned_at: s.assignedAt || s.assigned_at || null

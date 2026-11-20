@@ -6,6 +6,7 @@ import { WarehouseMapController } from '../controllers/WarehouseMapController.js
 import WarehouseMapView from './WarehouseMapView.jsx';
 import WarehouseAssignmentView from './WarehouseAssignmentView.jsx';
 import CheckpointModal from './CheckpointModal.jsx';
+import { CheckpointService } from '../services/CheckpointService.js';
 import BajasTableViewModal from './BajasTableViewModal.jsx';
 
 export default function HomeView({ 
@@ -320,6 +321,9 @@ export default function HomeView({
       alert("No hay series válidas para guardar.");
       return;
     }
+
+    // Auto-respaldo de seguridad previo a la carga de documento de recepción
+    await CheckpointService.createAutoUploadBackup(pendingUploadData.fileName, 'RECEPTIONS', receptionBatches);
 
     if (uploadSaveMode === 'MERGE_EXISTING') {
       if (!uploadMergeTargetId) {
