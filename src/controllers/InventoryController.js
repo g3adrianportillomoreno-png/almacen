@@ -175,15 +175,27 @@ export class InventoryController {
       return;
     }
 
-    const dataRows = allPrinters.map((p) => ({
-      'Clave': p.material || '',
-      'Número de serie': p.serial || '',
-      'Número de equipo': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-      'Almacén': p.warehouseName || '',
-      'Fila': p.warehouseRow && p.warehouseRow !== 'Sin Asignar' ? p.warehouseRow : '',
-      'Espacio': p.warehouseSpace || '',
-      'Estado': p.systemStatus || 'Principal'
-    }));
+    const cache = InventoryRepository.getMetadataCache();
+    const cacheSerials = cache.serials || {};
+
+    const dataRows = allPrinters.map((p) => {
+      const serialKey = String(p.serial || '').trim().toUpperCase();
+      const meta = cacheSerials[serialKey] || {};
+      const wasRelocated = Boolean(p.wasRelocated || p.locationStatus === 'RELOCATED' || meta.wasRelocated || meta.locationStatus === 'RELOCATED');
+      const origLoc = p.originalLocation || meta.originalLocation || '';
+
+      return {
+        'Clave': p.material || '',
+        'Número de serie': p.serial || '',
+        'Número de equipo': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
+        'Almacén': p.warehouseName || meta.warehouseName || '',
+        'Fila': (p.warehouseRow && p.warehouseRow !== 'Sin Asignar') ? p.warehouseRow : (meta.warehouseRow && meta.warehouseRow !== 'Sin Asignar' ? meta.warehouseRow : ''),
+        'Espacio': p.warehouseSpace || meta.warehouseSpace || '',
+        'Estado': p.systemStatus || 'Principal',
+        'Auditoría / Modificado': wasRelocated ? 'SÍ - CAMBIÓ DE LUGAR' : 'NO - EN SU LUGAR',
+        'Ubicación Anterior': origLoc
+      };
+    });
 
     const wb = XLSX.utils.book_new();
 
@@ -196,7 +208,9 @@ export class InventoryController {
       { wch: 16 }, // Almacén
       { wch: 14 }, // Fila
       { wch: 16 }, // Espacio
-      { wch: 25 }  // Estado
+      { wch: 20 }, // Estado
+      { wch: 25 }, // Auditoría / Modificado
+      { wch: 30 }  // Ubicación Anterior
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, "INVENTARIO_ALMACEN");
@@ -407,17 +421,39 @@ export class InventoryController {
     }
     const hasMultipleDocs = docMap.size > 1;
 
+    const cache = InventoryRepository.getMetadataCache();
+    const cacheSerials = cache.serials || {};
+
+    // Calcular auditoría de cambios de lugar
+    let totalRelocated = 0;
+    let totalInPlace = 0;
+
+    presentes.forEach(p => {
+      const serialKey = String(p.serial || '').trim().toUpperCase();
+      const meta = cacheSerials[serialKey] || {};
+      const wasRel = Boolean(p.wasRelocated || p.locationStatus === 'RELOCATED' || meta.wasRelocated || meta.locationStatus === 'RELOCATED');
+      if (wasRel) {
+        totalRelocated++;
+      } else {
+        totalInPlace++;
+      }
+    });
+
     // 1. Hoja RESUMEN
     const resumenData = [
       { 'CONCEPTO': 'FOLIO', 'DETALLE': batch.folio || 'Sin Folio' },
       { 'CONCEPTO': 'DOCUMENTO / LOTE', 'DETALLE': batch.cleanName || batch.name || 'Sin Nombre' },
       { 'CONCEPTO': 'FECHA DE REGISTRO', 'DETALLE': batch.date || new Date().toLocaleDateString('es-MX') },
+      { 'CONCEPTO': 'FECHA Y HORA DE DESCARGA', 'DETALLE': new Date().toLocaleString('es-MX', { hour12: true }) },
       { 'CONCEPTO': 'ESTADO DEL CHECKLIST', 'DETALLE': estadoTexto },
       { 'CONCEPTO': 'TOTAL ESPERADAS', 'DETALLE': expected.length },
       { 'CONCEPTO': 'PRESENTES / ESCANEADAS', 'DETALLE': presentes.length },
       { 'CONCEPTO': 'FALTANTES', 'DETALLE': faltantes.length },
       { 'CONCEPTO': 'DADAS DE BAJA (SALIDAS)', 'DETALLE': bajas.length },
-      { 'CONCEPTO': 'ERRORES / FUERA DE LISTA', 'DETALLE': inesperadas.length }
+      { 'CONCEPTO': 'ERRORES / FUERA DE LISTA', 'DETALLE': inesperadas.length },
+      { 'CONCEPTO': '--- AUDITORÍA DE UBICACIONES ---', 'DETALLE': '' },
+      { 'CONCEPTO': '🟢 EQUIPOS CONFIRMADOS EN SU LUGAR (VERDE)', 'DETALLE': totalInPlace },
+      { 'CONCEPTO': '🟡 EQUIPOS QUE CAMBIARON DE LUGAR (AMARILLO)', 'DETALLE': totalRelocated }
     ];
 
     if (hasMultipleDocs) {
@@ -433,7 +469,7 @@ export class InventoryController {
     }
 
     const wsResumen = XLSX.utils.json_to_sheet(resumenData);
-    wsResumen['!cols'] = [{ wch: 32 }, { wch: 48 }];
+    wsResumen['!cols'] = [{ wch: 45 }, { wch: 48 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
     // Ordenar presentes y faltantes por documento para mantener separaciones claras
@@ -453,15 +489,23 @@ export class InventoryController {
 
     // 2. Hoja PRESENTES (Equipos escaneados correctamente)
     const dataPresentes = sortedPresentes.map((p, idx) => {
+      const serialKey = String(p.serial || '').trim().toUpperCase();
+      const meta = cacheSerials[serialKey] || {};
       const isBaja = p.isBaja || p.status === 'BAJA';
+      const wasRelocated = Boolean(p.wasRelocated || p.locationStatus === 'RELOCATED' || meta.wasRelocated || meta.locationStatus === 'RELOCATED');
+      const origLocation = p.originalLocation || meta.originalLocation || '';
+
       const row = {
         'NO.': idx + 1,
         'CLAVE': p.material || '',
         'NUMERO DE SERIE': p.serial || '',
         'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
-        'ALMACEN': p.warehouseName || 'Almacén 1',
-        'FILA': p.warehouseRow || '',
-        'ESPACIO': p.warehouseSpace || '',
+        'AUDITORÍA / ESTADO FÍSICO': wasRelocated ? '🟡 CAMBIÓ DE LUGAR (MODIFICADO)' : '🟢 TODO BIEN (EN SU LUGAR)',
+        'MODIFICADO': wasRelocated ? 'SÍ (AMARILLO)' : 'NO (VERDE)',
+        'ALMACEN': p.warehouseName || meta.warehouseName || 'Almacén 1',
+        'FILA': p.warehouseRow || meta.warehouseRow || '',
+        'ESPACIO': p.warehouseSpace || meta.warehouseSpace || '',
+        'UBICACIÓN ANTERIOR': origLocation || (wasRelocated ? 'Modificado durante auditoría' : 'Sin cambios'),
         'ESTADO': isBaja ? 'DADA DE BAJA' : (p.status || 'DISPONIBLE'),
         'FECHA DE BAJA': isBaja && p.bajaAt ? new Date(p.bajaAt).toLocaleString('es-MX') : ''
       };
@@ -477,9 +521,12 @@ export class InventoryController {
         'CLAVE': '',
         'NUMERO DE SERIE': 'SIN EQUIPOS ESCANEADOS',
         'NUMERO DE EQUIPO': '',
+        'AUDITORÍA / ESTADO FÍSICO': '',
+        'MODIFICADO': '',
         'ALMACEN': '',
         'FILA': '',
         'ESPACIO': '',
+        'UBICACIÓN ANTERIOR': '',
         'ESTADO': '',
         ...(hasMultipleDocs ? { 'DOCUMENTO DE ORIGEN': '' } : {})
       }]
@@ -489,9 +536,12 @@ export class InventoryController {
       { wch: 25 },
       { wch: 22 },
       { wch: 20 },
+      { wch: 34 },
+      { wch: 18 },
       { wch: 16 },
       { wch: 16 },
       { wch: 16 },
+      { wch: 32 },
       { wch: 16 },
       ...(hasMultipleDocs ? [{ wch: 32 }] : [])
     ];
@@ -649,6 +699,7 @@ export class InventoryController {
       bajaDate: sessionData.bajaDate,
       reason: sessionData.reason,
       operator: sessionData.operator,
+      requestedBy: sessionData.requestedBy,
       targetScope: sessionData.targetScope,
       targetLoteName: sessionData.targetLoteName
     });
@@ -753,7 +804,7 @@ export class InventoryController {
   }
 
   /**
-   * Genera y descarga el reporte en Excel de Bajas filtradas por rango de fechas
+   * Genera y descarga el reporte en Excel de Bajas filtradas por rango de fechas (ordenado de la más nueva a la más vieja)
    */
   static exportBajasByDateExcel(departures = [], startDate = '', endDate = '', filterLote = 'ALL') {
     if (!departures || departures.length === 0) {
@@ -764,7 +815,14 @@ export class InventoryController {
     const wb = XLSX.utils.book_new();
     const downloadTimeStr = new Date().toLocaleString('es-MX', { hour12: true });
 
-    const dataRows = departures.map((d, idx) => {
+    // Ordenar de la más nueva a la más vieja
+    const sortedDepartures = [...departures].sort((a, b) => {
+      const dateA = new Date(a.departure_date || a.bajaAt || 0).getTime();
+      const dateB = new Date(b.departure_date || b.bajaAt || 0).getTime();
+      return dateB - dateA;
+    });
+
+    const dataRows = sortedDepartures.map((d, idx) => {
       const depDate = d.departure_date ? new Date(d.departure_date) : (d.bajaAt ? new Date(d.bajaAt) : null);
       const isValid = depDate && !isNaN(depDate.getTime());
 
@@ -772,11 +830,12 @@ export class InventoryController {
         'NO.': idx + 1,
         'NÚMERO DE SERIE': d.serial || '',
         'MODELO': d.material || '',
-        '# EQUIPO': d.internal_number || '',
+        '# EQUIPO': d.internal_number || d.internalNumber || '',
+        'NOMBRE QUE SOLICITA': d.requested_by || d.requestedBy || 'Sin especificar',
         'LOTE / ORIGEN': d.batchFolio ? `${d.batchFolio} (${d.batchName || ''})` : (d.batchName || 'General'),
-        'ALMACÉN': d.warehouse_name || '',
-        'FILA': d.warehouse_row || '',
-        'ESPACIO': d.warehouse_space || '',
+        'ALMACÉN': d.warehouse_name || d.warehouseName || '',
+        'FILA': d.warehouse_row || d.warehouseRow || '',
+        'ESPACIO': d.warehouse_space || d.warehouseSpace || '',
         'MOTIVO': d.reason || 'Baja de almacén',
         'FECHA DE BAJA': isValid ? depDate.toLocaleDateString('es-MX') : '',
         'HORA EN QUE SE DIO DE BAJA': isValid ? depDate.toLocaleTimeString('es-MX', { hour12: true }) : '',
@@ -786,7 +845,7 @@ export class InventoryController {
 
     // Desglose por modelo
     const modelCounts = {};
-    departures.forEach(d => {
+    sortedDepartures.forEach(d => {
       const m = d.material || 'Sin Modelo';
       modelCounts[m] = (modelCounts[m] || 0) + 1;
     });
@@ -796,7 +855,7 @@ export class InventoryController {
       { 'CAMPO': 'FECHA Y HORA DE DESCARGA DEL REPORTE', 'VALOR': downloadTimeStr },
       { 'CAMPO': 'PERIODO', 'VALOR': `${startDate || 'Inicio'} hasta ${endDate || 'Hoy'}` },
       { 'CAMPO': 'FILTRO LOTE', 'VALOR': filterLote === 'ALL' ? 'Todos los Lotes' : filterLote },
-      { 'CAMPO': 'TOTAL EQUIPOS', 'VALOR': departures.length },
+      { 'CAMPO': 'TOTAL EQUIPOS', 'VALOR': sortedDepartures.length },
       { 'CAMPO': '', 'VALOR': '' },
       { 'CAMPO': '--- TOTALES POR MODELO ---', 'VALOR': 'CANTIDAD' },
       ...Object.entries(modelCounts).map(([m, c]) => ({ 'CAMPO': m, 'VALOR': c }))
@@ -812,6 +871,7 @@ export class InventoryController {
       { wch: 22 },
       { wch: 25 },
       { wch: 12 },
+      { wch: 26 },
       { wch: 28 },
       { wch: 14 },
       { wch: 14 },

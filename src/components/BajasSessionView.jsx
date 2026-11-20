@@ -83,14 +83,25 @@ export default function BajasSessionView({
     }
   }, [preselectedBatchId]);
 
-  // Cargar historial de bajas
+  // Cargar historial de bajas (ordenado de la más nueva a la más vieja)
   const loadHistoryData = async () => {
     setIsLoadingHistory(true);
     try {
       const deps = await InventoryController.getDeparturesHistory();
-      setDeparturesHistory(deps || []);
+      const sortedDeps = (deps || []).sort((a, b) => {
+        const timeA = a.departure_date || a.bajaAt ? new Date(a.departure_date || a.bajaAt).getTime() : 0;
+        const timeB = b.departure_date || b.bajaAt ? new Date(b.departure_date || b.bajaAt).getTime() : 0;
+        return timeB - timeA;
+      });
+      setDeparturesHistory(sortedDeps);
+
       const sess = InventoryController.getBajasSessions();
-      setBajasSessionsHistory(sess || []);
+      const sortedSess = (sess || []).sort((a, b) => {
+        const timeA = a.date || a.closedAt ? new Date(a.date || a.closedAt).getTime() : 0;
+        const timeB = b.date || b.closedAt ? new Date(b.date || b.closedAt).getTime() : 0;
+        return timeB - timeA;
+      });
+      setBajasSessionsHistory(sortedSess);
     } catch (e) {
       console.warn("Error cargando historial de bajas:", e);
     } finally {
@@ -275,13 +286,13 @@ export default function BajasSessionView({
     }
   };
 
-  // Filtrado del Historial de Bajas por Rango de Fechas
+  // Filtrado del Historial de Bajas por Rango de Fechas (ordenado de la más nueva a la más vieja)
   const filteredDepartures = useMemo(() => {
     const q = historySearchQuery.trim().toLowerCase();
     const startMs = historyStartDate ? new Date(`${historyStartDate}T00:00:00`).getTime() : 0;
     const endMs = historyEndDate ? new Date(`${historyEndDate}T23:59:59`).getTime() : Infinity;
 
-    return departuresHistory.filter(d => {
+    const filtered = departuresHistory.filter(d => {
       const depTime = d.departure_date ? new Date(d.departure_date).getTime() : 0;
       if (depTime < startMs || depTime > endMs) return false;
 
@@ -294,10 +305,17 @@ export default function BajasSessionView({
         const sMatch = (d.serial || '').toLowerCase().includes(q);
         const mMatch = (d.material || '').toLowerCase().includes(q);
         const rMatch = (d.reason || '').toLowerCase().includes(q);
-        if (!sMatch && !mMatch && !rMatch) return false;
+        const reqMatch = (d.requested_by || d.requestedBy || '').toLowerCase().includes(q);
+        if (!sMatch && !mMatch && !rMatch && !reqMatch) return false;
       }
 
       return true;
+    });
+
+    return filtered.sort((a, b) => {
+      const timeA = a.departure_date || a.bajaAt ? new Date(a.departure_date || a.bajaAt).getTime() : 0;
+      const timeB = b.departure_date || b.bajaAt ? new Date(b.departure_date || b.bajaAt).getTime() : 0;
+      return timeB - timeA;
     });
   }, [departuresHistory, historyStartDate, historyEndDate, historyLoteFilter, historySearchQuery]);
 
@@ -994,6 +1012,7 @@ export default function BajasSessionView({
                       <th className="py-2.5 px-3">Número de Serie</th>
                       <th className="py-2.5 px-3">Modelo</th>
                       <th className="py-2.5 px-3"># Equipo</th>
+                      <th className="py-2.5 px-3">Solicitado Por</th>
                       <th className="py-2.5 px-3">Lote / Origen</th>
                       <th className="py-2.5 px-3">Última Ubicación</th>
                       <th className="py-2.5 px-3">Motivo</th>
@@ -1031,6 +1050,12 @@ export default function BajasSessionView({
                                 #{d.internal_number}
                               </span>
                             ) : '-'}
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                              <span>👤</span>
+                              <span>{d.requested_by || d.requestedBy || 'Sin especificar'}</span>
+                            </span>
                           </td>
                           <td className="py-2 px-3 text-slate-600">{d.batchFolio || d.batchName || 'General'}</td>
                           <td className="py-2 px-3 text-slate-600">

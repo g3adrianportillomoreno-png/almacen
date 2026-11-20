@@ -218,28 +218,39 @@ function App() {
       prevBatches.map(batch => {
         if (batch.id === targetBatchId) {
           const serial = serie.toUpperCase();
-          if (!batch.completed.includes(serial)) {
-            const newCompleted = [...batch.completed, serial];
-            const updatedExpected = batch.expectedSeries.map(item => {
-              if (item.serial === serial) {
-                return {
-                  ...item,
-                  isScanned: true,
-                  warehouseRow: assignmentData?.warehouseRow || item.warehouseRow,
-                  internalNumber: assignmentData?.internalNumber !== undefined ? assignmentData.internalNumber : item.internalNumber
-                };
-              }
-              return item;
-            });
+          const newCompleted = batch.completed.includes(serial)
+            ? batch.completed
+            : [...batch.completed, serial];
 
-            const isDone = newCompleted.length >= batch.expectedSeries.length;
-            return {
-              ...batch,
-              completed: newCompleted,
-              expectedSeries: updatedExpected,
-              status: isDone ? 'completed' : batch.status
-            };
-          }
+          const updatedExpected = batch.expectedSeries.map(item => {
+            if (item.serial === serial) {
+              const wasRel = assignmentData?.wasRelocated !== undefined
+                ? assignmentData.wasRelocated
+                : item.wasRelocated;
+              const locStatus = assignmentData?.locationStatus || item.locationStatus || (wasRel ? 'RELOCATED' : 'VERIFIED_OK');
+
+              return {
+                ...item,
+                isScanned: true,
+                warehouseName: assignmentData?.warehouseName || item.warehouseName,
+                warehouseRow: assignmentData?.warehouseRow || item.warehouseRow,
+                warehouseSpace: assignmentData?.warehouseSpace !== undefined ? assignmentData.warehouseSpace : item.warehouseSpace,
+                internalNumber: assignmentData?.internalNumber !== undefined ? assignmentData.internalNumber : item.internalNumber,
+                wasRelocated: wasRel,
+                locationStatus: locStatus,
+                originalLocation: assignmentData?.originalLocation || item.originalLocation
+              };
+            }
+            return item;
+          });
+
+          const isDone = newCompleted.length >= batch.expectedSeries.length;
+          return {
+            ...batch,
+            completed: newCompleted,
+            expectedSeries: updatedExpected,
+            status: isDone ? 'completed' : batch.status
+          };
         }
         return batch;
       })

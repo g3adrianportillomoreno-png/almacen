@@ -704,26 +704,47 @@ export class InventoryRepository {
   }
 
   /**
-   * Obtiene el historial de sesiones de bajas registradas
+   * Obtiene el historial de sesiones de bajas registradas (ordenadas de más nueva a más vieja)
    */
   static getBajasSessionsHistory() {
     try {
       const raw = localStorage.getItem('cdm_bajas_sessions_v1');
       if (!raw) return [];
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.sort((a, b) => {
+          const timeA = a.date || a.closedAt ? new Date(a.date || a.closedAt).getTime() : 0;
+          const timeB = b.date || b.closedAt ? new Date(b.date || b.closedAt).getTime() : 0;
+          return timeB - timeA;
+        });
+      }
+      return [];
     } catch {
       return [];
     }
   }
 
   /**
-   * Guarda una sesión de bajas en el historial persistente
+   * Guarda una sesión de bajas en el historial persistente y en la nube
    */
   static saveBajasSession(sessionRecord) {
     try {
       const history = this.getBajasSessionsHistory();
-      const updated = [sessionRecord, ...history].slice(0, 200);
+      const updated = [sessionRecord, ...history.filter(h => h.id !== sessionRecord.id)].slice(0, 200);
       localStorage.setItem('cdm_bajas_sessions_v1', JSON.stringify(updated));
+
+      // Respaldo en la nube en warehouse_map_config
+      try {
+        supabase
+          .from('warehouse_map_config')
+          .upsert({
+            id: 'bajas_sessions_history',
+            layout: { sessions: updated },
+            updated_at: new Date().toISOString()
+          })
+          .then(() => {})
+          .catch(() => {});
+      } catch {}
     } catch (e) {
       console.warn('Error guardando historial de bajas:', e);
     }
@@ -780,7 +801,16 @@ export class InventoryRepository {
   /**
    * Asigna ubicación completa en almacén (Almacén, Fila y Espacio) y vincula datos
    */
-  static async assignPrinterLocation(serialNumber, { warehouseName = 'Almacén 1', warehouseRow = 'Fila 1', warehouseSpace = '', internalNumber = null, systemStatus = null }) {
+  static async assignPrinterLocation(serialNumber, {
+    warehouseName = 'Almacén 1',
+    warehouseRow = 'Fila 1',
+    warehouseSpace = '',
+    internalNumber = null,
+    systemStatus = null,
+    wasRelocated = false,
+    locationStatus = 'VERIFIED_OK',
+    originalLocation = null
+  }) {
     const serial = serialNumber.trim().toUpperCase();
     const cache = this.getMetadataCache();
     cache.serials = cache.serials || {};
@@ -793,6 +823,9 @@ export class InventoryRepository {
       ? internalNumber
       : (existing.internalNumber ?? null);
     const finalSystemStatus = systemStatus || existing.systemStatus || 'Principal';
+    const finalWasRelocated = wasRelocated || (existing.wasRelocated && wasRelocated !== false);
+    const finalLocStatus = locationStatus || existing.locationStatus || (finalWasRelocated ? 'RELOCATED' : 'VERIFIED_OK');
+    const finalOrigLoc = originalLocation || existing.originalLocation || null;
 
     cache.serials[serial] = {
       ...existing,
@@ -801,6 +834,9 @@ export class InventoryRepository {
       warehouseSpace: finalSpace,
       internalNumber: finalInternal,
       systemStatus: finalSystemStatus,
+      wasRelocated: finalWasRelocated,
+      locationStatus: finalLocStatus,
+      originalLocation: finalOrigLoc,
       isScanned: true,
       assignedAt: new Date().toISOString()
     };

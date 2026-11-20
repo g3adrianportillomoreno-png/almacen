@@ -369,9 +369,27 @@ export default function OperatorMobileView({
         if ((activeChecklist.completed.length + 1) >= activeChecklist.expectedSeries.length) {
           setTimeout(() => soundEffects.playChecklistCompleted(), 500);
         }
-        setSuccessMessage(`✓ ¡SÍ ESTÁ! [${matchInBatch.material || 'EQUIPO'}] Serie: ${matchInBatch.serial}`);
+
+        const currentWh = matchInBatch.warehouseName || 'Almacén 1';
+        const currentRow = matchInBatch.warehouseRow || 'Sin Asignar';
+        const currentSpace = matchInBatch.warehouseSpace || '';
+        const hasLoc = currentWh && currentWh !== 'Almacén 1' && currentRow && currentRow !== 'Sin Asignar';
+
+        setSuccessMessage(
+          hasLoc
+            ? `🟢 [TODO BIEN] Serie ${matchInBatch.serial} confirmada en ${currentWh} → ${currentRow} [${currentSpace || 'S/N'}]`
+            : `✓ ¡SÍ ESTÁ! [${matchInBatch.material || 'EQUIPO'}] Serie: ${matchInBatch.serial}`
+        );
+
         if (onCompleteTrailer) {
-          await onCompleteTrailer(matchInBatch.serial, null, activeChecklist.id);
+          await onCompleteTrailer(matchInBatch.serial, {
+            warehouseName: currentWh,
+            warehouseRow: currentRow,
+            warehouseSpace: currentSpace,
+            internalNumber: matchInBatch.internalNumber,
+            wasRelocated: false,
+            locationStatus: 'VERIFIED_OK'
+          }, activeChecklist.id);
         }
       } else {
         // Si no coincide exactamente, buscar opciones parecidas en el lote (ej. ceros al final en SANTI)
@@ -458,6 +476,59 @@ export default function OperatorMobileView({
     await executeDirectSave();
   };
 
+  // Confirmar que la impresora está exactamente en su lugar actual (Todo Bien)
+  const handleConfirmInPlace = async (targetPrinter = null) => {
+    const printer = targetPrinter || activePrinter;
+    if (!printer) return;
+    setIsSubmitting(true);
+    try {
+      const wh = printer.warehouseName || selectedWarehouse || 'Almacén 1';
+      const row = (printer.warehouseRow && printer.warehouseRow !== 'Sin Asignar') ? printer.warehouseRow : (selectedRow || 'Fila 1');
+      const sp = (printer.warehouseSpace || spaceInput || '').trim();
+      const numEquipo = printer.internalNumber;
+
+      // 1. Guardar como VERIFICADO_OK (sin cambio de lugar)
+      await InventoryController.assignPrinter(printer.serial, {
+        warehouseName: wh,
+        warehouseRow: row,
+        warehouseSpace: sp,
+        internalNumber: numEquipo,
+        wasRelocated: false,
+        locationStatus: 'VERIFIED_OK',
+        originalLocation: null
+      });
+
+      // 2. Si venía de checklist activo
+      const targetBatchId = activeChecklist?.id || printer.batchId;
+      if (targetBatchId && onCompleteTrailer) {
+        await onCompleteTrailer(printer.serial, {
+          warehouseName: wh,
+          warehouseRow: row,
+          warehouseSpace: sp,
+          internalNumber: numEquipo,
+          batchId: targetBatchId,
+          wasRelocated: false,
+          locationStatus: 'VERIFIED_OK',
+          originalLocation: null
+        }, targetBatchId);
+      }
+
+      soundEffects.playScanSuccess();
+      setSuccessMessage(`🟢 [TODO BIEN / EN SU LUGAR] Serie ${printer.serial} confirmada en ${wh} → ${row} [${sp || 'S/N'}]`);
+      setActivePrinter(null);
+      if (onAssignmentSaved) onAssignmentSaved();
+
+      if (burstCameraAfterSaveRef.current) {
+        setIsCameraActive(true);
+      }
+      setTimeout(() => scanInputRef.current?.focus(), 150);
+    } catch (err) {
+      alert("Error al confirmar ubicación: " + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const executeDirectSave = async () => {
     if (!activePrinter) return;
     setIsSubmitting(true);
@@ -465,23 +536,46 @@ export default function OperatorMobileView({
       const spaceVal = spaceInput.trim() || 'General';
       const numEquipo = internalNumberInput.trim() !== '' ? internalNumberInput.trim() : activePrinter.internalNumber;
 
+      // Detectar si cambió de lugar con respecto a su ubicación original
+      const origWh = (activePrinter.warehouseName || '').trim().toUpperCase();
+      const origRow = (activePrinter.warehouseRow || '').trim().toUpperCase();
+      const origSpace = (activePrinter.warehouseSpace || '').trim().toUpperCase();
+
+      const newWh = selectedWarehouse.trim().toUpperCase();
+      const newRow = selectedRow.trim().toUpperCase();
+      const newSpace = spaceVal.trim().toUpperCase();
+
+      const hasOrigLoc = origWh && origWh !== 'ALMACÉN 1' && origRow && origRow !== 'SIN ASIGNAR';
+      const isDifferent = (origWh !== newWh) || (origRow !== newRow) || (origSpace !== newSpace);
+
+      const wasRelocated = hasOrigLoc && isDifferent;
+      const originalLocationStr = hasOrigLoc ? `${activePrinter.warehouseName} → ${activePrinter.warehouseRow} [${activePrinter.warehouseSpace || 'S/N'}]` : null;
+      const locationStatus = wasRelocated ? 'RELOCATED' : 'VERIFIED_OK';
+
       // 1. Asignar en inventario
       await InventoryController.assignPrinter(activePrinter.serial, {
         warehouseName: selectedWarehouse,
         warehouseRow: selectedRow,
         warehouseSpace: spaceVal,
-        internalNumber: numEquipo
+        internalNumber: numEquipo,
+        wasRelocated,
+        locationStatus,
+        originalLocation: originalLocationStr
       });
 
       // 2. Si venía de un checklist activo, registrar escaneo en el lote
-      if (activeChecklist && onCompleteTrailer) {
+      const targetBatchId = activeChecklist?.id || activePrinter.batchId;
+      if (targetBatchId && onCompleteTrailer) {
         await onCompleteTrailer(activePrinter.serial, {
           warehouseName: selectedWarehouse,
           warehouseRow: selectedRow,
           warehouseSpace: spaceVal,
           internalNumber: numEquipo,
-          batchId: activeChecklist.id
-        }, activeChecklist.id);
+          batchId: targetBatchId,
+          wasRelocated,
+          locationStatus,
+          originalLocation: originalLocationStr
+        }, targetBatchId);
       }
 
       // 3. Asegurar que la fila y el almacén existan en el plano del mapa
@@ -490,7 +584,12 @@ export default function OperatorMobileView({
       }
 
       soundEffects.playLocationAssigned();
-      setSuccessMessage(`✓ [${activePrinter.material || 'MÁQUINA'}] Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} [${spaceVal}]`);
+
+      if (wasRelocated) {
+        setSuccessMessage(`🟡 [CAMBIÓ DE LUGAR] Serie ${activePrinter.serial} reubicada a ${selectedWarehouse} → ${selectedRow} [${spaceVal}] (Antes: ${originalLocationStr})`);
+      } else {
+        setSuccessMessage(`🟢 [TODO BIEN / EN SU LUGAR] Serie ${activePrinter.serial} guardada en ${selectedWarehouse} → ${selectedRow} [${spaceVal}]`);
+      }
 
       // Calcular siguiente espacio consecutivo y actualizar la secuencia activa
       const nextConsecutiveSpace = getNextSpace(spaceVal);
@@ -1312,39 +1411,94 @@ export default function OperatorMobileView({
 
                           {items.map((item, idx) => {
                             const isPresent = activeChecklist.completed.includes(item.serial);
+                            const wasRelocated = Boolean(item.wasRelocated || item.locationStatus === 'RELOCATED');
+                            const hasLocation = Boolean(item.warehouseRow && item.warehouseRow !== 'Sin Asignar');
+
                             return (
                               <div
                                 key={idx}
-                                className={`p-3 rounded-2xl border flex items-center justify-between ${
-                                  isPresent
-                                    ? 'bg-emerald-950/50 border-emerald-700/80'
-                                    : 'bg-slate-900 border-slate-700/80'
+                                className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition ${
+                                  !isPresent
+                                    ? 'bg-slate-900 border-slate-700/80'
+                                    : wasRelocated
+                                      ? 'bg-amber-950/40 border-amber-500/80 shadow-xs'
+                                      : 'bg-emerald-950/40 border-emerald-600/80 shadow-xs'
                                 }`}
                               >
-                                <div className="min-w-0 pr-2">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="font-mono font-bold text-white text-xs block">{item.serial}</span>
+                                <div className="min-w-0 pr-2 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-mono font-black text-white text-xs block">{item.serial}</span>
+                                    {item.internalNumber && (
+                                      <span className="bg-slate-800 text-slate-300 text-[10px] font-bold px-1.5 py-0.2 rounded">
+                                        #{item.internalNumber}
+                                      </span>
+                                    )}
                                     {item.documentName && checklistDistinctDocs.length > 1 && checklistDocFilter !== 'ALL' && (
                                       <span className="text-[9px] bg-slate-800 text-slate-400 px-1 py-0.2 rounded truncate max-w-[100px]">
                                         📄 {item.documentName}
                                       </span>
                                     )}
+                                    {isPresent && (
+                                      wasRelocated ? (
+                                        <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                                          <span>🟡</span>
+                                          <span>CAMBIÓ DE LUGAR</span>
+                                        </span>
+                                      ) : (
+                                        <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                                          <span>🟢</span>
+                                          <span>TODO BIEN</span>
+                                        </span>
+                                      )
+                                    )}
                                   </div>
                                   <span className="text-[11px] text-slate-400 block mt-0.5 truncate">{item.material || 'SIN MODELO'}</span>
+
+                                  {/* Ubicación física del equipo */}
+                                  <div className="text-[10px] font-mono mt-1 flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-slate-400">📍 Ubicación:</span>
+                                    <span className={wasRelocated ? 'text-amber-300 font-bold' : isPresent ? 'text-emerald-300 font-bold' : hasLocation ? 'text-slate-200 font-semibold' : 'text-slate-400 italic'}>
+                                      {item.warehouseName || 'Almacén 1'} → {item.warehouseRow || 'Sin Asignar'} [{item.warehouseSpace || 'S/N'}]
+                                    </span>
+                                    {item.originalLocation && wasRelocated && (
+                                      <span className="text-[9px] text-slate-400 italic">
+                                        (Antes: {item.originalLocation})
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                                  {/* Botón para Modificar Posición */}
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      handleSelectPrinter({
+                                        ...item,
+                                        batchId: activeChecklist.id
+                                      });
+                                    }}
+                                    className="text-[10px] font-bold px-2.5 py-1.5 rounded-xl border bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-600 active:scale-95 transition flex items-center gap-1 cursor-pointer"
+                                    title="Modificar posición / reubicar producto"
+                                  >
+                                    <span>✏️</span>
+                                    <span>{hasLocation ? 'Mover' : 'Ubicar'}</span>
+                                  </button>
+
                                   {isPresent ? (
-                                    <span className="text-[10px] font-bold px-2.5 py-1 rounded-xl border shrink-0 bg-emerald-600 text-white border-emerald-500">
-                                      ✓ SÍ ESTÁ
+                                    <span className="text-[10px] font-bold px-2.5 py-1.5 rounded-xl border shrink-0 bg-emerald-950 text-emerald-300 border-emerald-700">
+                                      ✓ Sí está
                                     </span>
                                   ) : (
                                     <button
                                       type="button"
                                       onClick={() => handleProcessScan(item.serial)}
-                                      className="text-[10px] font-bold px-2.5 py-1.5 rounded-xl border shrink-0 bg-slate-800 hover:bg-emerald-700 text-slate-300 hover:text-white border-slate-600 active:scale-95 transition"
+                                      className="text-[10px] font-bold px-2.5 py-1.5 rounded-xl border shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 active:scale-95 transition cursor-pointer"
                                     >
                                       Marcar ✓
                                     </button>
                                   )}
+                                </div>
                               </div>
                             );
                           })}
@@ -1450,6 +1604,28 @@ export default function OperatorMobileView({
                 )}
               </div>
             </div>
+
+            {/* UBICACIÓN ACTUAL REGISTRADA Y BOTÓN RÁPIDO "TODO BIEN" */}
+            {activePrinter.warehouseRow && activePrinter.warehouseRow !== 'Sin Asignar' && (
+              <div className="bg-slate-950 p-3.5 rounded-2xl border-2 border-emerald-500/50 flex items-center justify-between gap-3 shadow-inner">
+                <div>
+                  <span className="text-[10px] text-emerald-400 font-black uppercase tracking-wider block">
+                    📍 Ubicación Actual:
+                  </span>
+                  <span className="text-white font-mono font-black text-sm block mt-0.5">
+                    {activePrinter.warehouseName || 'Almacén 1'} → {activePrinter.warehouseRow} [{activePrinter.warehouseSpace || 'S/N'}]
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleConfirmInPlace(activePrinter)}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 flex items-center gap-1.5 cursor-pointer shrink-0"
+                >
+                  <span>🟢</span>
+                  <span>Todo Bien (Confirmar)</span>
+                </button>
+              </div>
+            )}
 
             {/* FORMULARIO TÁCTIL */}
             <form onSubmit={handleSaveLocation} className="space-y-3.5">
@@ -1687,6 +1863,8 @@ export default function OperatorMobileView({
                     ? 'Guardando...'
                     : collisionOccupant
                     ? '⚠️ Resolver Espacio Ocupado'
+                    : (activePrinter.warehouseRow && activePrinter.warehouseRow !== 'Sin Asignar')
+                    ? '🟡 Guardar Cambio de Posición'
                     : 'Confirmar y Colocar Equipo'}
                 </span>
               </button>
