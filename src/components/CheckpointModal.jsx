@@ -75,6 +75,12 @@ export default function CheckpointModal({
     setIsSaving(true);
     try {
       if (isMaster) {
+        if (!currentPrinters || currentPrinters.length === 0) {
+          alert('No se puede crear un punto de restauración vacío sin inventario cargado.');
+          setIsSaving(false);
+          return;
+        }
+
         // Snapshot de Maestro
         const printersData = (currentPrinters || []).map(p => ({
           serial: (p.serial || '').trim().toUpperCase(),
@@ -102,6 +108,12 @@ export default function CheckpointModal({
           printersData.length
         );
       } else {
+        if (!currentBatches || currentBatches.length === 0) {
+          alert('No se puede crear un punto de restauración vacío sin lotes de recepción.');
+          setIsSaving(false);
+          return;
+        }
+
         // Snapshot de Recepciones
         const batchesData = (currentBatches || []).map(b => ({
           id: b.id,
@@ -408,11 +420,14 @@ export default function CheckpointModal({
                             <>
                               <button
                                 type="button"
+                                disabled={!slot.itemCount || slot.itemCount === 0}
                                 onClick={() => handleStartRestore(slot)}
-                                className={`text-xs font-bold py-1.5 px-3 rounded-lg text-white shadow-2xs transition flex items-center gap-1 cursor-pointer ${
-                                  isMaster ? 'bg-purple-600 hover:bg-purple-500' : 'bg-amber-600 hover:bg-amber-500'
+                                className={`text-xs font-bold py-1.5 px-3 rounded-lg text-white shadow-2xs transition flex items-center gap-1 ${
+                                  !slot.itemCount || slot.itemCount === 0
+                                    ? 'bg-slate-300 cursor-not-allowed text-slate-500'
+                                    : (isMaster ? 'bg-purple-600 hover:bg-purple-500 cursor-pointer' : 'bg-amber-600 hover:bg-amber-500 cursor-pointer')
                                 }`}
-                                title="Regresar al estado guardado en este espacio"
+                                title={!slot.itemCount || slot.itemCount === 0 ? "Este espacio no contiene registros válidos para restaurar" : "Regresar al estado guardado en este espacio"}
                               >
                                 <span>↺</span>
                                 <span>Restaurar</span>

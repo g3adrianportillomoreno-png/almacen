@@ -401,6 +401,12 @@ export class CheckpointService {
 
     const restoredPrinters = checkpoint.data.printers;
 
+    // SEGURIDAD CRÍTICA:
+    // Nunca permitir restaurar un checkpoint vacío o incompleto que vaciaría el inventario maestro.
+    if (!restoredPrinters || !Array.isArray(restoredPrinters) || restoredPrinters.length < 100) {
+      throw new Error(`Operación cancelada por seguridad: El punto de restauración #${slotIndex} contiene solo ${restoredPrinters?.length || 0} equipos. Para evitar la pérdida accidental de datos, no se permite restaurar un respaldo vacío o incompleto.`);
+    }
+
     // 1. Obtener o crear el checklist contenedor 'Inventario Maestro'
     let defaultBatchId = null;
     try {
@@ -501,6 +507,11 @@ export class CheckpointService {
     }
 
     const restoredBatches = checkpoint.data.batches;
+
+    // SEGURIDAD CRÍTICA: No restaurar si el snapshot de recepciones está vacío
+    if (!restoredBatches || !Array.isArray(restoredBatches) || restoredBatches.length === 0) {
+      throw new Error(`Operación cancelada: El punto de restauración #${slotIndex} no contiene lotes de recepción guardados.`);
+    }
 
     // 1. Obtener los IDs de todos los checklists de recepción actuales (excluyendo el Maestro)
     let currentReceptionIds = [];
