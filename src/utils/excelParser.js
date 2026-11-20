@@ -1,6 +1,19 @@
 import * as XLSX from 'xlsx';
 import { PrinterModel } from '../models/PrinterModel.js';
 
+export function normalizePhysicalWarehouse(val) {
+  if (!val || typeof val !== 'string') return null;
+  const clean = val.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/^(almacen\s*1|alm\s*1|bodega\s*1)$/i.test(clean)) return 'Almacén 1';
+  if (/^(almacen\s*2|alm\s*2|bodega\s*2)$/i.test(clean)) return 'Almacén 2';
+  if (/^beta$/i.test(clean)) return 'BETA';
+  if (/^(alpha|alfa)$/i.test(clean)) return 'ALPHA';
+  if (/^delta$/i.test(clean)) return 'DELTA';
+  if (/^gama$/i.test(clean)) return 'GAMA';
+  if (/^bod2$/i.test(clean)) return 'BOD2';
+  return null;
+}
+
 function normalizeHeader(str) {
   if (typeof str !== 'string') return '';
   return str
@@ -88,7 +101,7 @@ export async function extractSeriesFromExcel(file) {
                 foundMaterial = colIdx;
               }
 
-              // 3. NÚMERO DE EQUIPO / SANTI / ECONÓMICO
+              // 3. NÚMERO DE EQUIPO / SANTI / ECONÓMICO (Búsqueda estricta para evitar falsos positivos con "nombre de equipo")
               else if (
                 norm === 'santi' ||
                 norm === 'no santi' ||
@@ -99,16 +112,21 @@ export async function extractSeriesFromExcel(file) {
                 norm === 'economico' ||
                 norm === 'no economico' ||
                 norm === 'no. economico' ||
+                norm === 'numero economico' ||
+                norm === 'num economico' ||
                 norm === 'numero de equipo' || 
                 norm === 'no de equipo' || 
                 norm === 'no equipo' || 
                 norm === 'num de equipo' || 
                 norm === 'numero equipo' || 
+                norm === 'num equipo' || 
+                norm === 'no. equipo' ||
+                norm === 'num. equipo' ||
                 norm === 'equipo' || 
-                norm.includes('santi') ||
-                norm.includes('equipo') || 
-                norm.includes('internal number') ||
-                norm.includes('economico')
+                norm === 'internal number' ||
+                norm === 'no control' ||
+                norm === 'numero control' ||
+                norm === 'no. control'
               ) {
                 foundInternal = colIdx;
               }
@@ -122,10 +140,12 @@ export async function extractSeriesFromExcel(file) {
                 norm === 'area' || 
                 norm === 'proceso' || 
                 norm === 'etapa' ||
-                norm.includes('estado') || 
-                norm.includes('status') || 
-                norm.includes('estatus') ||
-                norm.includes('proceso')
+                norm === 'estado equipo' ||
+                norm === 'estatus equipo' ||
+                norm === 'estado del equipo' ||
+                norm === 'estatus del equipo' ||
+                norm === 'estado almacen' ||
+                norm === 'estatus almacen'
               ) {
                 foundStatus = colIdx;
               }
@@ -136,8 +156,8 @@ export async function extractSeriesFromExcel(file) {
                 norm === 'almacenes' || 
                 norm === 'bodega' ||
                 norm === 'bodegas' ||
-                norm.includes('almacen') ||
-                norm.includes('bodega')
+                norm === 'almacen fisico' ||
+                norm === 'bodega fisica'
               ) {
                 foundWarehouse = colIdx;
               }
@@ -146,7 +166,8 @@ export async function extractSeriesFromExcel(file) {
               else if (
                 norm === 'fila' || 
                 norm === 'filas' || 
-                norm.includes('fila')
+                norm === 'fila fisica' ||
+                norm === 'rack'
               ) {
                 foundRow = colIdx;
               }
@@ -156,7 +177,8 @@ export async function extractSeriesFromExcel(file) {
                 norm === 'espacio' || 
                 norm === 'espacios' || 
                 norm === 'posicion' || 
-                norm.includes('espacio')
+                norm === 'posiciones' ||
+                norm === 'slot'
               ) {
                 foundSpace = colIdx;
               }
@@ -222,7 +244,6 @@ export async function extractSeriesFromExcel(file) {
 
         const items = [];
         const seenSerials = new Set();
-        let dominantModel = null;
 
         for (let i = headerRowIndex + 1; i < rows.length; i++) {
           const row = rows[i];
@@ -230,15 +251,9 @@ export async function extractSeriesFromExcel(file) {
 
           const serieRaw = row[serialIndex];
           const hasMaterialCol = materialIndex !== -1;
-          let materialRaw = (hasMaterialCol && row[materialIndex] !== undefined && row[materialIndex] !== null && String(row[materialIndex]).trim() !== '')
+          const materialRaw = (hasMaterialCol && row[materialIndex] !== undefined && row[materialIndex] !== null && String(row[materialIndex]).trim() !== '')
             ? String(row[materialIndex]).trim().toUpperCase()
             : null;
-
-          if (materialRaw) {
-            dominantModel = materialRaw;
-          } else if (dominantModel) {
-            materialRaw = dominantModel;
-          }
 
           const internalNumRaw = internalNumberIndex !== -1 ? row[internalNumberIndex] : null;
           const warehouseRaw = warehouseIndex !== -1 ? row[warehouseIndex] : null;
@@ -261,27 +276,33 @@ export async function extractSeriesFromExcel(file) {
                 ? String(internalNumRaw).trim()
                 : null;
 
-              let cleanWh = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
+              const rawWhStr = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
+              const cleanWh = normalizePhysicalWarehouse(rawWhStr);
               let systemStatus = (statusRaw && String(statusRaw).trim() !== '') ? PrinterModel.normalizeSystemStatus(statusRaw) : null;
 
-              // BLINDAJE CONTRA EXPORTACIONES DE SANTI:
-              // En SANTI, la columna "Almacén" en realidad indica el estatus contable o proceso del equipo
-              // (ej. 'Seminuevos', 'Refacciones para Operaciones'), NO la ubicación física en bodega.
-              // Si detectamos esto, lo asignamos a systemStatus y protegemos el almacén físico para que no se sobreescriba.
-              if (cleanWh && (/seminuevo/i.test(cleanWh) || /refaccion/i.test(cleanWh) || /operacion/i.test(cleanWh))) {
+              // Si vino un valor en la columna de almacén que no es una bodega física real (ej. 'Seminuevos', 'Refacciones para Operaciones'),
+              // se trata del estatus contable de SANTI y se deriva a systemStatus sin tocar la bodega física.
+              if (rawWhStr && !cleanWh) {
                 if (!systemStatus || systemStatus === PrinterModel.SYSTEM_STATE_PRINCIPAL) {
-                  systemStatus = PrinterModel.normalizeSystemStatus(cleanWh);
+                  systemStatus = PrinterModel.normalizeSystemStatus(rawWhStr);
                 }
-                cleanWh = null; // No tomar como bodega física
               }
+
+              const rowFormatted = rowRaw && String(rowRaw).trim() !== '' && String(rowRaw).trim() !== 'Sin Asignar'
+                ? String(rowRaw).trim()
+                : null;
+
+              const spaceFormatted = spaceRaw !== null && spaceRaw !== undefined && String(spaceRaw).trim() !== ''
+                ? String(spaceRaw).trim()
+                : null;
 
               items.push({
                 serial: serialString,
-                material: materialRaw, // null si la columna de modelo no vino en el Excel
+                material: materialRaw, // null si esta fila no trajo modelo (no inventar ni arrastrar de otras filas)
                 internalNumber: internalNumberFormatted,
-                warehouseName: cleanWh,
-                warehouseRow: rowRaw && String(rowRaw).trim() !== '' ? String(rowRaw).trim() : null,
-                warehouseSpace: spaceRaw !== null && spaceRaw !== undefined && String(spaceRaw).trim() !== '' ? String(spaceRaw).trim() : null,
+                warehouseName: cleanWh, // null si no es un almacén físico real
+                warehouseRow: rowFormatted, // null si no vino fila
+                warehouseSpace: spaceFormatted, // null si no vino espacio
                 systemStatus: systemStatus
               });
             }
