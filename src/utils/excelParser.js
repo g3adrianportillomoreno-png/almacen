@@ -261,8 +261,19 @@ export async function extractSeriesFromExcel(file) {
                 ? String(internalNumRaw).trim()
                 : null;
 
-              const cleanWh = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
-              const systemStatus = (statusRaw && String(statusRaw).trim() !== '') ? PrinterModel.normalizeSystemStatus(statusRaw) : null;
+              let cleanWh = warehouseRaw && String(warehouseRaw).trim() !== '' ? String(warehouseRaw).trim() : null;
+              let systemStatus = (statusRaw && String(statusRaw).trim() !== '') ? PrinterModel.normalizeSystemStatus(statusRaw) : null;
+
+              // BLINDAJE CONTRA EXPORTACIONES DE SANTI:
+              // En SANTI, la columna "Almacén" en realidad indica el estatus contable o proceso del equipo
+              // (ej. 'Seminuevos', 'Refacciones para Operaciones'), NO la ubicación física en bodega.
+              // Si detectamos esto, lo asignamos a systemStatus y protegemos el almacén físico para que no se sobreescriba.
+              if (cleanWh && (/seminuevo/i.test(cleanWh) || /refaccion/i.test(cleanWh) || /operacion/i.test(cleanWh))) {
+                if (!systemStatus || systemStatus === PrinterModel.SYSTEM_STATE_PRINCIPAL) {
+                  systemStatus = PrinterModel.normalizeSystemStatus(cleanWh);
+                }
+                cleanWh = null; // No tomar como bodega física
+              }
 
               items.push({
                 serial: serialString,

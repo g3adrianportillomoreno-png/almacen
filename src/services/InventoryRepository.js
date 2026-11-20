@@ -1274,11 +1274,17 @@ export class InventoryRepository {
       if (!serialUpper || serialsSet.has(serialUpper)) continue;
       serialsSet.add(serialUpper);
 
+      const isVirtualWh = (wh) => !wh || /seminuevo/i.test(wh) || /refaccion/i.test(wh) || /operacion/i.test(wh);
       const hasExplicitInternal = item.internalNumber !== undefined && item.internalNumber !== null && String(item.internalNumber).trim() !== '';
-      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '');
+      const hasExplicitWh = Boolean(item.warehouseName && String(item.warehouseName).trim() !== '' && !isVirtualWh(item.warehouseName));
       const hasExplicitRow = Boolean(item.warehouseRow && String(item.warehouseRow).trim() !== '' && String(item.warehouseRow).trim() !== 'Sin Asignar');
       const hasExplicitSpace = Boolean(item.warehouseSpace !== null && item.warehouseSpace !== undefined && String(item.warehouseSpace).trim() !== '');
-      const hasExplicitSystemStatus = Boolean(item.systemStatus && String(item.systemStatus).trim() !== '');
+      
+      let incomingSysStatus = item.systemStatus;
+      if (!incomingSysStatus && item.warehouseName && isVirtualWh(item.warehouseName)) {
+        incomingSysStatus = /refaccion|operacion/i.test(item.warehouseName) ? 'Refacciones' : 'Seminuevos';
+      }
+      const hasExplicitSystemStatus = Boolean(incomingSysStatus && String(incomingSysStatus).trim() !== '');
       const hasExplicitMaterial = Boolean(
         item.material &&
         String(item.material).trim() !== '' &&
@@ -1294,7 +1300,7 @@ export class InventoryRepository {
         rawWh: hasExplicitWh ? String(item.warehouseName).trim() : null,
         rawRow: hasExplicitRow ? String(item.warehouseRow).trim() : null,
         rawSpace: hasExplicitSpace ? String(item.warehouseSpace).trim() : null,
-        rawSystemStatus: hasExplicitSystemStatus ? String(item.systemStatus).trim() : null
+        rawSystemStatus: hasExplicitSystemStatus ? String(incomingSysStatus).trim() : null
       });
     }
 
@@ -1353,8 +1359,9 @@ export class InventoryRepository {
               updatePayload.internal_number = numVal;
             }
 
-            // 3. Ubicación física: SOLO si vino explícitamente en el archivo
-            if (c.rawWh) {
+            // 3. Ubicación física: SOLO si vino explícitamente en el archivo y no es almacén virtual de SANTI
+            const isVirtualWhVal = (wh) => !wh || /seminuevo/i.test(wh) || /refaccion/i.test(wh) || /operacion/i.test(wh);
+            if (c.rawWh && !isVirtualWhVal(c.rawWh)) {
               updatePayload.warehouse_name = c.rawWh;
             }
             if (c.rawRow && c.rawRow !== 'Sin Asignar') {
@@ -1374,7 +1381,7 @@ export class InventoryRepository {
             const updatedCache = { ...localCached };
             if (c.rawMaterial) updatedCache.material = c.rawMaterial;
             if (c.rawInternal !== null) updatedCache.internalNumber = c.rawInternal;
-            if (c.rawWh) updatedCache.warehouseName = c.rawWh;
+            if (c.rawWh && !isVirtualWhVal(c.rawWh)) updatedCache.warehouseName = c.rawWh;
             if (c.rawRow && c.rawRow !== 'Sin Asignar') updatedCache.warehouseRow = c.rawRow;
             if (c.rawSpace !== null) updatedCache.warehouseSpace = c.rawSpace;
             if (c.rawSystemStatus) updatedCache.systemStatus = c.rawSystemStatus;
@@ -1393,7 +1400,8 @@ export class InventoryRepository {
             added++;
             if (defaultBatchId) {
               const numVal = c.rawInternal !== null && !isNaN(Number(c.rawInternal)) ? Number(c.rawInternal) : null;
-              const whVal = c.rawWh || 'Almacén 1';
+              const isVirtualWhVal = (wh) => !wh || /seminuevo/i.test(wh) || /refaccion/i.test(wh) || /operacion/i.test(wh);
+              const whVal = (c.rawWh && !isVirtualWhVal(c.rawWh)) ? c.rawWh : 'Almacén 1';
               const rowVal = c.rawRow || 'Sin Asignar';
               const spaceVal = c.rawSpace !== null ? c.rawSpace : '';
               const sysStatus = c.rawSystemStatus || 'Principal';
