@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { PrinterModel } from '../models/PrinterModel.js';
+import { detectChecklistType, parseConsumablesRows } from './consumablesChecklistParser.js';
 
 export function normalizePhysicalWarehouse(val) {
   if (!val || typeof val !== 'string') return null;
@@ -38,6 +39,15 @@ export async function extractSeriesFromExcel(file) {
         const worksheet = workbook.Sheets[firstSheetName];
         
         const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        // Detección automática de Checklist de Consumibles (Factura comercial con Barcode, OEM Ref, cantidades)
+        const checklistType = detectChecklistType(rows);
+        if (checklistType === 'CONSUMIBLES') {
+          const parsed = parseConsumablesRows(rows, file.name);
+          parsed.isConsumables = true;
+          resolve(parsed);
+          return;
+        }
         
         let serialIndex = -1;
         let materialIndex = -1;

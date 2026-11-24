@@ -20,6 +20,14 @@ export default function ConsumiblesOperatorScanView() {
   const [showManualLinkInput, setShowManualLinkInput] = useState(false);
   const [additionalBarcodeInput, setAdditionalBarcodeInput] = useState('');
 
+  // Estados para modificación y auditoría de ubicación física del producto
+  const [isEditingLocation, setIsEditingLocation] = useState(false);
+  const [editSeccion, setEditSeccion] = useState('');
+  const [editAnaquel, setEditAnaquel] = useState('');
+  const [editEspacio, setEditEspacio] = useState('');
+  const [editAlmacen, setEditAlmacen] = useState('Principal');
+  const [operatorName, setOperatorName] = useState('Operador');
+
   const scanInputRef = useRef(null);
 
   useEffect(() => {
@@ -71,15 +79,110 @@ export default function ConsumiblesOperatorScanView() {
     setCandidates([]);
     setUnlinkedCode(null);
     setScanInput('');
+    setIsEditingLocation(false);
+    setEditSeccion(item.seccion || '');
+    setEditAnaquel(item.anaquel || '');
+    setEditEspacio(item.espacio || '');
+    setEditAlmacen(item.almacen || 'Principal');
     showToast('success', `✓ Ubicación: ${item.seccion || 'S/N'} [Anaquel: ${item.anaquel || 'S/N'}]`);
 
-    setScanHistory(prev => [
-      {
-        item,
-        timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true })
-      },
-      ...prev.filter(h => h.item.id !== item.id)
-    ].slice(0, 15));
+    setScanHistory(prev => {
+      const existing = prev.find(h => h.item.id === item.id);
+      return [
+        {
+          item,
+          status: existing?.status || item.locationStatus || 'UNCHECKED',
+          wasChanged: existing?.wasChanged || (item.locationStatus === 'RELOCATED'),
+          prevLocationStr: existing?.prevLocationStr || null,
+          timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
+          operator: operatorName
+        },
+        ...prev.filter(h => h.item.id !== item.id)
+      ].slice(0, 30);
+    });
+  };
+
+  // Confirmar que la ubicación actual está correcta (marca VERDE)
+  const handleConfirmLocationOk = async (item) => {
+    if (!item) return;
+    soundEffects.playScanSuccess();
+    try {
+      const result = await ConsumiblesController.updateLocation(item.id, {
+        seccion: item.seccion,
+        anaquel: item.anaquel,
+        espacio: item.espacio,
+        almacen: item.almacen
+      }, operatorName);
+
+      const verifiedItem = result.item || { ...item, locationStatus: 'VERIFIED_OK' };
+      setActiveItem(verifiedItem);
+      setCatalog(prev => prev.map(c => c.id === item.id ? verifiedItem : c));
+
+      setScanHistory(prev => [
+        {
+          item: verifiedItem,
+          status: 'VERIFIED_OK',
+          wasChanged: false,
+          timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
+          operator: operatorName
+        },
+        ...prev.filter(h => h.item.id !== item.id)
+      ]);
+      showToast('success', `✓ Ubicación confirmada: Todo en orden (${item.seccion || 'S/N'} [${item.anaquel || 'S/N'}])`);
+    } catch (e) {
+      console.error('Error confirmando ubicación:', e);
+      showToast('error', 'Error al confirmar la ubicación.');
+    }
+  };
+
+  // Guardar reubicación modificada (marca AMARILLA)
+  const handleSaveModifiedLocation = async () => {
+    if (!activeItem) return;
+    try {
+      const prevLocStr = `${activeItem.seccion || 'S/N'} [${activeItem.anaquel || 'S/N'} - ${activeItem.espacio || 'S/N'}]`;
+      const result = await ConsumiblesController.updateLocation(activeItem.id, {
+        seccion: editSeccion.trim().toUpperCase(),
+        anaquel: editAnaquel.trim().toUpperCase(),
+        espacio: editEspacio.trim().toUpperCase(),
+        almacen: editAlmacen.trim()
+      }, operatorName);
+
+      const updated = result.item || activeItem;
+      setActiveItem(updated);
+      setCatalog(prev => prev.map(c => c.id === activeItem.id ? updated : c));
+      setIsEditingLocation(false);
+
+      soundEffects.playScanSuccess();
+      setScanHistory(prev => [
+        {
+          item: updated,
+          status: result.wasChanged ? 'RELOCATED' : 'VERIFIED_OK',
+          wasChanged: result.wasChanged,
+          prevLocationStr,
+          timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
+          operator: operatorName
+        },
+        ...prev.filter(h => h.item.id !== activeItem.id)
+      ]);
+
+      if (result.wasChanged) {
+        showToast('warning', `⚠️ ¡Ubicación reasignada! Se cambió de lugar a ${updated.seccion} [${updated.anaquel} - ${updated.espacio}]`);
+      } else {
+        showToast('success', `✓ Misma ubicación guardada y confirmada.`);
+      }
+    } catch (e) {
+      console.error('Error guardando nueva ubicación:', e);
+      showToast('error', 'Error al modificar la ubicación.');
+    }
+  };
+
+  // Exportar Excel de auditoría del operador
+  const handleExportAuditExcel = () => {
+    if (scanHistory.length === 0) {
+      alert("No hay consumibles revisados en la sesión actual.");
+      return;
+    }
+    ConsumiblesController.exportOperatorAudit(scanHistory);
   };
 
   const handleProcessScan = (code) => {
@@ -428,6 +531,23 @@ export default function ConsumiblesOperatorScanView() {
               <span className="bg-slate-800 text-slate-300 text-xs font-bold px-2.5 py-0.5 rounded-lg border border-slate-700">
                 {activeItem.categoria || 'Consumible'}
               </span>
+
+              {/* Marca de Verificación Verde o Amarillo si cambió de lugar */}
+              {activeItem.locationStatus === 'RELOCATED' ? (
+                <span className="bg-amber-400 text-slate-950 font-black text-xs px-3 py-1 rounded-xl shadow-md border border-amber-300 flex items-center gap-1 animate-pulse">
+                  <span>⚠️</span>
+                  <span>CAMBIÓ DE LUGAR (MODIFICADA)</span>
+                </span>
+              ) : activeItem.locationStatus === 'VERIFIED_OK' ? (
+                <span className="bg-emerald-500 text-white font-black text-xs px-3 py-1 rounded-xl shadow-md border border-emerald-400 flex items-center gap-1">
+                  <span>✓</span>
+                  <span>ESTÁ BIEN TODO (UBICACIÓN CORRECTA)</span>
+                </span>
+              ) : (
+                <span className="bg-slate-800 text-slate-400 font-bold text-[11px] px-2.5 py-1 rounded-xl border border-slate-700">
+                  Pendiente de revisión
+                </span>
+              )}
             </div>
             <h1 className="text-base sm:text-lg font-black text-white leading-tight">
               {activeItem.nombre}
@@ -447,10 +567,28 @@ export default function ConsumiblesOperatorScanView() {
           </div>
 
           {/* UBICACIÓN FÍSICA GIGANTE */}
-          <div className="bg-gradient-to-br from-slate-950 to-slate-900 border-2 border-red-500/50 rounded-2xl p-4 flex flex-col gap-2 shadow-inner">
-            <div className="text-[11px] font-black uppercase text-red-400 tracking-wider flex items-center gap-1.5">
-              <span>📍</span>
-              <span>Ubicación en Almacén ({activeItem.almacen || 'Principal'})</span>
+          <div className={`border-2 rounded-2xl p-4 flex flex-col gap-2 shadow-inner transition-colors ${
+            activeItem.locationStatus === 'RELOCATED'
+              ? 'bg-amber-950/40 border-amber-500'
+              : activeItem.locationStatus === 'VERIFIED_OK'
+              ? 'bg-emerald-950/40 border-emerald-500'
+              : 'bg-gradient-to-br from-slate-950 to-slate-900 border-red-500/50'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div className="text-[11px] font-black uppercase text-red-400 tracking-wider flex items-center gap-1.5">
+                <span>📍</span>
+                <span>Ubicación en Almacén ({activeItem.almacen || 'Principal'})</span>
+              </div>
+              {activeItem.locationStatus === 'RELOCATED' && (
+                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2 py-0.5 rounded uppercase">
+                  Amarillo: Reubicada
+                </span>
+              )}
+              {activeItem.locationStatus === 'VERIFIED_OK' && (
+                <span className="text-[10px] bg-emerald-600 text-white font-black px-2 py-0.5 rounded uppercase">
+                  Verde: Correcta
+                </span>
+              )}
             </div>
 
             <div className="grid grid-cols-3 gap-2 text-center mt-1">
@@ -476,12 +614,139 @@ export default function ConsumiblesOperatorScanView() {
               </div>
             </div>
 
+            {activeItem.previousLocation && (
+              <div className="bg-slate-900/90 border border-amber-500/50 rounded-xl p-2 text-xs text-amber-300 mt-1 flex items-center justify-between">
+                <span>Ubicación previa antes de reubicar:</span>
+                <strong className="font-mono">
+                  {activeItem.previousLocation.seccion || 'S/N'} [{activeItem.previousLocation.anaquel || 'S/N'} - {activeItem.previousLocation.espacio || 'S/N'}]
+                </strong>
+              </div>
+            )}
+
             {(!activeItem.seccion && !activeItem.anaquel && !activeItem.espacio) && (
               <p className="text-xs text-rose-400 font-bold text-center mt-1">
                 ⚠️ Sin ubicación asignada en anaqueles.
               </p>
             )}
           </div>
+
+          {/* BOTONES DE ACCIÓN: CONFIRMAR VERDE O MODIFICAR AMARILLO */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              onClick={() => handleConfirmLocationOk(activeItem)}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs py-3 px-4 rounded-xl shadow-md transition flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
+            >
+              <span className="text-base">✓</span>
+              <span>Confirmar Ubicación (Está bien todo)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setEditSeccion(activeItem.seccion || '');
+                setEditAnaquel(activeItem.anaquel || '');
+                setEditEspacio(activeItem.espacio || '');
+                setEditAlmacen(activeItem.almacen || 'Principal');
+                setIsEditingLocation(true);
+              }}
+              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs py-3 px-4 rounded-xl shadow-md transition flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
+            >
+              <span className="text-base">✏️</span>
+              <span>Modificar Posición (Cambiar de lugar)</span>
+            </button>
+          </div>
+
+          {/* FORMULARIO INLINE PARA MODIFICAR POSICIÓN */}
+          {isEditingLocation && (
+            <div className="bg-gradient-to-br from-amber-950/70 to-slate-900 border-2 border-amber-500 rounded-2xl p-4 flex flex-col gap-3 animate-in fade-in">
+              <div className="flex items-center justify-between border-b border-amber-500/30 pb-2">
+                <span className="text-xs font-black text-amber-400 uppercase flex items-center gap-1.5">
+                  <span>📍</span>
+                  <span>Modificar Posición del Producto (Se marcará en Amarillo)</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingLocation(false)}
+                  className="text-slate-400 hover:text-white text-xs px-2 py-0.5 bg-slate-800 rounded-lg"
+                >
+                  ✕ Cancelar
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Sección:
+                  </label>
+                  <input
+                    type="text"
+                    value={editSeccion}
+                    onChange={(e) => setEditSeccion(e.target.value.toUpperCase())}
+                    placeholder="Ej. GAMA, DELTA"
+                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Anaquel:
+                  </label>
+                  <input
+                    type="text"
+                    value={editAnaquel}
+                    onChange={(e) => setEditAnaquel(e.target.value.toUpperCase())}
+                    placeholder="Ej. B03, C01"
+                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Espacio:
+                  </label>
+                  <input
+                    type="text"
+                    value={editEspacio}
+                    onChange={(e) => setEditEspacio(e.target.value.toUpperCase())}
+                    placeholder="Ej. 02, 05"
+                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                    Almacén:
+                  </label>
+                  <input
+                    type="text"
+                    value={editAlmacen}
+                    onChange={(e) => setEditAlmacen(e.target.value)}
+                    placeholder="Ej. Principal"
+                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-amber-400"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-amber-500/20">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingLocation(false)}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveModifiedLocation}
+                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow-md transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>💾</span>
+                  <span>Guardar Nueva Posición</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* CUÁNTOS DEBE HABER (EXISTENCIAS GIGANTES) */}
           <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
@@ -663,40 +928,95 @@ export default function ConsumiblesOperatorScanView() {
         </div>
       )}
 
-      {/* HISTORIAL RECIENTE DE ESCANEOS EN ESTA SESIÓN */}
+      {/* HISTORIAL Y AUDITORÍA DE REVISIÓN EN ESTA SESIÓN */}
       {scanHistory.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase">
-              Escaneos Recientes ({scanHistory.length})
-            </span>
-            <button
-              onClick={() => setScanHistory([])}
-              className="text-[10px] text-rose-400 hover:underline font-bold"
-            >
-              Borrar historial
-            </button>
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-5 flex flex-col gap-3 shadow-xl">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-black text-white">Auditoría de Ubicaciones</span>
+                <span className="bg-slate-800 text-slate-300 text-[11px] font-bold px-2 py-0.5 rounded-md">
+                  {scanHistory.length} revisados
+                </span>
+                <span className="bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-black px-2 py-0.5 rounded-md">
+                  ✓ {scanHistory.filter(h => !h.wasChanged && h.status === 'VERIFIED_OK').length} Correctos (Verde)
+                </span>
+                <span className="bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-black px-2 py-0.5 rounded-md">
+                  ⚠️ {scanHistory.filter(h => h.wasChanged || h.status === 'RELOCATED').length} Modificados (Amarillo)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Los consumibles modificados quedan marcados en amarillo en pantalla y en el reporte Excel.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleExportAuditExcel}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-3.5 py-2 rounded-xl transition shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
+                title="Descargar archivo Excel oficial marcando en amarillo los modificados"
+              >
+                <span>📥</span>
+                <span>Descargar Excel de Revisión</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScanHistory([])}
+                className="text-[11px] text-slate-400 hover:text-rose-400 px-2 py-1 bg-slate-800 rounded-lg cursor-pointer"
+              >
+                Limpiar
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
-            {scanHistory.map((h, idx) => (
-              <button
-                key={idx}
-                onClick={() => setActiveItem(h.item)}
-                className="bg-slate-800/60 hover:bg-slate-800 p-2 rounded-xl border border-slate-800 text-left transition flex items-center justify-between text-xs"
-              >
-                <div className="min-w-0 pr-2">
-                  <span className="font-mono font-bold text-emerald-400">{h.item.clave}</span>
-                  <span className="text-[11px] text-slate-400 truncate block">{h.item.nombre}</span>
+          <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
+            {scanHistory.map((h, idx) => {
+              const isMod = h.wasChanged || h.status === 'RELOCATED';
+              return (
+                <div
+                  key={idx}
+                  onClick={() => handleSelectProduct(h.item)}
+                  className={`p-3 rounded-2xl border transition flex items-center justify-between text-xs cursor-pointer ${
+                    isMod
+                      ? 'bg-amber-950/30 hover:bg-amber-950/50 border-amber-500/70'
+                      : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/60'
+                  }`}
+                >
+                  <div className="min-w-0 pr-3">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className="font-mono font-black text-white text-xs">{h.item.clave}</span>
+                      {isMod ? (
+                        <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                          ⚠️ Modificada / Reubicado
+                        </span>
+                      ) : (
+                        <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                          ✓ Correcto
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-slate-300 truncate block">{h.item.nombre}</span>
+                    {isMod && h.prevLocationStr && (
+                      <span className="text-[10px] text-amber-300/90 block mt-0.5">
+                        Antes: {h.prevLocationStr} ➔ Ahora: {h.item.seccion} [{h.item.anaquel} - {h.item.espacio}]
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <span className={`text-xs font-mono font-black block px-2 py-1 rounded-lg ${
+                      isMod ? 'bg-amber-400 text-slate-950' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                    }`}>
+                      📍 {h.item.seccion || 'S/N'} [{h.item.anaquel || 'S/N'}]
+                    </span>
+                    <span className="text-[10px] text-slate-500 mt-1 block">
+                      {h.timestamp}
+                    </span>
+                  </div>
                 </div>
-                <div className="text-right shrink-0">
-                  <span className="text-[11px] font-mono font-bold text-amber-400 block">
-                    {h.item.seccion || 'S/N'} [{h.item.anaquel || 'S/N'}]
-                  </span>
-                  <span className="text-[9px] text-slate-500">{h.timestamp}</span>
-                </div>
-              </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

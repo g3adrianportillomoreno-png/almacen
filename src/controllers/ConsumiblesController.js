@@ -14,6 +14,14 @@ export class ConsumiblesController {
     return await ConsumiblesRepository.updateConsumible(id, patch);
   }
 
+  static async updateLocation(idOrClave, newLocation, operator = 'Operador') {
+    return await ConsumiblesRepository.updateConsumibleLocation(idOrClave, newLocation, operator);
+  }
+
+  static exportOperatorAudit(sessionHistory) {
+    return ConsumiblesRepository.exportOperatorAuditExcel(sessionHistory);
+  }
+
   static async importExcel(file) {
     return await ConsumiblesRepository.importFromExcel(file);
   }

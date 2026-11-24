@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState, useRef, useMemo, useEffect } from 'react';
 import { extractSeriesFromExcel, downloadReceptionExcelTemplate } from '../utils/excelParser';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { ChecklistController } from '../controllers/ChecklistController.js';
@@ -8,6 +8,7 @@ import WarehouseAssignmentView from './WarehouseAssignmentView.jsx';
 import CheckpointModal from './CheckpointModal.jsx';
 import { CheckpointService } from '../services/CheckpointService.js';
 import BajasTableViewModal from './BajasTableViewModal.jsx';
+import { ConsumiblesChecklistRepository } from '../services/ConsumiblesChecklistRepository.js';
 
 export default function HomeView({ 
   batches = [], 
@@ -24,6 +25,23 @@ export default function HomeView({
 }) {
   const [isProcessingFile, setIsProcessingFile] = useState(false);
   const [processingProgress, setProcessingProgress] = useState('');
+
+  // Lotes de consumibles
+  const [consumablesBatches, setConsumablesBatches] = useState([]);
+  const [checklistTab, setChecklistTab] = useState('ALL'); // 'ALL' | 'EQUIPMENT' | 'CONSUMABLES'
+
+  const loadConsumiblesBatches = async () => {
+    try {
+      const cBatches = await ConsumiblesChecklistRepository.fetchAllConsumablesBatches();
+      setConsumablesBatches(cBatches || []);
+    } catch (e) {
+      console.warn('Error cargando lotes de consumibles:', e);
+    }
+  };
+
+  useEffect(() => {
+    loadConsumiblesBatches();
+  }, []);
 
   // Modal para que el operador coloque obligatoriamente el consecutivo manual y contraseña de autorización
   const [pendingUploadData, setPendingUploadData] = useState(null);
@@ -237,6 +255,24 @@ export default function HomeView({
           extracted = await extractSeriesFromExcel(file);
         }
 
+        // Si el archivo es una factura de Consumibles con Barcodes y cantidades
+        if (extracted && extracted.isConsumables) {
+          setPendingUploadData({
+            isConsumables: true,
+            fileName: file.name,
+            cleanName: extracted.supplierName ? `${extracted.supplierName} (${extracted.invoiceNumber || 'Factura'})` : file.name,
+            supplierName: extracted.supplierName,
+            invoiceNumber: extracted.invoiceNumber,
+            totalUnits: extracted.totalUnits,
+            totalSkus: extracted.totalSkus,
+            items: extracted.items
+          });
+          setManualConsecutiveInput('');
+          setUploadPasswordInput('');
+          setIsProcessingFile(false);
+          return;
+        }
+
         let addedFromFile = 0;
         let repairedInFile = 0;
         for (const item of extracted) {
@@ -313,6 +349,36 @@ export default function HomeView({
 
     if (uploadPasswordInput.trim() !== 'QWERTY') {
       alert("Contraseña incorrecta. Se requiere autorización para subir documentos.");
+      return;
+    }
+
+    // Si es un Checklist de Consumibles
+    if (pendingUploadData.isConsumables) {
+      const trimmedConsecutive = manualConsecutiveInput.trim();
+      if (!trimmedConsecutive) {
+        alert("Por favor ingresa el número consecutivo de inventario para este checklist de consumibles.");
+        return;
+      }
+      try {
+        setIsProcessingFile(true);
+        const created = await ConsumiblesChecklistRepository.createConsumablesChecklist(
+          pendingUploadData.fileName,
+          pendingUploadData,
+          trimmedConsecutive
+        );
+        setPendingUploadData(null);
+        setManualConsecutiveInput('');
+        setUploadPasswordInput('');
+        await loadConsumiblesBatches();
+        if (onStatusChange) await onStatusChange();
+        if (onSelectBatch) {
+          onSelectBatch(created.id, 'CONSUMIBLES');
+        }
+      } catch (err) {
+        alert("Error creando checklist de consumibles: " + err.message);
+      } finally {
+        setIsProcessingFile(false);
+      }
       return;
     }
 
@@ -494,12 +560,20 @@ export default function HomeView({
     setDeletePasswordInput('');
   };
 
-  const handleConfirmDeleteBatch = (e) => {
+  const handleConfirmDeleteBatch = async (e) => {
     e.preventDefault();
     if (!deleteModalBatch) return;
 
     if (deletePasswordInput.trim() !== 'QWERTY') {
       alert("Contraseña incorrecta. No se puede eliminar el documento.");
+      return;
+    }
+
+    if (deleteModalBatch.isConsumables || deleteModalBatch.batchType === 'CONSUMIBLES') {
+      await ConsumiblesChecklistRepository.deleteConsumablesChecklist(deleteModalBatch.id);
+      await loadConsumiblesBatches();
+      setDeleteModalBatch(null);
+      setDeletePasswordInput('');
       return;
     }
 
@@ -895,14 +969,136 @@ export default function HomeView({
               </div>
             </div>
 
-            {receptionBatches.length === 0 ? (
+            {/* PESTAÑAS DE FILTRO: TODOS, EQUIPOS, CONSUMIBLES */}
+            <div className="flex items-center gap-1.5 mb-3">
+              <button
+                type="button"
+                onClick={() => setChecklistTab('ALL')}
+                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer ${
+                  checklistTab === 'ALL'
+                    ? 'bg-slate-800 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                Todos ({receptionBatches.length + consumablesBatches.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setChecklistTab('EQUIPMENT')}
+                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1 ${
+                  checklistTab === 'EQUIPMENT'
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                <span>🖨️</span>
+                <span>Equipos ({receptionBatches.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setChecklistTab('CONSUMABLES')}
+                className={`text-xs font-bold px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center gap-1 ${
+                  checklistTab === 'CONSUMABLES'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                }`}
+              >
+                <span>🧪</span>
+                <span>Consumibles ({consumablesBatches.length})</span>
+              </button>
+            </div>
+
+            {receptionBatches.length === 0 && consumablesBatches.length === 0 ? (
               <div className="text-center py-8 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                <p className="text-slate-600 font-medium text-xs">No hay checklists de recepción de equipos nuevos registrados.</p>
+                <p className="text-slate-600 font-medium text-xs">No hay checklists de recepción registrados.</p>
                 <p className="text-[11px] text-slate-400 mt-1">Sube un checklist de llegada arriba para comenzar.</p>
               </div>
             ) : (
               <div className="flex flex-col gap-2">
-                {receptionBatches.map((batch) => {
+                {/* LISTA DE LOTES DE CONSUMIBLES */}
+                {(checklistTab === 'ALL' || checklistTab === 'CONSUMABLES') && consumablesBatches.map((cBatch) => {
+                  const isFullCompleted = (cBatch.progressPercentage || 0) >= 100;
+                  return (
+                    <div key={cBatch.id} className="flex gap-2 items-center">
+                      <button 
+                        onClick={() => onSelectBatch(cBatch.id, 'CONSUMIBLES')}
+                        className={`flex-1 flex flex-col sm:flex-row justify-between items-start sm:items-center p-3 rounded-xl border transition-all text-left gap-2 ${
+                          isFullCompleted
+                            ? 'bg-emerald-50/40 border-emerald-200 hover:border-emerald-300' 
+                            : 'bg-white border-slate-200 hover:border-indigo-400 hover:shadow-xs'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="font-bold text-xs px-2.5 py-1 rounded-lg uppercase tracking-wide shrink-0 bg-indigo-600 text-white flex items-center gap-1">
+                            <span>🧪</span>
+                            <span>{cBatch.folio}</span>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[10px] font-bold bg-indigo-100 text-indigo-800 px-1.5 py-0.2 rounded">
+                                CONSUMIBLES
+                              </span>
+                              <p className="font-semibold text-slate-800 text-xs truncate">
+                                {cBatch.cleanName || cBatch.name}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
+                              <span>{cBatch.date || new Date(cBatch.createdAt).toLocaleDateString('es-MX')}</span>
+                              <span>|</span>
+                              <span className="font-medium text-slate-600">{cBatch.totalSkus || cBatch.items?.length || 0} modelos / SKUs</span>
+                              {cBatch.supplierName && (
+                                <span className="truncate">| Proveedor: <strong>{cBatch.supplierName}</strong></span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3 shrink-0">
+                          <div className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <span className="text-xs font-bold font-mono text-slate-700">
+                                {cBatch.scannedUnits || 0} / {cBatch.totalUnits || 0} pzas
+                              </span>
+                              <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                                isFullCompleted ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                              }`}>
+                                {cBatch.progressPercentage || 0}%
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-400 block mt-0.5">
+                              {cBatch.pendingUnits > 0 ? `Faltan ${cBatch.pendingUnits} piezas` : '✓ Conteo completo'}
+                            </span>
+                          </div>
+
+                          <span className="text-slate-400 hover:text-slate-600 text-sm font-bold">&rarr;</span>
+                        </div>
+                      </button>
+
+                      {/* Acciones de Lote de Consumibles */}
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => ConsumiblesChecklistRepository.exportChecklistToExcel(cBatch)}
+                          className="text-xs text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 border border-slate-200 p-2 rounded-lg transition cursor-pointer"
+                          title="Descargar reporte en Excel oficial"
+                        >
+                          📥
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRequestDelete({ ...cBatch, isConsumables: true })}
+                          className="text-xs text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 p-2 rounded-lg transition cursor-pointer"
+                          title="Eliminar lote de consumibles"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* LISTA DE CHECKLISTS DE EQUIPOS */}
+                {(checklistTab === 'ALL' || checklistTab === 'EQUIPMENT') && receptionBatches.map((batch) => {
                   const total = batch.totalCount || batch.expectedSeries.length;
                   const completedCount = batch.completed.length;
                   const pendingCount = batch.pendingCount;
@@ -1087,73 +1283,123 @@ export default function HomeView({
               </div>
             </div>
 
-            {/* AVISO DESTACADO DE IMPRESORAS DETECTADAS, REPARACIONES OCR Y LISTA DE DOCUMENTOS */}
-            <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3.5 rounded-xl flex flex-col gap-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="text-xs font-semibold">
-                    Total detectado: <strong className="text-sm font-black text-emerald-700">{pendingUploadData.series.length} impresoras</strong> ({pendingUploadData.files?.length || 1} doc{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
+            {/* AVISO DESTACADO DE IMPRESORAS O CONSUMIBLES DETECTADOS */}
+            {pendingUploadData.isConsumables ? (
+              <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 p-4 rounded-xl flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold bg-indigo-600 text-white px-2.5 py-0.5 rounded-full uppercase flex items-center gap-1">
+                    <span>🧪</span>
+                    <span>Checklist de Consumibles Detectado</span>
+                  </span>
+                  <span className="text-xs font-mono font-bold text-indigo-800">
+                    Factura: {pendingUploadData.invoiceNumber || 'S/N'}
                   </span>
                 </div>
 
-                {repairedSeriesCount > 0 && (
-                  <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2.5 py-0.5 rounded-full">
-                    ✨ {repairedSeriesCount} corregida{repairedSeriesCount > 1 ? 's' : ''} por OCR
-                  </span>
-                )}
-              </div>
+                <div className="grid grid-cols-2 gap-2 text-center">
+                  <div className="bg-white p-2.5 rounded-lg border border-indigo-200">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Modelos / SKUs</span>
+                    <span className="text-xl font-black text-indigo-700">{pendingUploadData.totalSkus}</span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-indigo-200">
+                    <span className="text-[10px] text-slate-500 uppercase font-bold block">Piezas Totales</span>
+                    <span className="text-xl font-black text-emerald-600">{pendingUploadData.totalUnits}</span>
+                  </div>
+                </div>
 
-              {pendingUploadData.files && pendingUploadData.files.length > 0 && (
-                <div className="bg-white/90 rounded-lg p-2 border border-emerald-200/80 max-h-28 overflow-y-auto flex flex-col gap-1 text-[11px]">
-                  {pendingUploadData.files.map((f, i) => (
-                    <div key={i} className="flex justify-between items-center text-slate-700 px-1">
-                      <span className="truncate font-medium max-w-[240px]">{i + 1}. {f.name}</span>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {f.declaredTotal && (
-                          <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                            f.addedCount === f.declaredTotal
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                              : 'bg-amber-100 text-amber-900 border border-amber-300'
-                          }`}>
-                            {f.addedCount === f.declaredTotal ? `✓ ${f.addedCount}/${f.declaredTotal} pzas` : `⚠️ ${f.addedCount}/${f.declaredTotal} pzas`}
-                          </span>
-                        )}
-                        {f.repairedCount > 0 && (
-                          <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
-                            ✨ {f.repairedCount} reparadas
-                          </span>
-                        )}
-                        <span className="font-bold text-emerald-700">+{f.addedCount} series</span>
+                <div className="text-xs text-slate-600">
+                  Proveedor: <strong className="text-slate-800">{pendingUploadData.supplierName || 'Importación'}</strong>
+                </div>
+
+                {/* Previsualización rápida de consumibles con su ubicación en almacén */}
+                <div className="bg-white rounded-lg p-2.5 border border-indigo-200 max-h-44 overflow-y-auto flex flex-col gap-1.5 text-[11px]">
+                  {pendingUploadData.items?.slice(0, 10).map((it, idx) => (
+                    <div key={idx} className="flex justify-between items-center text-slate-700 border-b border-slate-100 pb-1">
+                      <div className="min-w-0 pr-2">
+                        <span className="font-mono font-bold text-indigo-700">{it.code}</span>
+                        <span className="text-slate-500 text-[10px] truncate block">{it.description}</span>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="font-black text-slate-800 font-mono">{it.expectedQty} pzas</span>
+                        <span className="text-[10px] text-emerald-600 font-bold block">📍 {it.location?.label || 'Sin ubicación'}</span>
                       </div>
                     </div>
                   ))}
+                  {(pendingUploadData.items?.length || 0) > 10 && (
+                    <p className="text-[10px] text-slate-400 text-center py-1">
+                      + {(pendingUploadData.items?.length || 0) - 10} consumibles más en este lote...
+                    </p>
+                  )}
                 </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  disabled={isProcessingFile}
-                  onClick={() => addMoreFilesInputRef.current?.click()}
-                  className="py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
-                >
-                  <span>➕</span>
-                  <span>{isProcessingFile ? (processingProgress || 'Leyendo...') : 'Agregar otro PDF o Excel'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowSeriesPreview(!showSeriesPreview)}
-                  className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
-                >
-                  <span>👁️</span>
-                  <span>{showSeriesPreview ? 'Ocultar Vista Previa' : `Revisar / Editar Series (${pendingUploadData.series.length})`}</span>
-                </button>
               </div>
-            </div>
+            ) : (
+              <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 p-3.5 rounded-xl flex flex-col gap-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-xs font-semibold">
+                      Total detectado: <strong className="text-sm font-black text-emerald-700">{pendingUploadData.series.length} impresoras</strong> ({pendingUploadData.files?.length || 1} doc{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
+                    </span>
+                  </div>
+
+                  {repairedSeriesCount > 0 && (
+                    <span className="bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-black px-2.5 py-0.5 rounded-full">
+                      ✨ {repairedSeriesCount} corregida{repairedSeriesCount > 1 ? 's' : ''} por OCR
+                    </span>
+                  )}
+                </div>
+
+                {pendingUploadData.files && pendingUploadData.files.length > 0 && (
+                  <div className="bg-white/90 rounded-lg p-2 border border-emerald-200/80 max-h-28 overflow-y-auto flex flex-col gap-1 text-[11px]">
+                    {pendingUploadData.files.map((f, i) => (
+                      <div key={i} className="flex justify-between items-center text-slate-700 px-1">
+                        <span className="truncate font-medium max-w-[240px]">{i + 1}. {f.name}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {f.declaredTotal && (
+                            <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
+                              f.addedCount === f.declaredTotal
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                : 'bg-amber-100 text-amber-900 border border-amber-300'
+                            }`}>
+                              {f.addedCount === f.declaredTotal ? `✓ ${f.addedCount}/${f.declaredTotal} pzas` : `⚠️ ${f.addedCount}/${f.declaredTotal} pzas`}
+                            </span>
+                          )}
+                          {f.repairedCount > 0 && (
+                            <span className="text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded font-bold">
+                              ✨ {f.repairedCount} reparadas
+                            </span>
+                          )}
+                          <span className="font-bold text-emerald-700">+{f.addedCount} series</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isProcessingFile}
+                    onClick={() => addMoreFilesInputRef.current?.click()}
+                    className="py-1.5 px-3 rounded-lg bg-white hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <span>➕</span>
+                    <span>{isProcessingFile ? (processingProgress || 'Leyendo...') : 'Agregar otro PDF o Excel'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowSeriesPreview(!showSeriesPreview)}
+                    className="py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs transition flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    <span>👁️</span>
+                    <span>{showSeriesPreview ? 'Ocultar Vista Previa' : `Revisar / Editar Series (${pendingUploadData.series.length})`}</span>
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* SECCIÓN DESPLEGABLE: VISTA PREVIA EDITABLE DE SERIES ANTES DE GUARDAR */}
             {showSeriesPreview && (
@@ -1273,7 +1519,7 @@ export default function HomeView({
             )}
 
             <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-3">
-              {receptionBatches.length > 0 && (
+              {(!pendingUploadData.isConsumables && receptionBatches.length > 0) && (
                 <div className="flex flex-col gap-2 pb-2 border-b border-slate-200">
                   <label className="block text-xs font-bold text-slate-700 uppercase">
                     ¿Cómo deseas guardar estas series?

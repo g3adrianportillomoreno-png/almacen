@@ -67,10 +67,12 @@ export default function BajasTableViewModal({
       const rawB = b.scannedAt || b.bajaAt || b.departure_date || b.assignedAt;
       const timeA = rawA ? new Date(rawA).getTime() : 0;
       const timeB = rawB ? new Date(rawB).getTime() : 0;
-      if (timeA && timeB) return timeB - timeA;
+      if (timeA && timeB && timeA !== timeB) return timeB - timeA;
       if (timeA && !timeB) return -1;
       if (!timeA && timeB) return 1;
-      return 0;
+      const sA = String(a.serial || a.serial_number || '');
+      const sB = String(b.serial || b.serial_number || '');
+      return sA.localeCompare(sB);
     });
   }, [filteredItems]);
 

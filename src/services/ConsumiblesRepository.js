@@ -201,6 +201,118 @@ export class ConsumiblesRepository {
   }
 
   /**
+   * Modifica la ubicación de un consumible desde el modo operador
+   * Registra si hubo cambio de ubicación (wasChanged), la ubicación anterior y el operador
+   */
+  static async updateConsumibleLocation(idOrClave, newLocation, operator = 'Operador') {
+    const list = await this.getAllConsumibles();
+    let updatedItem = null;
+    let wasChanged = false;
+
+    const updated = list.map(item => {
+      const isMatch = String(item.id) === String(idOrClave) || 
+        String(item.clave).trim().toUpperCase() === String(idOrClave).trim().toUpperCase();
+      if (!isMatch) return item;
+
+      const prevLoc = {
+        almacen: item.almacen || 'Principal',
+        seccion: item.seccion || '',
+        anaquel: item.anaquel || '',
+        espacio: item.espacio || ''
+      };
+
+      const newLoc = {
+        almacen: (newLocation.almacen !== undefined ? newLocation.almacen : item.almacen) || 'Principal',
+        seccion: (newLocation.seccion !== undefined ? newLocation.seccion : item.seccion) || '',
+        anaquel: (newLocation.anaquel !== undefined ? newLocation.anaquel : item.anaquel) || '',
+        espacio: (newLocation.espacio !== undefined ? newLocation.espacio : item.espacio) || ''
+      };
+
+      // Verificar si realmente cambió de posición física
+      wasChanged = (
+        String(prevLoc.almacen).trim().toUpperCase() !== String(newLoc.almacen).trim().toUpperCase() ||
+        String(prevLoc.seccion).trim().toUpperCase() !== String(newLoc.seccion).trim().toUpperCase() ||
+        String(prevLoc.anaquel).trim().toUpperCase() !== String(newLoc.anaquel).trim().toUpperCase() ||
+        String(prevLoc.espacio).trim().toUpperCase() !== String(newLoc.espacio).trim().toUpperCase()
+      );
+
+      updatedItem = {
+        ...item,
+        ...newLoc,
+        locationStatus: wasChanged ? 'RELOCATED' : 'VERIFIED_OK',
+        previousLocation: wasChanged ? prevLoc : (item.previousLocation || null),
+        lastVerifiedAt: new Date().toISOString(),
+        verifiedBy: operator,
+        updatedAt: new Date().toISOString()
+      };
+      return updatedItem;
+    });
+
+    if (updatedItem) {
+      await this.saveAllConsumibles(updated);
+    }
+    return { item: updatedItem, wasChanged };
+  }
+
+  /**
+   * Exporta a Excel el reporte de revisión / auditoría de ubicaciones del operador
+   * Destaca cuáles consumibles fueron modificados de lugar (amarillo / MODIFICADO)
+   * y cuáles estuvieron correctos (verde / CORRECTO)
+   */
+  static exportOperatorAuditExcel(sessionHistory = []) {
+    if (!sessionHistory || sessionHistory.length === 0) {
+      alert("No hay consumibles revisados en la sesión actual.");
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    const rows = sessionHistory.map((entry, idx) => {
+      const it = entry.item;
+      const wasMod = entry.status === 'RELOCATED' || it.locationStatus === 'RELOCATED' || entry.wasChanged;
+      const statusLabel = wasMod ? 'MODIFICADA / CAMBIO DE LUGAR' : 'CORRECTA (SIN CAMBIOS)';
+      const prevLocStr = it.previousLocation 
+        ? `${it.previousLocation.seccion || ''} [${it.previousLocation.anaquel || ''} - ${it.previousLocation.espacio || ''}]`.trim() 
+        : (entry.prevLocationStr || '-');
+
+      return {
+        'NO.': idx + 1,
+        'CLAVE': it.clave || '',
+        'NOMBRE': it.nombre || '',
+        'ESTADO DE UBICACIÓN': statusLabel,
+        'SECCIÓN ACTUAL': it.seccion || '',
+        'ANAQUEL ACTUAL': it.anaquel || '',
+        'ESPACIO ACTUAL': it.espacio || '',
+        'ALMACÉN': it.almacen || 'Principal',
+        'UBICACIÓN ANTERIOR': prevLocStr,
+        'EXISTENCIAS': it.existencias ?? 0,
+        'HORA DE REVISIÓN': entry.timestamp || new Date().toLocaleTimeString('es-MX', { hour12: true }),
+        'OPERADOR': entry.operator || it.verifiedBy || 'Operador'
+      };
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 6 },
+      { wch: 16 },
+      { wch: 38 },
+      { wch: 32 }, // ESTADO DE UBICACIÓN
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 16 },
+      { wch: 25 },
+      { wch: 12 },
+      { wch: 18 },
+      { wch: 18 }
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, "REVISIÓN_UBICACIONES");
+    const fileName = `Revision_Ubicaciones_Operador_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    XLSX.writeFile(wb, fileName);
+  }
+
+  /**
    * Actualiza un consumible específico
    */
   static async updateConsumible(id, patch) {

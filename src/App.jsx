@@ -23,6 +23,7 @@ import MercadoLibreView from './components/MercadoLibreView';
 import MercadoLibreScanView from './components/MercadoLibreScanView';
 import BajasSessionView from './components/BajasSessionView';
 import ConsumiblesView from './components/ConsumiblesView';
+import ConsumiblesChecklistScanView from './components/ConsumiblesChecklistScanView.jsx';
 import { RealtimeSyncService } from './services/RealtimeSyncService';
 import { supabase } from './utils/supabaseClient';
 
@@ -197,9 +198,13 @@ function App() {
     }
   };
 
-  const handleSelectBatch = (batchId) => {
+  const handleSelectBatch = (batchId, batchType = 'EQUIPMENT') => {
     setActiveBatchId(batchId);
-    setView('scan');
+    if (batchType === 'CONSUMIBLES') {
+      setView('consumablesScan');
+    } else {
+      setView('scan');
+    }
   };
 
   // Registrar escaneo de impresora asignando su Almacén, Fila, Espacio y Número de inventario
@@ -759,6 +764,18 @@ function App() {
             {/* Vista 10: Módulo de Consumibles y Refacciones */}
             {view === 'consumibles' && (
               <ConsumiblesView />
+            )}
+
+            {/* Vista 11: Sesión de Escaneo de Checklist de Consumibles */}
+            {view === 'consumablesScan' && (
+              <ConsumiblesChecklistScanView 
+                batchId={activeBatchId}
+                onBack={() => {
+                  setView('home');
+                  fetchBatches();
+                }}
+                onBatchUpdated={fetchBatches}
+              />
             )}
           </>
         )}

@@ -150,6 +150,47 @@ export class InventoryRepository {
         });
       });
 
+      // Enriquecer adicionalmente desde inventory_departures (tanto de localStorage como de Supabase)
+      try {
+        const rawLocalDeps = typeof localStorage !== 'undefined' ? localStorage.getItem('cdm_inventory_departures_v1') : null;
+        const localDeps = rawLocalDeps ? JSON.parse(rawLocalDeps) : [];
+        if (Array.isArray(localDeps)) {
+          localDeps.forEach(dep => {
+            const sCore = (dep.serial || '').trim().toUpperCase();
+            if (sCore) {
+              const existing = bajasLookup[sCore] || {};
+              bajasLookup[sCore] = {
+                requestedBy: dep.requested_by || dep.requestedBy || existing.requestedBy || null,
+                dispatchedBy: dep.dispatched_by || dep.dispatchedBy || dep.operator || existing.dispatchedBy || 'Operador',
+                bajaAt: dep.departure_date || dep.bajaAt || dep.scanned_at || existing.bajaAt || null,
+                reason: dep.reason || existing.reason || 'Salida de almacén'
+              };
+            }
+          });
+        }
+      } catch {}
+
+      try {
+        const { data: supaDeps } = await supabase
+          .from('inventory_departures')
+          .select('serial, requested_by, dispatched_by, departure_date, reason')
+          .limit(2000);
+        if (supaDeps && Array.isArray(supaDeps)) {
+          supaDeps.forEach(dep => {
+            const sCore = (dep.serial || '').trim().toUpperCase();
+            if (sCore) {
+              const existing = bajasLookup[sCore] || {};
+              bajasLookup[sCore] = {
+                requestedBy: dep.requested_by || existing.requestedBy || null,
+                dispatchedBy: dep.dispatched_by || existing.dispatchedBy || 'Operador',
+                bajaAt: dep.departure_date || existing.bajaAt || null,
+                reason: dep.reason || existing.reason || 'Salida de almacén'
+              };
+            }
+          });
+        }
+      } catch {}
+
       // 3b. Agrupar las series esperadas por su checklist_id y enriquecer datos de bajas
       const seriesByChecklist = {};
       for (const item of allExpectedSeries) {
@@ -579,6 +620,37 @@ export class InventoryRepository {
       }], reason || 'Baja de checklist');
     } catch (e) {
       console.warn('Nota registrando baja en inventory_departures:', e);
+    }
+
+    // 5. Guardar también en bajas_sessions_history para sincronización instantánea en la nube
+    try {
+      this.saveBajasSession({
+        id: `baja_item_${serial}_${Date.now()}`,
+        folio: `SALIDA-${nowIso.slice(0, 10)}`,
+        date: nowIso,
+        reason: reason || 'Baja de checklist',
+        operator: dispatchedBy || 'Operador',
+        requestedBy: requestedBy || null,
+        dispatchedBy: dispatchedBy || 'Operador',
+        targetScope: 'CHECKLIST',
+        targetLoteName: `Checklist #${checklistId}`,
+        itemsCount: 1,
+        closedAt: nowIso,
+        items: [{
+          serial,
+          material: existing.material || 'Sin Modelo',
+          internalNumber: existing.internalNumber ?? null,
+          warehouseName: existing.warehouseName || 'Almacén 1',
+          warehouseRow: existing.warehouseRow || 'Sin Asignar',
+          warehouseSpace: existing.warehouseSpace || '',
+          requestedBy: requestedBy || null,
+          dispatchedBy: dispatchedBy || 'Operador',
+          scannedAt: nowIso,
+          bajaAt: nowIso
+        }]
+      });
+    } catch (e) {
+      console.warn('Nota guardando sesión individual de baja:', e);
     }
 
     return cache.serials[serial];
@@ -1650,6 +1722,7 @@ export class InventoryRepository {
       system_status: p.systemStatus || 'Principal',
       reason: reason,
       requested_by: p.requested_by || p.requestedBy || null,
+      dispatched_by: p.dispatched_by || p.dispatchedBy || p.operator || null,
       departure_date: p.departure_date || nowIso
     }));
 
