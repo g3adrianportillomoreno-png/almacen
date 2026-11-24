@@ -50,7 +50,9 @@ export class PrinterModel {
     assignedAt = null,
     documentName = '',
     bajaAt = null,
-    bajaReason = ''
+    bajaReason = '',
+    requestedBy = null,
+    dispatchedBy = null
   }) {
     this.id = id;
     this.serial = (serial || '').trim().toUpperCase();
@@ -74,6 +76,8 @@ export class PrinterModel {
     this.documentName = (documentName || '').trim();
     this.bajaAt = bajaAt || null;
     this.bajaReason = (bajaReason || '').trim();
+    this.requestedBy = (requestedBy && String(requestedBy).trim()) ? String(requestedBy).trim() : null;
+    this.dispatchedBy = (dispatchedBy && String(dispatchedBy).trim()) ? String(dispatchedBy).trim() : null;
   }
 
   get isAssigned() {
@@ -219,6 +223,9 @@ export class PrinterModel {
       ? dbItem.internal_number
       : (meta.internalNumber ?? null);
 
+    const requestedBy = dbItem.requested_by || dbItem.requestedBy || meta.requestedBy || null;
+    const dispatchedBy = dbItem.dispatched_by || dbItem.dispatchedBy || dbItem.operator || meta.dispatchedBy || meta.operator || null;
+
     return new PrinterModel({
       id: dbItem.id,
       serial: serial,
@@ -237,7 +244,9 @@ export class PrinterModel {
       assignedAt: assignedAt,
       documentName: docName,
       bajaAt: bajaAt,
-      bajaReason: bajaReason
+      bajaReason: bajaReason,
+      requestedBy: requestedBy,
+      dispatchedBy: dispatchedBy
     });
   }
 }

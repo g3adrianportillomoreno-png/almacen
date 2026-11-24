@@ -214,6 +214,7 @@ export default function BajasSessionView({
       checklistId: matched.checklistId || null,
       wasAlreadyBaja,
       requestedBy: activeSession.requestedBy || 'Sin especificar',
+      dispatchedBy: activeSession.operator || 'Operador',
       scannedAt: nowScanIso,
       bajaAt: nowScanIso
     };
@@ -255,6 +256,7 @@ export default function BajasSessionView({
         reason: activeSession.reason,
         operator: activeSession.operator,
         requestedBy: activeSession.requestedBy,
+        dispatchedBy: activeSession.operator,
         targetScope: activeSession.targetScope,
         targetLoteName: activeSession.targetLoteName
       });
@@ -812,6 +814,7 @@ export default function BajasSessionView({
                         <th className="py-2.5 px-3"># Equipo</th>
                         <th className="py-2.5 px-3">Lote Origen</th>
                         <th className="py-2.5 px-3">Nombre que solicita</th>
+                        <th className="py-2.5 px-3">Entregado por</th>
                         <th className="py-2.5 px-3">Hora</th>
                         <th className="py-2.5 px-3 text-right">Acción</th>
                       </tr>
@@ -840,6 +843,12 @@ export default function BajasSessionView({
                             <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-bold">
                               <span>👤</span>
                               <span>{it.requestedBy || activeSession.requestedBy || 'Sin especificar'}</span>
+                            </span>
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                              <span>🚚</span>
+                              <span>{it.dispatchedBy || activeSession.operator || 'Operador'}</span>
                             </span>
                           </td>
                           <td className="py-2 px-3 text-slate-500 font-mono text-[11px]">
@@ -1013,6 +1022,7 @@ export default function BajasSessionView({
                       <th className="py-2.5 px-3">Modelo</th>
                       <th className="py-2.5 px-3"># Equipo</th>
                       <th className="py-2.5 px-3">Solicitado Por</th>
+                      <th className="py-2.5 px-3">Entregado Por</th>
                       <th className="py-2.5 px-3">Lote / Origen</th>
                       <th className="py-2.5 px-3">Última Ubicación</th>
                       <th className="py-2.5 px-3">Motivo</th>
@@ -1055,6 +1065,12 @@ export default function BajasSessionView({
                             <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-bold">
                               <span>👤</span>
                               <span>{d.requested_by || d.requestedBy || 'Sin especificar'}</span>
+                            </span>
+                          </td>
+                          <td className="py-2 px-3">
+                            <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                              <span>🚚</span>
+                              <span>{d.dispatched_by || d.dispatchedBy || d.operator || 'Operador'}</span>
                             </span>
                           </td>
                           <td className="py-2 px-3 text-slate-600">{d.batchFolio || d.batchName || 'General'}</td>

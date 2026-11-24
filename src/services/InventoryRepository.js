@@ -119,9 +119,63 @@ export class InventoryRepository {
       // 2. Obtener todas las series esperadas con paginación completa (superando el límite de 1000)
       const allExpectedSeries = await this.fetchAllExpectedSeries();
 
-      // 3. Agrupar las series esperadas por su checklist_id
+      // 3a. Cargar historial de sesiones de bajas de Supabase para enriquecer series de baja
+      let bajasSessions = this.getBajasSessionsHistory();
+      try {
+        const { data: bData } = await supabase
+          .from('warehouse_map_config')
+          .select('layout')
+          .eq('id', 'bajas_sessions_history')
+          .maybeSingle();
+        if (bData?.layout?.sessions) {
+          bajasSessions = bData.layout.sessions;
+          if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+            localStorage.setItem('cdm_bajas_sessions_v1', JSON.stringify(bajasSessions));
+          }
+        }
+      } catch {}
+
+      const bajasLookup = {};
+      bajasSessions.forEach(sess => {
+        (sess.items || []).forEach(it => {
+          const sCore = (it.serial || '').trim().toUpperCase();
+          if (sCore && !bajasLookup[sCore]) {
+            bajasLookup[sCore] = {
+              requestedBy: it.requestedBy || sess.requestedBy || null,
+              dispatchedBy: it.dispatchedBy || it.operator || sess.operator || 'Operador',
+              bajaAt: it.bajaAt || it.scannedAt || sess.closedAt || sess.date || null,
+              reason: it.reason || sess.reason || 'Salida de almacén'
+            };
+          }
+        });
+      });
+
+      // 3b. Agrupar las series esperadas por su checklist_id y enriquecer datos de bajas
       const seriesByChecklist = {};
       for (const item of allExpectedSeries) {
+        const sUpper = (item.serial_number || item.serial || '').trim().toUpperCase();
+        const bInfo = bajasLookup[sUpper];
+        const isBaja = item.printer_status === 'BAJA' || metadataCache.serials?.[sUpper]?.status === 'BAJA';
+
+        if (bInfo || isBaja) {
+          if (bInfo) {
+            if (!item.requested_by && bInfo.requestedBy) item.requested_by = bInfo.requestedBy;
+            if (!item.dispatched_by && bInfo.dispatchedBy) item.dispatched_by = bInfo.dispatchedBy;
+            if (!item.scanned_at && bInfo.bajaAt) item.scanned_at = bInfo.bajaAt;
+            if (!item.baja_at && bInfo.bajaAt) item.baja_at = bInfo.bajaAt;
+            if (!item.departure_date && bInfo.bajaAt) item.departure_date = bInfo.bajaAt;
+            if (!item.baja_reason && bInfo.reason) item.baja_reason = bInfo.reason;
+          }
+          if (metadataCache.serials) {
+            metadataCache.serials[sUpper] = {
+              ...(metadataCache.serials[sUpper] || {}),
+              requestedBy: item.requested_by || bInfo?.requestedBy || metadataCache.serials[sUpper]?.requestedBy || null,
+              dispatchedBy: item.dispatched_by || bInfo?.dispatchedBy || metadataCache.serials[sUpper]?.dispatchedBy || null,
+              bajaAt: item.baja_at || item.scanned_at || bInfo?.bajaAt || metadataCache.serials[sUpper]?.bajaAt || null
+            };
+          }
+        }
+
         if (!seriesByChecklist[item.checklist_id]) {
           seriesByChecklist[item.checklist_id] = [];
         }
@@ -440,7 +494,7 @@ export class InventoryRepository {
   /**
    * Marca una serie del checklist como baja junto con su fecha (salida de equipo)
    */
-  static async markChecklistPrinterBaja(checklistId, serialNumber, bajaDate = null, reason = 'Baja de checklist', requestedBy = null) {
+  static async markChecklistPrinterBaja(checklistId, serialNumber, bajaDate = null, reason = 'Baja de checklist', requestedBy = null, dispatchedBy = null) {
     const serial = String(serialNumber || '').trim().toUpperCase();
     if (!serial) return null;
     const nowIso = bajaDate ? new Date(bajaDate).toISOString() : new Date().toISOString();
@@ -455,6 +509,7 @@ export class InventoryRepository {
       bajaAt: nowIso,
       bajaReason: reason || 'Baja de checklist',
       requestedBy: requestedBy || existing.requestedBy || null,
+      dispatchedBy: dispatchedBy || existing.dispatchedBy || null,
       isScanned: true
     };
     this.saveMetadataCache(cache);
@@ -466,7 +521,8 @@ export class InventoryRepository {
         serialNumber: serial,
         bajaDate: nowIso,
         reason,
-        requestedBy
+        requestedBy,
+        dispatchedBy
       });
       return cache.serials[serial];
     }
@@ -490,7 +546,8 @@ export class InventoryRepository {
           serialNumber: serial,
           bajaDate: nowIso,
           reason,
-          requestedBy
+          requestedBy,
+          dispatchedBy
         });
       }
     } catch (err) {
@@ -500,7 +557,8 @@ export class InventoryRepository {
         serialNumber: serial,
         bajaDate: nowIso,
         reason,
-        requestedBy
+        requestedBy,
+        dispatchedBy
       });
     }
 
@@ -516,6 +574,7 @@ export class InventoryRepository {
         systemStatus: existing.systemStatus || 'Principal',
         reason: reason || 'Baja de checklist',
         requested_by: requestedBy || existing.requestedBy || null,
+        dispatched_by: dispatchedBy || existing.dispatchedBy || null,
         departure_date: nowIso
       }], reason || 'Baja de checklist');
     } catch (e) {
@@ -722,6 +781,34 @@ export class InventoryRepository {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Sincroniza y obtiene el historial de sesiones de bajas desde Supabase
+   */
+  static async fetchBajasSessionsHistory() {
+    try {
+      const { data, error } = await supabase
+        .from('warehouse_map_config')
+        .select('layout')
+        .eq('id', 'bajas_sessions_history')
+        .maybeSingle();
+
+      if (!error && data?.layout?.sessions) {
+        const sessions = data.layout.sessions;
+        if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+          localStorage.setItem('cdm_bajas_sessions_v1', JSON.stringify(sessions));
+        }
+        return sessions.sort((a, b) => {
+          const timeA = a.date || a.closedAt ? new Date(a.date || a.closedAt).getTime() : 0;
+          const timeB = b.date || b.closedAt ? new Date(b.date || b.closedAt).getTime() : 0;
+          return timeB - timeA;
+        });
+      }
+    } catch (e) {
+      console.warn('Error fetching bajas sessions from cloud:', e);
+    }
+    return this.getBajasSessionsHistory();
   }
 
   /**

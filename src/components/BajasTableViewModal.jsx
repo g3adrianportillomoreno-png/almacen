@@ -37,6 +37,7 @@ export default function BajasTableViewModal({
       const space = (it.warehouseSpace || it.warehouse_space || '').toLowerCase();
       const reason = (it.bajaReason || it.reason || '').toLowerCase();
       const reqBy = (it.requestedBy || it.requested_by || '').toLowerCase();
+      const dispBy = (it.dispatchedBy || it.dispatched_by || it.operator || '').toLowerCase();
 
       // Filtro por modelo
       if (modelFilter !== 'ALL' && (it.material || it.material_model) !== modelFilter) {
@@ -50,6 +51,7 @@ export default function BajasTableViewModal({
         material.includes(q) ||
         internal.includes(q) ||
         reqBy.includes(q) ||
+        dispBy.includes(q) ||
         wh.includes(q) ||
         row.includes(q) ||
         space.includes(q) ||
@@ -57,6 +59,20 @@ export default function BajasTableViewModal({
       );
     });
   }, [items, searchQuery, modelFilter]);
+
+  // Ordenar de la más nueva a la más vieja de forma estricta por fecha/hora
+  const sortedItems = useMemo(() => {
+    return [...filteredItems].sort((a, b) => {
+      const rawA = a.scannedAt || a.bajaAt || a.departure_date || a.assignedAt;
+      const rawB = b.scannedAt || b.bajaAt || b.departure_date || b.assignedAt;
+      const timeA = rawA ? new Date(rawA).getTime() : 0;
+      const timeB = rawB ? new Date(rawB).getTime() : 0;
+      if (timeA && timeB) return timeB - timeA;
+      if (timeA && !timeB) return -1;
+      if (!timeA && timeB) return 1;
+      return 0;
+    });
+  }, [filteredItems]);
 
   const handleCopy = (serial) => {
     if (!serial) return;
@@ -206,6 +222,7 @@ export default function BajasTableViewModal({
                   <th className="py-2.5 px-3 min-w-[160px]">Modelo</th>
                   <th className="py-2.5 px-3 min-w-[90px]"># Santi</th>
                   <th className="py-2.5 px-3 min-w-[150px]">Nombre que solicita</th>
+                  <th className="py-2.5 px-3 min-w-[150px]">Persona que entrega</th>
                   <th className="py-2.5 px-3 min-w-[160px]">Motivo</th>
                   {onCancelBaja && (
                     <th className="py-2.5 px-3 w-28 text-center">Acción</th>
@@ -213,7 +230,7 @@ export default function BajasTableViewModal({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
-                {filteredItems.map((item, idx) => {
+                {sortedItems.map((item, idx) => {
                   const serial = (item.serial || item.serial_number || '').trim().toUpperCase();
                   const material = item.material || item.material_model || 'Sin Modelo';
                   const internal = item.internalNumber !== undefined && item.internalNumber !== null 
@@ -296,6 +313,14 @@ export default function BajasTableViewModal({
                         <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2.5 py-0.5 rounded-md text-[11px] font-bold">
                           <span>👤</span>
                           <span>{item.requestedBy || item.requested_by || 'Sin especificar'}</span>
+                        </span>
+                      </td>
+
+                      {/* Persona que entrega / da el producto */}
+                      <td className="py-2.5 px-3">
+                        <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200 px-2.5 py-0.5 rounded-md text-[11px] font-bold">
+                          <span>🚚</span>
+                          <span>{item.dispatchedBy || item.dispatched_by || item.operator || 'Operador'}</span>
                         </span>
                       </td>
 

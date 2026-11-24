@@ -1,6 +1,6 @@
 // src/utils/requestersManager.js
 const STORAGE_KEY = 'cdm_bajas_requesters_v1';
-const DEFAULT_REQUESTERS = ['DANIA', 'TERESA'];
+const DEFAULT_REQUESTERS = ['DANIA', 'TERESA', 'ALEJANDRA'];
 
 export const getRequesters = () => {
   try {

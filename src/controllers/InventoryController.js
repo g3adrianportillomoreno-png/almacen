@@ -312,7 +312,18 @@ export class InventoryController {
 
     const downloadTimeStr = new Date().toLocaleString('es-MX', { hour12: true });
 
-    const dataRows = departures.map((d, idx) => {
+    const sortedDepartures = [...departures].sort((a, b) => {
+      const rawA = a.departure_date || a.bajaAt || a.scannedAt || a.assignedAt;
+      const rawB = b.departure_date || b.bajaAt || b.scannedAt || b.assignedAt;
+      const timeA = rawA ? new Date(rawA).getTime() : 0;
+      const timeB = rawB ? new Date(rawB).getTime() : 0;
+      if (timeA && timeB) return timeB - timeA;
+      if (timeA && !timeB) return -1;
+      if (!timeA && timeB) return 1;
+      return 0;
+    });
+
+    const dataRows = sortedDepartures.map((d, idx) => {
       const depDate = d.departure_date ? new Date(d.departure_date) : (d.bajaAt ? new Date(d.bajaAt) : null);
       const isValid = depDate && !isNaN(depDate.getTime());
       return {
@@ -321,6 +332,7 @@ export class InventoryController {
         'Clave / Modelo': d.material || '',
         'Número de Equipo': d.internal_number || '',
         'Nombre que Solicita': d.requested_by || d.requestedBy || 'Sin especificar',
+        'Persona que Entrega': d.dispatched_by || d.dispatchedBy || d.operator || 'Operador',
         'Último Almacén': d.warehouse_name || '',
         'Última Fila': d.warehouse_row || '',
         'Último Espacio': d.warehouse_space || '',
@@ -582,12 +594,16 @@ export class InventoryController {
     ];
     XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES");
 
-    // 4. Hoja BAJAS (Equipos dados de baja / salidas del checklist con fecha)
+    // 4. Hoja BAJAS (Equipos dados de baja / salidas del checklist con fecha, ordenadas de la más nueva a la más vieja)
     const sortedBajas = [...bajas].sort((a, b) => {
-      const docA = a.documentName || '';
-      const docB = b.documentName || '';
-      if (docA !== docB) return docA.localeCompare(docB);
-      return a.serial.localeCompare(b.serial);
+      const rawA = a.bajaAt || a.departure_date || a.scannedAt || a.assignedAt;
+      const rawB = b.bajaAt || b.departure_date || b.scannedAt || b.assignedAt;
+      const timeA = rawA ? new Date(rawA).getTime() : 0;
+      const timeB = rawB ? new Date(rawB).getTime() : 0;
+      if (timeA && timeB) return timeB - timeA;
+      if (timeA && !timeB) return -1;
+      if (!timeA && timeB) return 1;
+      return (a.serial || '').localeCompare(b.serial || '');
     });
 
     const dataBajas = sortedBajas.map((p, idx) => {
@@ -599,6 +615,8 @@ export class InventoryController {
         'NUMERO DE SERIE': p.serial || '',
         'NUMERO DE EQUIPO': p.internalNumber !== null && p.internalNumber !== undefined && p.internalNumber !== '' ? p.internalNumber : '',
         'ESTADO': 'DADA DE BAJA',
+        'NOMBRE QUE SOLICITA': p.requestedBy || p.requested_by || 'Sin especificar',
+        'PERSONA QUE ENTREGA': p.dispatchedBy || p.dispatched_by || p.operator || 'Operador',
         'FECHA DE BAJA': isValid ? bajaDateObj.toLocaleDateString('es-MX') : 'No registrada',
         'HORA EN QUE SE DIO DE BAJA': isValid ? bajaDateObj.toLocaleTimeString('es-MX', { hour12: true }) : 'No registrada',
         'FECHA Y HORA DE BAJA': isValid ? bajaDateObj.toLocaleString('es-MX', { hour12: true }) : 'No registrada',
@@ -770,6 +788,7 @@ export class InventoryController {
         'MODELO': it.material || '',
         '# EQUIPO': it.internalNumber || '',
         'NOMBRE QUE SOLICITA': it.requestedBy || sessionRecord.requestedBy || 'Sin especificar',
+        'PERSONA QUE ENTREGA': it.dispatchedBy || it.operator || sessionRecord.operator || 'Operador',
         'LOTE ORIGEN': it.batchFolio ? `${it.batchFolio} - ${it.batchName || ''}` : (it.batchName || 'Inventario'),
         'ALMACÉN': it.warehouseName || 'Almacén 1',
         'FILA': it.warehouseRow || 'Sin Asignar',
@@ -832,6 +851,7 @@ export class InventoryController {
         'MODELO': d.material || '',
         '# EQUIPO': d.internal_number || d.internalNumber || '',
         'NOMBRE QUE SOLICITA': d.requested_by || d.requestedBy || 'Sin especificar',
+        'PERSONA QUE ENTREGA': d.dispatched_by || d.dispatchedBy || d.operator || 'Operador',
         'LOTE / ORIGEN': d.batchFolio ? `${d.batchFolio} (${d.batchName || ''})` : (d.batchName || 'General'),
         'ALMACÉN': d.warehouse_name || d.warehouseName || '',
         'FILA': d.warehouse_row || d.warehouseRow || '',

@@ -380,7 +380,7 @@ function App() {
   };
 
   // Marcar una serie del checklist como baja (salida de almacén)
-  const handleMarkChecklistBaja = async (serial, bajaDate, reason, specificBatchId = null, requestedBy = null) => {
+  const handleMarkChecklistBaja = async (serial, bajaDate, reason, specificBatchId = null, requestedBy = null, dispatchedBy = null) => {
     const targetBatchId = specificBatchId || activeBatchId;
     if (!targetBatchId || !serial) return;
 
@@ -397,7 +397,8 @@ function App() {
             status: 'BAJA',
             bajaAt: dateVal,
             bajaReason: reason,
-            requestedBy: requestedBy,
+            requestedBy: requestedBy || p.requestedBy || null,
+            dispatchedBy: dispatchedBy || p.dispatchedBy || null,
             isScanned: true
           };
         }
@@ -412,7 +413,7 @@ function App() {
     }));
 
     try {
-      await ChecklistController.markChecklistPrinterBaja(targetBatchId, sUpper, dateVal, reason, requestedBy);
+      await ChecklistController.markChecklistPrinterBaja(targetBatchId, sUpper, dateVal, reason, requestedBy, dispatchedBy);
     } catch (err) {
       console.error('Error al registrar baja de checklist:', err);
     }

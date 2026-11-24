@@ -3,6 +3,7 @@ import { soundEffects } from '../utils/soundEffects.js';
 import { findSerialMatch, extractSerialFromScanned } from '../utils/serialMatcher.js';
 import { InventoryController } from '../controllers/InventoryController.js';
 import { getRequesters, addRequester, removeRequester } from '../utils/requestersManager.js';
+import { getDispatchers, addDispatcher } from '../utils/dispatchersManager.js';
 
 export default function ChecklistBajasModal({
   isOpen,
@@ -27,6 +28,15 @@ export default function ChecklistBajasModal({
   });
   const [showAddRequester, setShowAddRequester] = useState(false);
   const [newRequesterName, setNewRequesterName] = useState('');
+
+  const [dispatchersList, setDispatchersList] = useState(() => getDispatchers());
+  const [selectedDispatcher, setSelectedDispatcher] = useState(() => {
+    const list = getDispatchers();
+    return list[0] || 'OPERADOR';
+  });
+  const [showAddDispatcher, setShowAddDispatcher] = useState(false);
+  const [newDispatcherName, setNewDispatcherName] = useState('');
+
   const [bajasSearchQuery, setBajasSearchQuery] = useState('');
   const [searchCatalogQuery, setSearchCatalogQuery] = useState('');
   const [notification, setNotification] = useState(null); // { type: 'success' | 'error' | 'warning', text: string }
@@ -49,19 +59,33 @@ export default function ChecklistBajasModal({
     return expected.filter(p => p.isBaja || p.status === 'BAJA');
   }, [expected]);
 
-  // Lista filtrada de bajas para la tablita estilo Excel
+  // Lista filtrada de bajas para la tablita estilo Excel (ordenada de más nueva a más vieja)
   const filteredBajas = useMemo(() => {
     const q = bajasSearchQuery.trim().toLowerCase();
-    if (!q) return bajasList;
-    return bajasList.filter(p => 
-      (p.serial || '').toLowerCase().includes(q) ||
-      (p.material || '').toLowerCase().includes(q) ||
-      String(p.internalNumber || '').includes(q) ||
-      (p.requestedBy || p.requested_by || '').toLowerCase().includes(q) ||
-      (p.bajaReason || '').toLowerCase().includes(q) ||
-      (p.warehouseRow || '').toLowerCase().includes(q) ||
-      (p.warehouseSpace || '').toLowerCase().includes(q)
-    );
+    const list = bajasList.filter(p => {
+      if (!q) return true;
+      return (
+        (p.serial || '').toLowerCase().includes(q) ||
+        (p.material || '').toLowerCase().includes(q) ||
+        String(p.internalNumber || '').includes(q) ||
+        (p.requestedBy || p.requested_by || '').toLowerCase().includes(q) ||
+        (p.dispatchedBy || p.dispatched_by || p.operator || '').toLowerCase().includes(q) ||
+        (p.bajaReason || '').toLowerCase().includes(q) ||
+        (p.warehouseRow || '').toLowerCase().includes(q) ||
+        (p.warehouseSpace || '').toLowerCase().includes(q)
+      );
+    });
+
+    return list.sort((a, b) => {
+      const rawA = a.scannedAt || a.bajaAt || a.departure_date || a.assignedAt;
+      const rawB = b.scannedAt || b.bajaAt || b.departure_date || b.assignedAt;
+      const timeA = rawA ? new Date(rawA).getTime() : 0;
+      const timeB = rawB ? new Date(rawB).getTime() : 0;
+      if (timeA && timeB) return timeB - timeA;
+      if (timeA && !timeB) return -1;
+      if (!timeA && timeB) return 1;
+      return 0;
+    });
   }, [bajasList, bajasSearchQuery]);
 
   // Lista filtrada del catálogo de este checklist
@@ -108,7 +132,7 @@ export default function ChecklistBajasModal({
     soundEffects.playScanSuccess();
     
     if (onMarkBaja) {
-      await onMarkBaja(matchedItem.serial, dateToUse, bajaReason, batchDetails.id, selectedRequester);
+      await onMarkBaja(matchedItem.serial, dateToUse, bajaReason, batchDetails.id, selectedRequester, selectedDispatcher);
     }
 
     showNotification('success', `✓ Serie ${matchedItem.serial} dada de baja exitosamente.`);
@@ -248,6 +272,35 @@ export default function ChecklistBajasModal({
                 </button>
               </div>
 
+              {/* Selector de Nombre de quien entrega / da el producto */}
+              <div className="flex items-center gap-1 bg-white border border-rose-200 rounded-xl px-2 py-1">
+                <span className="text-[11px] font-bold text-blue-800 shrink-0">🚚 Entrega:</span>
+                <select
+                  value={selectedDispatcher}
+                  onChange={(e) => {
+                    if (e.target.value === '__NEW__') {
+                      setShowAddDispatcher(true);
+                    } else {
+                      setSelectedDispatcher(e.target.value);
+                    }
+                  }}
+                  className="bg-transparent text-xs font-bold text-slate-800 outline-none cursor-pointer"
+                >
+                  {dispatchersList.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                  <option value="__NEW__">+ Agregar otro despachador...</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowAddDispatcher(true)}
+                  className="text-xs text-blue-700 hover:text-blue-900 font-black px-1"
+                  title="Agregar nuevo despachador a la lista"
+                >
+                  ➕
+                </button>
+              </div>
+
               <input
                 type="text"
                 placeholder="Motivo (ej. Venta, Taller, Garantía)..."
@@ -296,6 +349,43 @@ export default function ChecklistBajasModal({
               <button
                 type="button"
                 onClick={() => setShowAddRequester(false)}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs px-2.5 py-1 rounded-lg"
+              >
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          {/* Modal rápido para agregar nuevo despachador / persona que entrega */}
+          {showAddDispatcher && (
+            <div className="mt-2 p-3 bg-white rounded-xl border border-blue-300 shadow-sm flex items-center gap-2">
+              <span className="text-xs font-bold text-slate-700">Nuevo Despachador (Quien Entrega):</span>
+              <input
+                type="text"
+                placeholder="Escribe el nombre (ej. ALBERTO, CARLOS)..."
+                value={newDispatcherName}
+                onChange={(e) => setNewDispatcherName(e.target.value.toUpperCase())}
+                className="flex-1 py-1 px-2 border border-slate-300 rounded-lg text-xs font-bold uppercase outline-none"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (newDispatcherName.trim()) {
+                    const updated = addDispatcher(newDispatcherName);
+                    setDispatchersList(updated);
+                    setSelectedDispatcher(newDispatcherName.trim().toUpperCase());
+                    setNewDispatcherName('');
+                    setShowAddDispatcher(false);
+                  }
+                }}
+                className="bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs px-3 py-1 rounded-lg"
+              >
+                Guardar
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAddDispatcher(false)}
                 className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs px-2.5 py-1 rounded-lg"
               >
                 Cancelar
@@ -393,6 +483,7 @@ export default function ChecklistBajasModal({
                         <th className="py-2 px-2.5 min-w-[160px]">Modelo</th>
                         <th className="py-2 px-2.5 min-w-[80px]"># Santi</th>
                         <th className="py-2 px-2.5 min-w-[140px]">Nombre que solicita</th>
+                        <th className="py-2 px-2.5 min-w-[140px]">Persona que entrega</th>
                         <th className="py-2 px-2.5 min-w-[140px]">Motivo</th>
                         <th className="py-2 px-2.5 w-24 text-center">Acción</th>
                       </tr>
@@ -447,6 +538,12 @@ export default function ChecklistBajasModal({
                               <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded text-[11px] font-bold">
                                 <span>👤</span>
                                 <span>{item.requestedBy || item.requested_by || 'Sin especificar'}</span>
+                              </span>
+                            </td>
+                            <td className="py-2 px-2.5">
+                              <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200 px-2 py-0.5 rounded text-[11px] font-bold">
+                                <span>🚚</span>
+                                <span>{item.dispatchedBy || item.dispatched_by || item.operator || 'Operador'}</span>
                               </span>
                             </td>
                             <td className="py-2 px-2.5 text-slate-600 italic text-[11px] truncate max-w-[160px]" title={item.bajaReason || 'Salida'}>
