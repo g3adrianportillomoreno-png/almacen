@@ -124,8 +124,15 @@ export class InventoryController {
    * Cambia el estado de una impresora a 'BAJA'
    * (Confirma que la impresora ya se va / salida del almacén)
    */
-  static async markAsBaja(serial) {
-    await InventoryRepository.updatePrinterStatus(serial, PrinterModel.STATUS_BAJA);
+  static async markAsBaja(serial, requestedBy = null, dispatchedBy = null, reason = 'Baja de almacén') {
+    await InventoryRepository.markChecklistPrinterBaja(null, serial, new Date().toISOString(), reason, requestedBy, dispatchedBy);
+  }
+
+  /**
+   * Actualiza el nombre que solicita y persona que entrega de una baja registrada
+   */
+  static async updateBajaPersonas(serial, requestedBy, dispatchedBy) {
+    return await InventoryRepository.updateBajaPersonas(serial, requestedBy, dispatchedBy);
   }
 
   /**

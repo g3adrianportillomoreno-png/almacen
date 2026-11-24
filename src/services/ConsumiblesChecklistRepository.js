@@ -178,6 +178,15 @@ export class ConsumiblesChecklistRepository {
     const updatedBatches = [newBatch, ...currentBatches.filter(b => String(b.id) !== String(newBatch.id))];
     this.saveLocalBatches(updatedBatches);
 
+    // Auto-vincular permanentemente códigos de barras al catálogo maestro
+    (parsedData.items || []).forEach(it => {
+      if (it.barcode && it.code && it.barcode !== it.code) {
+        try {
+          ConsumiblesRepository.linkBarcodeToConsumible(it.barcode, it.code);
+        } catch (e) {}
+      }
+    });
+
     return newBatch;
   }
 
@@ -274,6 +283,18 @@ export class ConsumiblesChecklistRepository {
     item.scansHistory = [scanEntry, ...(item.scansHistory || [])].slice(0, 50);
 
     items[matchedItemIndex] = item;
+
+    // Auto-vincular permanentemente el código escaneado con la clave del producto
+    if (query && item.code && query !== item.code) {
+      try {
+        ConsumiblesRepository.linkBarcodeToConsumible(query, item.code);
+      } catch (e) {}
+    }
+    if (item.barcode && item.code && item.barcode !== item.code) {
+      try {
+        ConsumiblesRepository.linkBarcodeToConsumible(item.barcode, item.code);
+      } catch (e) {}
+    }
 
     // 4. Recalcular métricas del lote completo
     let totalScanned = 0;
@@ -434,6 +455,36 @@ export class ConsumiblesChecklistRepository {
   }
 
   /**
+   * Actualiza la ubicación física de una partida en el lote de recepción
+   * Registra si fue verificada (VERIFIED_OK) o modificada de lugar (RELOCATED)
+   */
+  static async updateItemLocation(batchId, itemId, newLocation, isVerified = false, prevLocation = null) {
+    const batches = this.getLocalBatches();
+    const batchIndex = batches.findIndex(b => String(b.id) === String(batchId));
+    if (batchIndex === -1) return null;
+
+    const batch = { ...batches[batchIndex] };
+    const items = [...batch.items];
+    const itIndex = items.findIndex(it => String(it.id) === String(itemId) || String(it.code) === String(itemId));
+    if (itIndex === -1) return null;
+
+    const it = { ...items[itIndex] };
+    const prevLoc = prevLocation || it.location || 'Sin Asignar';
+    it.location = newLocation;
+    it.prevLocation = prevLoc;
+    it.locationStatus = isVerified ? 'VERIFIED_OK' : 'RELOCATED';
+    it.locationUpdatedAt = new Date().toISOString();
+
+    items[itIndex] = it;
+    batch.items = items;
+    batch.updatedAt = new Date().toISOString();
+
+    batches[batchIndex] = batch;
+    this.saveLocalBatches(batches);
+    return { batch, item: it };
+  }
+
+  /**
    * Exporta a archivo Excel oficial el reporte completo de recepción de consumibles
    */
   static exportChecklistToExcel(batch) {
@@ -458,6 +509,8 @@ export class ConsumiblesChecklistRepository {
       { 'CAMPO': 'PARTIDAS COMPLETADAS AL 100%', 'VALOR': batch.completedItemsCount || 0 },
       { 'CAMPO': 'PARTIDAS CON FALTANTES', 'VALOR': batch.items.filter(it => (it.pendingQty || 0) > 0).length },
       { 'CAMPO': 'PARTIDAS CON EXCEDENTES', 'VALOR': batch.items.filter(it => (it.scannedQty || 0) > it.expectedQty).length },
+      { 'CAMPO': 'UBICACIONES MODIFICADAS / REUBICADAS (AMARILLO)', 'VALOR': batch.items.filter(it => it.locationStatus === 'RELOCATED').length },
+      { 'CAMPO': 'UBICACIONES VERIFICADAS CORRECTAS (VERDE)', 'VALOR': batch.items.filter(it => it.locationStatus === 'VERIFIED_OK').length },
       { 'CAMPO': '', 'VALOR': '' },
       { 'CAMPO': 'TOTAL PIEZAS ESPERADAS / FACTURADAS', 'VALOR': batch.totalExpectedUnits || 0 },
       { 'CAMPO': 'TOTAL PIEZAS FÍSICAMENTE RECIBIDAS', 'VALOR': batch.totalScannedUnits || 0 },
@@ -467,7 +520,7 @@ export class ConsumiblesChecklistRepository {
     ];
 
     const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
-    wsResumen['!cols'] = [{ wch: 45 }, { wch: 35 }];
+    wsResumen['!cols'] = [{ wch: 48 }, { wch: 35 }];
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
     // 2. HOJA DETALLE COMPLETO
@@ -482,6 +535,13 @@ export class ConsumiblesChecklistRepository {
         estatusStr = `EN PROCESO (${Math.round((rcv / exp) * 100)}%)`;
       }
 
+      let auditStatus = 'SIN AUDITAR';
+      if (it.locationStatus === 'RELOCATED') {
+        auditStatus = '⚠️ CAMBIO DE LUGAR (MODIFICADA)';
+      } else if (it.locationStatus === 'VERIFIED_OK') {
+        auditStatus = '✓ TODO BIEN (VERIFICADA)';
+      }
+
       return {
         'NO.': idx + 1,
         'CLAVE / CÓDIGO': it.code || '',
@@ -489,6 +549,8 @@ export class ConsumiblesChecklistRepository {
         'DESCRIPCIÓN': it.description || '',
         'COMPATIBILIDAD (MODELOS)': it.forUseIn || '',
         'UBICACIÓN FÍSICA ALMACÉN': it.location || 'Sin Asignar',
+        'AUDITORÍA DE UBICACIÓN': auditStatus,
+        'UBICACIÓN ANTERIOR (SI CAMBIÓ)': it.locationStatus === 'RELOCATED' ? (it.prevLocation || '') : '',
         'CANTIDAD ESPERADA': exp,
         'CANTIDAD RECIBIDA': rcv,
         'FALTANTES': it.pendingQty || 0,
@@ -507,6 +569,8 @@ export class ConsumiblesChecklistRepository {
       { wch: 22 },
       { wch: 40 },
       { wch: 35 },
+      { wch: 28 },
+      { wch: 32 },
       { wch: 28 },
       { wch: 18 },
       { wch: 18 },

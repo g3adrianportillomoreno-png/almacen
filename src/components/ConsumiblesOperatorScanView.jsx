@@ -1,56 +1,120 @@
 // src/components/ConsumiblesOperatorScanView.jsx
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { ConsumiblesController } from '../controllers/ConsumiblesController.js';
+import { ConsumiblesRepository } from '../services/ConsumiblesRepository.js';
+import { ConsumiblesChecklistRepository } from '../services/ConsumiblesChecklistRepository.js';
 import { soundEffects } from '../utils/soundEffects.js';
 import CameraScanner from './CameraScanner.jsx';
 
-export default function ConsumiblesOperatorScanView() {
-  const [catalog, setCatalog] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [scanInput, setScanInput] = useState('');
-  const [activeItem, setActiveItem] = useState(null);
-  const [candidates, setCandidates] = useState([]);
-  const [isCameraActive, setIsCameraActive] = useState(false);
-  const [scanHistory, setScanHistory] = useState([]);
-  const [notification, setNotification] = useState(null);
+export default function ConsumiblesOperatorScanView({
+  initialBatchId = null,
+  onSelectBatch = null
+}) {
+  // Modalidad principal del operador: 'RECEPTION' (Recepción de lotes/facturas) o 'CATALOG' (Consulta y auditoría de catálogo)
+  const [activeMode, setActiveMode] = useState('RECEPTION');
 
-  // Estados para vinculación de código nuevo (ej. EAN 6920952323115)
+  // Lotes de consumibles para recepción
+  const [consumablesBatches, setConsumablesBatches] = useState([]);
+  const [selectedBatchId, setSelectedBatchId] = useState(initialBatchId);
+  const [activeBatch, setActiveBatch] = useState(null);
+  const [loadingBatches, setLoadingBatches] = useState(true);
+
+  // Filtros de recepción en lote: 'ALL' | 'PENDING' | 'COMPLETED' | 'SURPLUS'
+  const [receptionFilter, setReceptionFilter] = useState('ALL');
+  const [batchSearchQuery, setBatchSearchQuery] = useState('');
+
+  // Estados de escaneo y captura rápida de recepción
+  const [receptionScanInput, setReceptionScanInput] = useState('');
+  const [capturingItem, setCapturingItem] = useState(null);
+  const [captureQuantity, setCaptureQuantity] = useState(1);
+  const [scannedBarcodeForLinking, setScannedBarcodeForLinking] = useState('');
+
+  // Modificación de ubicación de partida en recepción
+  const [editingItemLocation, setEditingItemLocation] = useState(null);
+  const [locationEditInput, setLocationEditInput] = useState('');
+
+  // Estados para modo Catálogo y Ubicaciones
+  const [catalog, setCatalog] = useState([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [catalogScanInput, setCatalogScanInput] = useState('');
+  const [activeCatalogItem, setActiveCatalogItem] = useState(null);
   const [unlinkedCode, setUnlinkedCode] = useState(null);
   const [linkingSearch, setLinkingSearch] = useState('');
-  const [showManualLinkInput, setShowManualLinkInput] = useState(false);
-  const [additionalBarcodeInput, setAdditionalBarcodeInput] = useState('');
-
-  // Estados para modificación y auditoría de ubicación física del producto
-  const [isEditingLocation, setIsEditingLocation] = useState(false);
+  const [isEditingCatalogLocation, setIsEditingCatalogLocation] = useState(false);
   const [editSeccion, setEditSeccion] = useState('');
   const [editAnaquel, setEditAnaquel] = useState('');
   const [editEspacio, setEditEspacio] = useState('');
   const [editAlmacen, setEditAlmacen] = useState('Principal');
+  const [scanHistory, setScanHistory] = useState([]);
+
+  // Estados generales
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [notification, setNotification] = useState(null);
   const [operatorName, setOperatorName] = useState('Operador');
 
   const scanInputRef = useRef(null);
 
+  // 1. Cargar lotes de consumibles al montar
   useEffect(() => {
-    loadCatalogData();
+    loadBatchesData();
   }, []);
 
+  const loadBatchesData = async () => {
+    setLoadingBatches(true);
+    try {
+      const batches = await ConsumiblesChecklistRepository.fetchAllConsumablesBatches();
+      setConsumablesBatches(batches || []);
+
+      if (batches && batches.length > 0) {
+        if (initialBatchId) {
+          const found = batches.find(b => String(b.id) === String(initialBatchId));
+          if (found) {
+            setSelectedBatchId(found.id);
+            setActiveBatch(found);
+          } else {
+            setSelectedBatchId(batches[0].id);
+            setActiveBatch(batches[0]);
+          }
+        } else if (!selectedBatchId) {
+          setSelectedBatchId(batches[0].id);
+          setActiveBatch(batches[0]);
+        } else {
+          const found = batches.find(b => String(b.id) === String(selectedBatchId));
+          if (found) setActiveBatch(found);
+        }
+      }
+    } catch (e) {
+      console.warn('Error cargando lotes de consumibles en modo operador:', e);
+    } finally {
+      setLoadingBatches(false);
+    }
+  };
+
+  // 2. Cargar catálogo maestro si el operador cambia a modo catálogo
+  useEffect(() => {
+    if (activeMode === 'CATALOG' && catalog.length === 0) {
+      loadCatalogData();
+    }
+  }, [activeMode]);
+
   const loadCatalogData = async () => {
-    setLoading(true);
+    setLoadingCatalog(true);
     try {
       const items = await ConsumiblesController.loadCatalog();
       setCatalog(items || []);
     } catch (e) {
-      console.warn('Error cargando consumibles en modo operador:', e);
+      console.warn('Error cargando catálogo:', e);
     } finally {
-      setLoading(false);
+      setLoadingCatalog(false);
     }
   };
 
+  // 3. Autoenfoque constante en el input lector
   useEffect(() => {
-    if (!isCameraActive && !unlinkedCode && scanInputRef.current) {
+    if (!isCameraActive && !capturingItem && !editingItemLocation && !unlinkedCode && scanInputRef.current) {
       scanInputRef.current.focus();
     }
-  }, [isCameraActive, activeItem, unlinkedCode]);
+  }, [isCameraActive, capturingItem, editingItemLocation, unlinkedCode, activeMode, selectedBatchId]);
 
   const showToast = (type, text) => {
     setNotification({ type, text });
@@ -59,51 +123,226 @@ export default function ConsumiblesOperatorScanView() {
     }, 4500);
   };
 
-  // Coincidencias predictivas en tiempo real mientras el operador escribe la clave o modelo
-  const liveSuggestions = useMemo(() => {
-    const q = scanInput.trim();
-    if (!q || q.length < 1) return [];
-    return ConsumiblesController.searchPredictive(q, catalog, 20);
-  }, [scanInput, catalog]);
+  // Sincronizar activeBatch si cambia selectedBatchId
+  useEffect(() => {
+    if (selectedBatchId && consumablesBatches.length > 0) {
+      const found = consumablesBatches.find(b => String(b.id) === String(selectedBatchId));
+      if (found) setActiveBatch(found);
+    }
+  }, [selectedBatchId, consumablesBatches]);
 
-  // Coincidencias predictivas para la pantalla de vinculación de código nuevo
-  const linkingSuggestions = useMemo(() => {
-    const q = linkingSearch.trim();
-    if (!q) return catalog.slice(0, 10);
-    return ConsumiblesController.searchPredictive(q, catalog, 12);
-  }, [linkingSearch, catalog]);
+  // Contadores y métricas de partidas del lote activo
+  const batchStats = useMemo(() => {
+    if (!activeBatch || !activeBatch.items) {
+      return { total: 0, pending: 0, completed: 0, surplus: 0, totalExp: 0, totalScanned: 0 };
+    }
+    const items = activeBatch.items;
+    const total = items.length;
+    let pending = 0;
+    let completed = 0;
+    let surplus = 0;
+    let totalExp = 0;
+    let totalScanned = 0;
 
-  const handleSelectProduct = (item) => {
+    items.forEach(it => {
+      const exp = it.expectedQty || 0;
+      const rcv = it.scannedQty || 0;
+      totalExp += exp;
+      totalScanned += rcv;
+      if (rcv > exp) surplus++;
+      else if (rcv >= exp && exp > 0) completed++;
+      else pending++;
+    });
+
+    return { total, pending, completed, surplus, totalExp, totalScanned };
+  }, [activeBatch]);
+
+  // Lista de partidas del lote activo según el filtro de estatus y búsqueda
+  const filteredBatchItems = useMemo(() => {
+    if (!activeBatch || !activeBatch.items) return [];
+    const q = batchSearchQuery.trim().toLowerCase();
+    return activeBatch.items.filter(it => {
+      const exp = it.expectedQty || 0;
+      const rcv = it.scannedQty || 0;
+
+      // Filtro de estatus
+      if (receptionFilter === 'PENDING' && rcv >= exp) return false;
+      if (receptionFilter === 'COMPLETED' && (rcv < exp || rcv > exp)) return false;
+      if (receptionFilter === 'SURPLUS' && rcv <= exp) return false;
+
+      // Filtro de búsqueda
+      if (!q) return true;
+      const code = String(it.code || '').toLowerCase();
+      const barcode = String(it.barcode || '').toLowerCase();
+      const desc = String(it.description || '').toLowerCase();
+      const loc = String(it.location || '').toLowerCase();
+      return code.includes(q) || barcode.includes(q) || desc.includes(q) || loc.includes(q);
+    });
+  }, [activeBatch, receptionFilter, batchSearchQuery]);
+
+  // =========================================================================
+  // FLUJO DE RECEPCIÓN: ESCANEO Y CAPTURA CÓMODA CON CAJAS
+  // =========================================================================
+
+  const handleProcessReceptionScan = async (codeToScan = receptionScanInput) => {
+    const raw = String(codeToScan || '').trim();
+    if (!raw || !activeBatch) return;
+
+    const query = raw.toUpperCase();
+    const queryClean = query.replace(/[^A-Z0-9]/g, '');
+
+    // Buscar coincidencia en el lote
+    const items = activeBatch.items || [];
+    const matchedItem = items.find(it => {
+      if (it.barcode && String(it.barcode).trim() === raw) return true;
+      const cleanB = String(it.barcode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (cleanB && cleanB === queryClean) return true;
+      const cleanC = String(it.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (cleanC === queryClean) return true;
+      const codeUpper = String(it.code || '').toUpperCase();
+      if (codeUpper.includes(query) || query.includes(codeUpper)) return true;
+      return false;
+    });
+
+    if (!matchedItem) {
+      soundEffects.playScanError();
+      showToast('error', `❌ El código "${raw}" no pertenece al lote activo (${activeBatch.folio}).`);
+      setReceptionScanInput('');
+      return;
+    }
+
+    // Coincidencia exitosa: Abrir de inmediato la tarjeta/modal de captura rápida
     soundEffects.playScanSuccess();
-    setActiveItem(item);
-    setCandidates([]);
+    setCapturingItem(matchedItem);
+    setScannedBarcodeForLinking(raw);
+
+    // Calcular cantidad sugerida por defecto:
+    // Si quedan pendientes, sugerir las piezas que faltan para completar o mínimo 1
+    const pending = Math.max(1, (matchedItem.expectedQty || 0) - (matchedItem.scannedQty || 0));
+    setCaptureQuantity(pending > 0 ? pending : 1);
+    setReceptionScanInput('');
+  };
+
+  // Confirmar y aplicar la cantidad recibida
+  const handleConfirmReceptionQuantity = async () => {
+    if (!capturingItem || !activeBatch) return;
+
+    const qty = parseInt(captureQuantity, 10);
+    if (isNaN(qty) || qty <= 0) {
+      alert("Por favor ingresa una cantidad numérica válida mayor a 0.");
+      return;
+    }
+
+    const codeToSubmit = scannedBarcodeForLinking || capturingItem.barcode || capturingItem.code;
+
+    // 1. Registrar escaneo con multiplicador
+    const result = await ConsumiblesChecklistRepository.recordScan(
+      activeBatch.id,
+      codeToSubmit,
+      qty,
+      operatorName
+    );
+
+    if (!result.success) {
+      soundEffects.playScanError();
+      showToast('error', result.message || 'Error al registrar la recepción.');
+      return;
+    }
+
+    // 2. Auto-vincular el código de barras escaneado al producto en el catálogo maestro
+    if (scannedBarcodeForLinking && scannedBarcodeForLinking !== capturingItem.code) {
+      try {
+        await ConsumiblesRepository.linkBarcodeToConsumible(scannedBarcodeForLinking, capturingItem.code);
+      } catch (e) {
+        console.warn('Nota auto-vinculación:', e);
+      }
+    }
+
+    // 3. Sonido y notificación
+    if (result.isSurplus) {
+      soundEffects.playScanDuplicate();
+      showToast('warning', `⚠️ ¡Excedente! Se contaron +${qty} pzas de ${capturingItem.code} (${result.item.scannedQty}/${capturingItem.expectedQty}).`);
+    } else if (result.isItemCompleted) {
+      soundEffects.playScanSuccess();
+      showToast('success', `🎉 ¡Partida completada al 100%! ${capturingItem.code} (${result.item.scannedQty}/${capturingItem.expectedQty} pzas).`);
+    } else {
+      soundEffects.playScanSuccess();
+      showToast('success', `✓ +${qty} pzas recibidas de ${capturingItem.code}. Faltan ${result.item.pendingQty} pzas.`);
+    }
+
+    setActiveBatch(result.batch);
+    setConsumiblesBatches(prev => prev.map(b => b.id === result.batch.id ? result.batch : b));
+    setCapturingItem(null);
+    setScannedBarcodeForLinking('');
+
+    if (scanInputRef.current) scanInputRef.current.focus();
+  };
+
+  // Modificar la ubicación de una partida en el checklist (marca AMARILLA o VERDE)
+  const handleSaveItemLocation = async (item, isVerifiedOk = false) => {
+    if (!item || !activeBatch) return;
+    const newLoc = isVerifiedOk ? (item.location || 'Sin Asignar') : locationEditInput.trim().toUpperCase();
+    if (!newLoc) return;
+
+    const res = await ConsumiblesChecklistRepository.updateItemLocation(
+      activeBatch.id,
+      item.id,
+      newLoc,
+      isVerifiedOk,
+      item.location
+    );
+
+    if (res?.batch) {
+      setActiveBatch(res.batch);
+      setConsumiblesBatches(prev => prev.map(b => b.id === res.batch.id ? res.batch : b));
+      soundEffects.playScanSuccess();
+
+      if (isVerifiedOk) {
+        showToast('success', `✓ Ubicación verificada correcta: ${newLoc} (Marcada VERDE)`);
+      } else {
+        showToast('warning', `⚠️ ¡Ubicación modificada a ${newLoc}! (Marcada AMARILLA en Excel)`);
+      }
+    }
+
+    setEditingItemLocation(null);
+    setLocationEditInput('');
+  };
+
+  // Exportar Excel oficial del lote
+  const handleExportBatchExcel = () => {
+    if (!activeBatch) return;
+    ConsumiblesChecklistRepository.exportChecklistToExcel(activeBatch);
+  };
+
+  // =========================================================================
+  // FLUJO DE CATÁLOGO GENERAL Y AUDITORÍA DE UBICACIÓN
+  // =========================================================================
+
+  const handleSelectProductCatalog = (item) => {
+    soundEffects.playScanSuccess();
+    setActiveCatalogItem(item);
     setUnlinkedCode(null);
-    setScanInput('');
-    setIsEditingLocation(false);
+    setCatalogScanInput('');
+    setIsEditingCatalogLocation(false);
     setEditSeccion(item.seccion || '');
     setEditAnaquel(item.anaquel || '');
     setEditEspacio(item.espacio || '');
     setEditAlmacen(item.almacen || 'Principal');
     showToast('success', `✓ Ubicación: ${item.seccion || 'S/N'} [Anaquel: ${item.anaquel || 'S/N'}]`);
 
-    setScanHistory(prev => {
-      const existing = prev.find(h => h.item.id === item.id);
-      return [
-        {
-          item,
-          status: existing?.status || item.locationStatus || 'UNCHECKED',
-          wasChanged: existing?.wasChanged || (item.locationStatus === 'RELOCATED'),
-          prevLocationStr: existing?.prevLocationStr || null,
-          timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
-          operator: operatorName
-        },
-        ...prev.filter(h => h.item.id !== item.id)
-      ].slice(0, 30);
-    });
+    setScanHistory(prev => [
+      {
+        item,
+        status: item.locationStatus || 'UNCHECKED',
+        wasChanged: item.locationStatus === 'RELOCATED',
+        timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
+        operator: operatorName
+      },
+      ...prev.filter(h => h.item.id !== item.id)
+    ].slice(0, 30));
   };
 
-  // Confirmar que la ubicación actual está correcta (marca VERDE)
-  const handleConfirmLocationOk = async (item) => {
+  const handleConfirmLocationOkCatalog = async (item) => {
     if (!item) return;
     soundEffects.playScanSuccess();
     try {
@@ -114,910 +353,971 @@ export default function ConsumiblesOperatorScanView() {
         almacen: item.almacen
       }, operatorName);
 
-      const verifiedItem = result.item || { ...item, locationStatus: 'VERIFIED_OK' };
-      setActiveItem(verifiedItem);
-      setCatalog(prev => prev.map(c => c.id === item.id ? verifiedItem : c));
-
-      setScanHistory(prev => [
-        {
-          item: verifiedItem,
-          status: 'VERIFIED_OK',
-          wasChanged: false,
-          timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
-          operator: operatorName
-        },
-        ...prev.filter(h => h.item.id !== item.id)
-      ]);
+      const verified = result.item || { ...item, locationStatus: 'VERIFIED_OK' };
+      setActiveCatalogItem(verified);
+      setCatalog(prev => prev.map(c => c.id === item.id ? verified : c));
       showToast('success', `✓ Ubicación confirmada: Todo en orden (${item.seccion || 'S/N'} [${item.anaquel || 'S/N'}])`);
-    } catch (e) {
-      console.error('Error confirmando ubicación:', e);
+    } catch {
       showToast('error', 'Error al confirmar la ubicación.');
     }
   };
 
-  // Guardar reubicación modificada (marca AMARILLA)
-  const handleSaveModifiedLocation = async () => {
-    if (!activeItem) return;
+  const handleSaveModifiedLocationCatalog = async () => {
+    if (!activeCatalogItem) return;
     try {
-      const prevLocStr = `${activeItem.seccion || 'S/N'} [${activeItem.anaquel || 'S/N'} - ${activeItem.espacio || 'S/N'}]`;
-      const result = await ConsumiblesController.updateLocation(activeItem.id, {
+      const result = await ConsumiblesController.updateLocation(activeCatalogItem.id, {
         seccion: editSeccion.trim().toUpperCase(),
         anaquel: editAnaquel.trim().toUpperCase(),
         espacio: editEspacio.trim().toUpperCase(),
         almacen: editAlmacen.trim()
       }, operatorName);
 
-      const updated = result.item || activeItem;
-      setActiveItem(updated);
-      setCatalog(prev => prev.map(c => c.id === activeItem.id ? updated : c));
-      setIsEditingLocation(false);
-
+      const updated = result.item || activeCatalogItem;
+      setActiveCatalogItem(updated);
+      setCatalog(prev => prev.map(c => c.id === activeCatalogItem.id ? updated : c));
+      setIsEditingCatalogLocation(false);
       soundEffects.playScanSuccess();
-      setScanHistory(prev => [
-        {
-          item: updated,
-          status: result.wasChanged ? 'RELOCATED' : 'VERIFIED_OK',
-          wasChanged: result.wasChanged,
-          prevLocationStr,
-          timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true }),
-          operator: operatorName
-        },
-        ...prev.filter(h => h.item.id !== activeItem.id)
-      ]);
 
       if (result.wasChanged) {
         showToast('warning', `⚠️ ¡Ubicación reasignada! Se cambió de lugar a ${updated.seccion} [${updated.anaquel} - ${updated.espacio}]`);
       } else {
         showToast('success', `✓ Misma ubicación guardada y confirmada.`);
       }
-    } catch (e) {
-      console.error('Error guardando nueva ubicación:', e);
+    } catch {
       showToast('error', 'Error al modificar la ubicación.');
     }
   };
 
-  // Exportar Excel de auditoría del operador
-  const handleExportAuditExcel = () => {
-    if (scanHistory.length === 0) {
-      alert("No hay consumibles revisados en la sesión actual.");
-      return;
-    }
-    ConsumiblesController.exportOperatorAudit(scanHistory);
-  };
-
-  const handleProcessScan = (code) => {
+  const handleProcessCatalogScan = (code) => {
     if (!code || !code.trim()) return;
     const query = code.trim();
-
-    // 1. Buscar coincidencias predictivas y ponderadas
     const predictiveMatches = ConsumiblesController.searchPredictive(query, catalog, 20);
 
-    // Si coincide exactamente con la clave de alguno
     const exactClaveMatch = predictiveMatches.find(
       m => String(m.clave || '').trim().toUpperCase() === query.toUpperCase()
     );
     if (exactClaveMatch) {
-      handleSelectProduct(exactClaveMatch);
+      handleSelectProductCatalog(exactClaveMatch);
       return;
     }
 
-    // Si hay una sola coincidencia clara
+    const exactBarcodeMatch = catalog.find(
+      it => Array.isArray(it.barcodes) && it.barcodes.includes(query)
+    );
+    if (exactBarcodeMatch) {
+      handleSelectProductCatalog(exactBarcodeMatch);
+      return;
+    }
+
     if (predictiveMatches.length === 1) {
-      handleSelectProduct(predictiveMatches[0]);
+      handleSelectProductCatalog(predictiveMatches[0]);
       return;
     }
 
-    // Si hay múltiples coincidencias parecidas (ej. escribió "03847", "MX61", "WC5230")
-    if (predictiveMatches.length > 1) {
-      soundEffects.playScanSuccess();
-      setCandidates(predictiveMatches);
-      setActiveItem(null);
-      setUnlinkedCode(null);
-      showToast('info', `Encontramos ${predictiveMatches.length} consumibles similares. Toca abajo cuál es el bueno 👇`);
-      return;
-    }
-
-    // 2. Si no hubo coincidencias predictivas, intentar con findMatch estándar
-    const { match, candidates: matchCandidates, matchedByBarcode } = ConsumiblesController.findMatch(query, catalog);
-
-    if (match) {
-      handleSelectProduct(match);
-      if (matchCandidates && matchCandidates.length > 1) {
-        setCandidates(matchCandidates.filter(c => c.id !== match.id));
-      }
-      if (matchedByBarcode) {
-        showToast('success', `✓ Código vinculado reconocido: ${query} ➔ ${match.clave}`);
-      }
-      return;
-    }
-
-    // 3. Si NO se encuentra nada:
-    // Si parece un código de barras nuevo de fábrica (6 a 20 números, ej. EAN 6920952323115)
-    const isNumericBarcode = /^[0-9]{6,20}$/.test(query.replace(/[^0-9]/g, ''));
-    if (isNumericBarcode) {
-      soundEffects.playScanError();
-      setUnlinkedCode(query);
-      setLinkingSearch('');
-      setActiveItem(null);
-      setCandidates([]);
-      showToast('warning', `Código nuevo "${query}". Selecciona a qué producto pertenece para vincularlo.`);
-    } else {
-      soundEffects.playScanError();
-      showToast('error', `No se encontró ningún consumible que coincida con "${query}".`);
-    }
-
-    if (scanInputRef.current) {
-      scanInputRef.current.focus();
-    }
-  };
-
-  // Confirmar la vinculación del código al consumible
-  const handleConfirmLink = async (targetItem, codeToLink) => {
-    if (!targetItem || !codeToLink) return;
-    try {
-      const updated = await ConsumiblesController.linkBarcode(codeToLink, targetItem.id);
-      if (updated) {
-        setCatalog(prev => prev.map(c => c.id === targetItem.id ? updated : c));
-        setActiveItem(updated);
-        setUnlinkedCode(null);
-        setLinkingSearch('');
-        setShowManualLinkInput(false);
-        setAdditionalBarcodeInput('');
-        soundEffects.playScanSuccess();
-        showToast('success', `✓ ¡Código ${codeToLink} vinculado permanentemente a ${updated.clave}!`);
-
-        setScanHistory(prev => [
-          {
-            item: updated,
-            timestamp: new Date().toLocaleTimeString('es-MX', { hour12: true })
-          },
-          ...prev.filter(h => h.item.id !== updated.id)
-        ].slice(0, 15));
-      }
-    } catch (e) {
-      console.error('Error vinculando código:', e);
-      showToast('error', 'Error al vincular el código de barras.');
-    }
+    // Código nuevo sin registrar
+    soundEffects.playScanError();
+    setUnlinkedCode(query);
+    setLinkingSearch('');
+    showToast('warning', `El código "${query}" no está en el catálogo. Puedes vincularlo a continuación.`);
   };
 
   return (
-    <div className="flex flex-col gap-4 text-slate-100">
+    <div className="flex flex-col gap-4 text-slate-100 max-w-4xl mx-auto w-full animate-in fade-in">
       
-      {/* CÁMARA ESCÁNER TÁCTIL */}
-      {isCameraActive && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col">
-          <CameraScanner
-            onScan={(detectedCode) => {
-              setIsCameraActive(false);
-              handleProcessScan(detectedCode);
-            }}
-            onClose={() => setIsCameraActive(false)}
-          />
-        </div>
-      )}
-
-      {/* AVISO / TOAST */}
+      {/* NOTIFICACIÓN FLOTANTE */}
       {notification && (
-        <div className={`p-3 rounded-2xl text-xs font-black text-center shadow-lg animate-fade-in ${
-          notification.type === 'success'
-            ? 'bg-emerald-600 text-white'
-            : notification.type === 'warning'
-              ? 'bg-amber-500 text-slate-950 font-black'
-              : 'bg-rose-600 text-white'
+        <div className={`p-3.5 rounded-2xl shadow-xl flex items-center justify-between gap-3 text-xs font-bold transition-all border ${
+          notification.type === 'success' ? 'bg-emerald-950/90 border-emerald-500 text-emerald-200' :
+          notification.type === 'warning' ? 'bg-amber-950/90 border-amber-500 text-amber-200' :
+          'bg-rose-950/90 border-rose-500 text-rose-200'
         }`}>
-          {notification.text}
+          <div className="flex items-center gap-2">
+            <span>{notification.type === 'success' ? '✓' : notification.type === 'warning' ? '⚠️' : '✕'}</span>
+            <span>{notification.text}</span>
+          </div>
+          <button type="button" onClick={() => setNotification(null)} className="text-white/60 hover:text-white">✕</button>
         </div>
       )}
 
-      {/* CABECERA MÓVIL DEL MÓDULO */}
-      <div className="bg-slate-900 border border-slate-800 p-3.5 rounded-2xl flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-xl">🏷️</span>
-          <div>
-            <h2 className="text-sm font-black text-white">Lector de Consumibles</h2>
-            <p className="text-[10px] text-slate-400">
-              {loading ? 'Cargando catálogo...' : `${catalog.length} consumibles disponibles`}
-            </p>
-          </div>
+      {/* SELECTOR DE MODO SUPERIOR (RECEPCIÓN vs CATÁLOGO) */}
+      <div className="bg-slate-900/90 p-2 rounded-2xl border border-slate-800 flex items-center justify-between gap-2 shadow-sm">
+        <div className="flex items-center gap-1.5 flex-1">
+          <button
+            type="button"
+            onClick={() => {
+              setActiveMode('RECEPTION');
+              setCapturingItem(null);
+            }}
+            className={`flex-1 py-2 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer ${
+              activeMode === 'RECEPTION'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-purple-300 hover:text-white bg-slate-800/60'
+            }`}
+          >
+            <span>📥</span>
+            <span>Recepción de Lotes</span>
+            <span className="bg-purple-950 text-purple-200 text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-1">
+              {consumablesBatches.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setActiveMode('CATALOG');
+              setCapturingItem(null);
+            }}
+            className={`flex-1 py-2 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 cursor-pointer ${
+              activeMode === 'CATALOG'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-blue-300 hover:text-white bg-slate-800/60'
+            }`}
+          >
+            <span>🏷️</span>
+            <span>Catálogo y Ubicaciones</span>
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setIsCameraActive(true)}
-          className="bg-red-600 hover:bg-red-500 text-white font-black text-xs px-3 py-2 rounded-xl transition flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer"
-        >
-          <span>📷</span>
-          <span>Cámara</span>
-        </button>
-      </div>
-
-      {/* ASISTENTE DE AUTO-VINCULACIÓN (CUANDO SE ESCANEA UN CÓDIGO NUEVO COMO 6920952323115) */}
-      {unlinkedCode && (
-        <div className="bg-gradient-to-br from-amber-950 via-slate-900 to-slate-950 border-2 border-amber-500 rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-col gap-3 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-black text-amber-400 uppercase flex items-center gap-1.5">
-              <span>🔗</span>
-              <span>Código Nuevo de Fábrica Detectado</span>
-            </span>
-            <button
-              onClick={() => setUnlinkedCode(null)}
-              className="text-slate-400 hover:text-white text-xs px-2 py-1 bg-slate-800 rounded-lg"
-            >
-              ✕ Cerrar
-            </button>
-          </div>
-
-          <div className="bg-slate-950 border border-amber-500/50 p-2.5 rounded-xl font-mono text-center font-black text-amber-300 text-sm tracking-wider">
-            {unlinkedCode}
-          </div>
-
-          <p className="text-xs text-slate-300">
-            Escribe 2 letras o números del modelo (ej. <strong>03847</strong> o <strong>MX61</strong>) para vincularlo en 1 toque y no tener que registrarlo después:
-          </p>
-
+        {/* Nombre del Operador */}
+        <div className="hidden sm:flex items-center gap-1 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800 text-[11px] font-bold">
+          <span className="text-slate-400">👤</span>
           <input
             type="text"
-            placeholder="Buscar modelo (ej. 03847, Sharp 61, Brother 227)..."
-            value={linkingSearch}
-            onChange={(e) => setLinkingSearch(e.target.value)}
-            className="w-full bg-slate-900 border-2 border-amber-500/70 text-white rounded-xl px-3.5 py-2.5 text-xs font-bold outline-none"
-            autoFocus
+            value={operatorName}
+            onChange={(e) => setOperatorName(e.target.value)}
+            className="w-20 bg-transparent text-white font-bold outline-none text-[11px]"
+            title="Nombre del operador para auditoría"
           />
-
-          <div className="flex flex-col gap-1.5 max-h-56 overflow-y-auto">
-            {linkingSuggestions.length === 0 ? (
-              <p className="text-xs text-slate-400 text-center py-4">No hay consumibles con ese texto.</p>
-            ) : (
-              linkingSuggestions.map(item => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleConfirmLink(item, unlinkedCode)}
-                  className="bg-slate-900 hover:bg-slate-800 p-3 rounded-2xl border border-slate-700 text-left transition flex items-center justify-between active:scale-98 cursor-pointer"
-                >
-                  <div className="min-w-0 pr-2">
-                    <span className="font-mono font-black text-white text-xs block">{item.clave}</span>
-                    <span className="text-[11px] text-slate-300 truncate block">{item.nombre}</span>
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded font-bold block">
-                      {item.seccion || 'S/N'} [{item.anaquel || 'S/N'}]
-                    </span>
-                    <span className="text-[10px] text-amber-400 font-bold block mt-1">
-                      Vincular ➔
-                    </span>
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
         </div>
-      )}
-
-      {/* BARRA DE BÚSQUEDA Y ESCANEO MANUAL */}
-      <div className="flex flex-col gap-2">
-        <form 
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleProcessScan(scanInput);
-          }}
-          className="flex gap-2"
-        >
-          <div className="relative flex-1">
-            <input
-              ref={scanInputRef}
-              type="text"
-              autoComplete="off"
-              placeholder="Escribe la clave (ej. 03847, MX61, WC52) o escanea..."
-              value={scanInput}
-              onChange={(e) => {
-                setScanInput(e.target.value);
-                if (candidates.length > 0) setCandidates([]);
-              }}
-              className="w-full bg-slate-900 border-2 border-emerald-500/70 focus:border-emerald-400 text-white placeholder:text-slate-500 rounded-2xl px-4 py-3.5 text-sm font-black font-mono outline-none shadow-inner transition"
-            />
-            {scanInput && (
-              <button
-                type="button"
-                onClick={() => {
-                  setScanInput('');
-                  if (scanInputRef.current) scanInputRef.current.focus();
-                }}
-                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-white cursor-pointer"
-                title="Limpiar texto"
-              >
-                ✕
-              </button>
-            )}
-          </div>
-          <button
-            type="submit"
-            className="bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white font-black px-4 py-3.5 rounded-2xl text-xs flex items-center gap-1 shadow-md cursor-pointer shrink-0 transition"
-          >
-            <span>🔍</span>
-            <span className="hidden sm:inline">Buscar</span>
-          </button>
-        </form>
-
-        {/* LISTA PREDICTIVA EN VIVO MIENTRAS EL OPERADOR ESCRIBE */}
-        {scanInput.trim().length > 0 && (
-          <div className="bg-slate-900 border-2 border-emerald-500/60 rounded-3xl p-4 shadow-2xl flex flex-col gap-2.5 animate-in fade-in">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-1.5 text-xs font-black text-emerald-400">
-                <span>🔍</span>
-                <span>Coincidencias para &quot;{scanInput}&quot; ({liveSuggestions.length}):</span>
-              </div>
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-                Toca cuál es el bueno 👇
-              </span>
-            </div>
-
-            {liveSuggestions.length === 0 ? (
-              <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 text-center">
-                <p className="text-xs text-slate-300 font-bold">
-                  No se encontraron consumibles parecidos a &quot;{scanInput}&quot;.
-                </p>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Intenta escribiendo solo los números del modelo (ej. <strong>03847</strong> o <strong>61</strong>).
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-2 max-h-96 overflow-y-auto pr-1">
-                {liveSuggestions.map(item => (
-                  <div
-                    key={item.id}
-                    onClick={() => handleSelectProduct(item)}
-                    className="bg-slate-800/90 hover:bg-slate-800 active:scale-[0.99] transition border-2 border-slate-700/80 hover:border-emerald-500/70 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer shadow-md group"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap mb-1">
-                        <span className="bg-emerald-500/20 text-emerald-300 font-mono font-black text-sm px-2.5 py-0.5 rounded-lg border border-emerald-500/40">
-                          {item.clave}
-                        </span>
-                        {item._matchReason && (
-                          <span className="bg-indigo-950 text-indigo-300 text-[10px] font-bold px-2 py-0.5 rounded-md border border-indigo-800/50">
-                            {item._matchReason}
-                          </span>
-                        )}
-                        <span className="bg-slate-700/60 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-md">
-                          {item.categoria || 'Consumible'}
-                        </span>
-                      </div>
-                      <div className="text-xs font-bold text-white group-hover:text-emerald-300 transition line-clamp-2">
-                        {item.nombre}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-700/60">
-                      <div className="text-left sm:text-right">
-                        <div className="bg-amber-950/80 text-amber-300 border border-amber-600/50 px-2.5 py-1 rounded-xl text-xs font-mono font-black">
-                          📍 {item.seccion || 'S/N'} [{item.anaquel || 'S/N'}]
-                        </div>
-                        <div className="text-[10px] text-slate-400 font-semibold mt-1">
-                          Stock: <strong className="text-white">{item.existencias ?? 0}</strong> pzas
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectProduct(item);
-                        }}
-                        className="bg-emerald-600 group-hover:bg-emerald-500 text-white font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition flex items-center gap-1 shrink-0 cursor-pointer"
-                      >
-                        <span>Elegir</span>
-                        <span>✓</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* TARJETA GIGANTE: UBICACIÓN Y EXISTENCIAS EN PANTALLA */}
-      {activeItem ? (
-        <div className="bg-slate-900 border-2 border-emerald-500/80 rounded-3xl p-5 shadow-2xl flex flex-col gap-4 animate-in fade-in">
-          
-          {/* Identificación del producto */}
-          <div>
-            <div className="flex items-center gap-2 flex-wrap mb-1">
-              <span className="bg-white text-slate-900 font-mono font-black text-sm px-3 py-1 rounded-xl shadow-xs">
-                {activeItem.clave}
-              </span>
-              <span className="bg-slate-800 text-slate-300 text-xs font-bold px-2.5 py-0.5 rounded-lg border border-slate-700">
-                {activeItem.categoria || 'Consumible'}
-              </span>
+      {/* ========================================================================= */}
+      {/* VISTA 1: MODO RECEPCIÓN DE LOTES / CHECKLISTS CON PISTOLA Y CAJAS */}
+      {/* ========================================================================= */}
+      {activeMode === 'RECEPTION' && (
+        <div className="flex flex-col gap-4">
 
-              {/* Marca de Verificación Verde o Amarillo si cambió de lugar */}
-              {activeItem.locationStatus === 'RELOCATED' ? (
-                <span className="bg-amber-400 text-slate-950 font-black text-xs px-3 py-1 rounded-xl shadow-md border border-amber-300 flex items-center gap-1 animate-pulse">
-                  <span>⚠️</span>
-                  <span>CAMBIÓ DE LUGAR (MODIFICADA)</span>
-                </span>
-              ) : activeItem.locationStatus === 'VERIFIED_OK' ? (
-                <span className="bg-emerald-500 text-white font-black text-xs px-3 py-1 rounded-xl shadow-md border border-emerald-400 flex items-center gap-1">
-                  <span>✓</span>
-                  <span>ESTÁ BIEN TODO (UBICACIÓN CORRECTA)</span>
-                </span>
-              ) : (
-                <span className="bg-slate-800 text-slate-400 font-bold text-[11px] px-2.5 py-1 rounded-xl border border-slate-700">
-                  Pendiente de revisión
-                </span>
-              )}
-            </div>
-            <h1 className="text-base sm:text-lg font-black text-white leading-tight">
-              {activeItem.nombre}
-            </h1>
+          {/* SELECTOR / ENCABEZADO DEL LOTE ACTIVO */}
+          {activeBatch ? (
+            <div className="bg-slate-900/95 border-2 border-purple-600/50 rounded-3xl p-4 shadow-xl flex flex-col gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="bg-purple-600 text-white font-mono font-black text-xs px-2.5 py-0.5 rounded-lg shadow-xs">
+                      {activeBatch.folio}
+                    </span>
+                    <h2 className="text-sm sm:text-base font-black text-white truncate max-w-sm">
+                      {activeBatch.cleanName || activeBatch.name}
+                    </h2>
+                    {activeBatch.invoiceNumber && (
+                      <span className="bg-slate-800 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-md border border-slate-700">
+                        Factura: {activeBatch.invoiceNumber}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-400 mt-1 flex items-center gap-2">
+                    <span>Proveedor: <strong className="text-slate-300">{activeBatch.supplierName || 'Zhejiang Besda'}</strong></span>
+                    <span>•</span>
+                    <span>Total partidas: <strong className="text-purple-300">{batchStats.total} SKUs</strong></span>
+                  </p>
+                </div>
 
-            {/* Códigos de barra vinculados */}
-            {Array.isArray(activeItem.barcodes) && activeItem.barcodes.length > 0 && (
-              <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase">Códigos vinculados:</span>
-                {activeItem.barcodes.map(b => (
-                  <span key={b} className="bg-slate-800 text-amber-400 font-mono text-[10px] font-bold px-2 py-0.5 rounded border border-slate-700">
-                    {b}
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleExportBatchExcel}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1.5 rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    title="Descargar Excel oficial con marcas de reubicación y verificación"
+                  >
+                    <span>📥</span>
+                    <span className="hidden sm:inline">Excel Lote</span>
+                  </button>
+
+                  {consumablesBatches.length > 1 && (
+                    <select
+                      value={selectedBatchId}
+                      onChange={(e) => {
+                        setSelectedBatchId(e.target.value);
+                        if (onSelectBatch) onSelectBatch(e.target.value);
+                      }}
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-bold px-2.5 py-1.5 rounded-xl outline-none cursor-pointer"
+                    >
+                      {consumablesBatches.map(b => (
+                        <option key={b.id} value={b.id}>{b.folio} - {b.cleanName || b.name}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+
+              {/* BARRA DE PROGRESO DE UNIDADES */}
+              <div className="flex flex-col gap-1.5 bg-slate-950/80 p-3 rounded-2xl border border-slate-800">
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Progreso Físico de Recepción:
                   </span>
-                ))}
+                  <span className="font-mono text-emerald-400">
+                    {batchStats.totalScanned} de {batchStats.totalExp} pzas ({batchStats.totalExp > 0 ? Math.round((batchStats.totalScanned / batchStats.totalExp) * 100) : 0}%)
+                  </span>
+                </div>
+                <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-purple-500 to-emerald-500 transition-all duration-300"
+                    style={{ width: `${Math.min(100, batchStats.totalExp > 0 ? (batchStats.totalScanned / batchStats.totalExp) * 100 : 0)}%` }}
+                  />
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* UBICACIÓN FÍSICA GIGANTE */}
-          <div className={`border-2 rounded-2xl p-4 flex flex-col gap-2 shadow-inner transition-colors ${
-            activeItem.locationStatus === 'RELOCATED'
-              ? 'bg-amber-950/40 border-amber-500'
-              : activeItem.locationStatus === 'VERIFIED_OK'
-              ? 'bg-emerald-950/40 border-emerald-500'
-              : 'bg-gradient-to-br from-slate-950 to-slate-900 border-red-500/50'
-          }`}>
-            <div className="flex items-center justify-between">
-              <div className="text-[11px] font-black uppercase text-red-400 tracking-wider flex items-center gap-1.5">
-                <span>📍</span>
-                <span>Ubicación en Almacén ({activeItem.almacen || 'Principal'})</span>
+              {/* FILTROS TIPO PESTAÑAS: TODAS, FALTANTES, COMPLETAS, EXCEDENTES */}
+              <div className="grid grid-cols-4 gap-1.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setReceptionFilter('ALL')}
+                  className={`py-2 px-2 rounded-xl text-[11px] font-black transition flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer ${
+                    receptionFilter === 'ALL'
+                      ? 'bg-slate-800 text-white border border-slate-600 shadow-sm'
+                      : 'bg-slate-950/60 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <span>Todas</span>
+                  <span className="bg-slate-700 text-slate-200 text-[10px] px-1.5 rounded-full font-bold">
+                    {batchStats.total}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReceptionFilter('PENDING')}
+                  className={`py-2 px-2 rounded-xl text-[11px] font-black transition flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer ${
+                    receptionFilter === 'PENDING'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-slate-950/60 text-amber-300 hover:text-white'
+                  }`}
+                >
+                  <span>Faltantes</span>
+                  <span className="bg-amber-950 text-amber-200 text-[10px] px-1.5 rounded-full font-bold">
+                    {batchStats.pending}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReceptionFilter('COMPLETED')}
+                  className={`py-2 px-2 rounded-xl text-[11px] font-black transition flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer ${
+                    receptionFilter === 'COMPLETED'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-slate-950/60 text-emerald-300 hover:text-white'
+                  }`}
+                >
+                  <span>Completas</span>
+                  <span className="bg-emerald-950 text-emerald-200 text-[10px] px-1.5 rounded-full font-bold">
+                    {batchStats.completed}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setReceptionFilter('SURPLUS')}
+                  className={`py-2 px-2 rounded-xl text-[11px] font-black transition flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer ${
+                    receptionFilter === 'SURPLUS'
+                      ? 'bg-purple-600 text-white shadow-sm'
+                      : 'bg-slate-950/60 text-purple-300 hover:text-white'
+                  }`}
+                >
+                  <span>Excedentes</span>
+                  <span className="bg-purple-950 text-purple-200 text-[10px] px-1.5 rounded-full font-bold">
+                    {batchStats.surplus}
+                  </span>
+                </button>
               </div>
-              {activeItem.locationStatus === 'RELOCATED' && (
-                <span className="text-[10px] bg-amber-500 text-slate-950 font-black px-2 py-0.5 rounded uppercase">
-                  Amarillo: Reubicada
-                </span>
-              )}
-              {activeItem.locationStatus === 'VERIFIED_OK' && (
-                <span className="text-[10px] bg-emerald-600 text-white font-black px-2 py-0.5 rounded uppercase">
-                  Verde: Correcta
-                </span>
-              )}
             </div>
-
-            <div className="grid grid-cols-3 gap-2 text-center mt-1">
-              <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Sección</span>
-                <span className="text-lg sm:text-2xl font-black text-emerald-400 truncate block">
-                  {activeItem.seccion || 'S/N'}
-                </span>
-              </div>
-
-              <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Anaquel</span>
-                <span className="text-lg sm:text-2xl font-black text-amber-400 truncate block">
-                  {activeItem.anaquel || 'S/N'}
-                </span>
-              </div>
-
-              <div className="bg-slate-900 p-3 rounded-xl border border-slate-800">
-                <span className="text-[10px] text-slate-400 font-bold uppercase block">Espacio</span>
-                <span className="text-lg sm:text-2xl font-black text-cyan-400 truncate block">
-                  {activeItem.espacio || 'S/N'}
-                </span>
-              </div>
-            </div>
-
-            {activeItem.previousLocation && (
-              <div className="bg-slate-900/90 border border-amber-500/50 rounded-xl p-2 text-xs text-amber-300 mt-1 flex items-center justify-between">
-                <span>Ubicación previa antes de reubicar:</span>
-                <strong className="font-mono">
-                  {activeItem.previousLocation.seccion || 'S/N'} [{activeItem.previousLocation.anaquel || 'S/N'} - {activeItem.previousLocation.espacio || 'S/N'}]
-                </strong>
-              </div>
-            )}
-
-            {(!activeItem.seccion && !activeItem.anaquel && !activeItem.espacio) && (
-              <p className="text-xs text-rose-400 font-bold text-center mt-1">
-                ⚠️ Sin ubicación asignada en anaqueles.
+          ) : (
+            <div className="bg-slate-900 p-8 rounded-3xl border border-slate-800 text-center flex flex-col items-center gap-3">
+              <span className="text-4xl">📦</span>
+              <h3 className="text-base font-bold text-white">No hay lotes de consumibles activos</h3>
+              <p className="text-xs text-slate-400 max-w-md">
+                Sube una factura o checklist de consumibles en la pantalla de Oficina para iniciar la recepción con pistola lectora.
               </p>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={loadBatchesData}
+                className="bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs px-4 py-2 rounded-xl transition cursor-pointer"
+              >
+                🔄 Actualizar Lotes
+              </button>
+            </div>
+          )}
 
-          {/* BOTONES DE ACCIÓN: CONFIRMAR VERDE O MODIFICAR AMARILLO */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <button
-              type="button"
-              onClick={() => handleConfirmLocationOk(activeItem)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs py-3 px-4 rounded-xl shadow-md transition flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
-            >
-              <span className="text-base">✓</span>
-              <span>Confirmar Ubicación (Está bien todo)</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                setEditSeccion(activeItem.seccion || '');
-                setEditAnaquel(activeItem.anaquel || '');
-                setEditEspacio(activeItem.espacio || '');
-                setEditAlmacen(activeItem.almacen || 'Principal');
-                setIsEditingLocation(true);
-              }}
-              className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs py-3 px-4 rounded-xl shadow-md transition flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
-            >
-              <span className="text-base">✏️</span>
-              <span>Modificar Posición (Cambiar de lugar)</span>
-            </button>
-          </div>
-
-          {/* FORMULARIO INLINE PARA MODIFICAR POSICIÓN */}
-          {isEditingLocation && (
-            <div className="bg-gradient-to-br from-amber-950/70 to-slate-900 border-2 border-amber-500 rounded-2xl p-4 flex flex-col gap-3 animate-in fade-in">
-              <div className="flex items-center justify-between border-b border-amber-500/30 pb-2">
-                <span className="text-xs font-black text-amber-400 uppercase flex items-center gap-1.5">
-                  <span>📍</span>
-                  <span>Modificar Posición del Producto (Se marcará en Amarillo)</span>
+          {/* BARRA DE ENTRADA CON PISTOLA LECTORA */}
+          {activeBatch && (
+            <div className="bg-slate-900/90 p-4 rounded-3xl border border-slate-800 shadow-xl flex flex-col gap-3">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-200 uppercase tracking-wide flex items-center gap-2">
+                  <span className="text-purple-400">🔫</span>
+                  <span>Disparar Pistola / Escanear Código o Barcode:</span>
+                </label>
+                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/60 border border-emerald-800/60 px-2 py-0.5 rounded-md">
+                  Listo para lectura continua
                 </span>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  ref={scanInputRef}
+                  type="text"
+                  autoComplete="off"
+                  placeholder="ESCANEA CON LA PISTOLA EL CÓDIGO DE BARRAS O ESCRIBE LA CLAVE..."
+                  value={receptionScanInput}
+                  onChange={(e) => setReceptionScanInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleProcessReceptionScan(receptionScanInput);
+                    }
+                  }}
+                  className="flex-1 bg-slate-950 border-2 border-purple-500/80 focus:border-purple-400 focus:ring-2 focus:ring-purple-500/30 rounded-2xl px-4 py-3 text-sm font-mono font-black text-white uppercase outline-none placeholder-slate-500"
+                />
                 <button
                   type="button"
-                  onClick={() => setIsEditingLocation(false)}
-                  className="text-slate-400 hover:text-white text-xs px-2 py-0.5 bg-slate-800 rounded-lg"
+                  onClick={() => handleProcessReceptionScan(receptionScanInput)}
+                  className="bg-purple-600 hover:bg-purple-500 text-white font-black px-5 rounded-2xl text-xs transition active:scale-95 cursor-pointer shadow-md"
                 >
-                  ✕ Cancelar
+                  OK
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                    Sección:
-                  </label>
-                  <input
-                    type="text"
-                    value={editSeccion}
-                    onChange={(e) => setEditSeccion(e.target.value.toUpperCase())}
-                    placeholder="Ej. GAMA, DELTA"
-                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none focus:border-amber-400"
-                  />
+              <button
+                type="button"
+                onClick={() => setIsCameraActive(!isCameraActive)}
+                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-2xl flex items-center justify-center gap-2 text-xs transition border border-slate-700"
+              >
+                <span>📷</span>
+                <span>{isCameraActive ? 'Cerrar Cámara' : 'Abrir Cámara con Lector de Barras'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* VISOR DE CÁMARA */}
+          {isCameraActive && (
+            <div className="bg-slate-950 p-2 rounded-3xl border border-slate-800 overflow-hidden">
+              <CameraScanner
+                initialBurstMode={false}
+                onScan={(code) => {
+                  setIsCameraActive(false);
+                  handleProcessReceptionScan(code);
+                }}
+                onClose={() => setIsCameraActive(false)}
+              />
+            </div>
+          )}
+
+          {/* ===================================================================== */}
+          {/* MODAL / CARD DE CAPTURA RÁPIDA: ESPACIO PARA CANTIDAD + BOTONES DE CAJAS */}
+          {/* ===================================================================== */}
+          {capturingItem && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 animate-in fade-in">
+              <div className="bg-slate-900 border-2 border-purple-500 w-full max-w-lg rounded-3xl p-5 shadow-2xl flex flex-col gap-4 text-white animate-in zoom-in-95">
+                
+                {/* ENCABEZADO DEL PRODUCTO */}
+                <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+                  <div className="min-w-0">
+                    <span className="bg-purple-600/40 text-purple-200 border border-purple-500/50 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase">
+                      Partida #{capturingItem.rowNumber || 1}
+                    </span>
+                    <h3 className="text-base font-black text-white mt-1 leading-snug">
+                      {capturingItem.description || capturingItem.code}
+                    </h3>
+                    <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs">
+                      <span className="bg-slate-800 font-mono font-bold text-amber-300 px-2 py-0.5 rounded-md">
+                        Clave: {capturingItem.code}
+                      </span>
+                      {capturingItem.barcode && (
+                        <span className="bg-slate-800 font-mono text-slate-300 px-2 py-0.5 rounded-md">
+                          Barcode: {capturingItem.barcode}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCapturingItem(null);
+                      setScannedBarcodeForLinking('');
+                    }}
+                    className="text-slate-400 hover:text-white font-bold text-lg p-1"
+                  >
+                    ✕
+                  </button>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                    Anaquel:
-                  </label>
-                  <input
-                    type="text"
-                    value={editAnaquel}
-                    onChange={(e) => setEditAnaquel(e.target.value.toUpperCase())}
-                    placeholder="Ej. B03, C01"
-                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none focus:border-amber-400"
-                  />
+                {/* UBICACIÓN FÍSICA EN ALMACÉN Y ESTADO ACTUAL */}
+                <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Ubicación en Almacén:</span>
+                    <p className="font-bold text-emerald-400 text-sm mt-0.5 flex items-center gap-1.5">
+                      <span>📍</span>
+                      <span>{capturingItem.location || 'Sin Asignar'}</span>
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Recibidas / Esperadas:</span>
+                    <p className="font-mono font-bold text-sm text-purple-300 mt-0.5">
+                      {capturingItem.scannedQty || 0} / {capturingItem.expectedQty || 0} pzas
+                    </p>
+                    <span className="text-[10px] text-amber-400 font-bold">
+                      Faltan: {Math.max(0, (capturingItem.expectedQty || 0) - (capturingItem.scannedQty || 0))} pzas
+                    </span>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                    Espacio:
+                {/* ESPACIO PARA INTRODUCIR LA CANTIDAD QUE LLEGÓ */}
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-black text-slate-200 uppercase flex items-center justify-between">
+                    <span>Cantidad de piezas a ingresar:</span>
+                    <span className="text-[11px] text-purple-300 font-bold">Escribe o toca las cajas abajo</span>
                   </label>
-                  <input
-                    type="text"
-                    value={editEspacio}
-                    onChange={(e) => setEditEspacio(e.target.value.toUpperCase())}
-                    placeholder="Ej. 02, 05"
-                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold uppercase outline-none focus:border-amber-400"
-                  />
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(prev => Math.max(1, (parseInt(prev, 10) || 1) - 1))}
+                      className="w-12 h-12 bg-slate-800 hover:bg-slate-700 text-white font-black text-lg rounded-2xl flex items-center justify-center transition active:scale-95"
+                    >
+                      -1
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      value={captureQuantity}
+                      onChange={(e) => setCaptureQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="flex-1 bg-slate-950 border-2 border-purple-500 focus:border-emerald-400 rounded-2xl py-2.5 px-4 text-center font-mono text-2xl font-black text-white outline-none"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 1)}
+                      className="w-12 h-12 bg-slate-800 hover:bg-slate-700 text-white font-black text-lg rounded-2xl flex items-center justify-center transition active:scale-95"
+                    >
+                      +1
+                    </button>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                    Almacén:
-                  </label>
-                  <input
-                    type="text"
-                    value={editAlmacen}
-                    onChange={(e) => setEditAlmacen(e.target.value)}
-                    placeholder="Ej. Principal"
-                    className="w-full bg-slate-900 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-amber-400"
-                  />
-                </div>
-              </div>
+                {/* MAS ABAJO LAS CAJAS QUE LLEGARON PARA FÁCIL CAPTURA */}
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wide">
+                    📦 Botones Rápidos de Cajas y Paquetes:
+                  </span>
+                  
+                  <div className="grid grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(10)}
+                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
+                    >
+                      📦 1 Caja (10)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(20)}
+                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
+                    >
+                      📦 2 Cajas (20)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(50)}
+                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
+                    >
+                      📦 5 Cajas (50)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(100)}
+                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
+                    >
+                      📦 10 Cajas (100)
+                    </button>
+                  </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-amber-500/20">
-                <button
-                  type="button"
-                  onClick={() => setIsEditingLocation(false)}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs px-3.5 py-2 rounded-xl transition cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveModifiedLocation}
-                  className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-4 py-2 rounded-xl shadow-md transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <span>💾</span>
-                  <span>Guardar Nueva Posición</span>
-                </button>
+                  <div className="grid grid-cols-4 gap-1.5 mt-1">
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 5)}
+                      className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold text-[11px] py-1.5 rounded-lg border border-slate-800"
+                    >
+                      +5 pzas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 10)}
+                      className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold text-[11px] py-1.5 rounded-lg border border-slate-800"
+                    >
+                      +10 pzas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 25)}
+                      className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold text-[11px] py-1.5 rounded-lg border border-slate-800"
+                    >
+                      +25 pzas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const remaining = Math.max(1, (capturingItem.expectedQty || 0) - (capturingItem.scannedQty || 0));
+                        setCaptureQuantity(remaining);
+                      }}
+                      className="bg-amber-950/80 hover:bg-amber-900 text-amber-200 font-black text-[11px] py-1.5 rounded-lg border border-amber-700"
+                      title="Completar todas las piezas que faltan para llegar al 100%"
+                    >
+                      🎯 Completar
+                    </button>
+                  </div>
+                </div>
+
+                {/* ACCIONES FINALES */}
+                <div className="flex gap-2.5 pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCapturingItem(null);
+                      setScannedBarcodeForLinking('');
+                    }}
+                    className="flex-1 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-2xl text-xs transition"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmReceptionQuantity}
+                    className="flex-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+                  >
+                    <span>✓</span>
+                    <span>Confirmar Recepción (+{captureQuantity} pzas)</span>
+                  </button>
+                </div>
+
               </div>
             </div>
           )}
 
-          {/* CUÁNTOS DEBE HABER (EXISTENCIAS GIGANTES) */}
-          <div className="bg-slate-800/80 border border-slate-700 rounded-2xl p-4 flex flex-col items-center justify-center text-center">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
-              Existencias en Almacén
-            </span>
-            <div className="text-4xl sm:text-5xl font-black text-white font-mono my-1 text-emerald-400">
-              {activeItem.existencias ?? 0}
-            </div>
-            <span className={`text-xs font-black px-3 py-1 rounded-full border mt-1 ${
-              ConsumiblesController.getStockStatus(activeItem).badgeClass
-            }`}>
-              {ConsumiblesController.getStockStatus(activeItem).label}
-            </span>
+          {/* ===================================================================== */}
+          {/* MODAL PARA CAMBIAR UBICACIÓN DE PARTIDA (MARCA AMARILLA / VERDE) */}
+          {/* ===================================================================== */}
+          {editingItemLocation && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+              <div className="bg-slate-900 border border-slate-700 w-full max-w-md rounded-3xl p-5 shadow-2xl flex flex-col gap-4 text-white">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📍</span>
+                    <h3 className="text-sm font-black text-white">Auditoría / Cambio de Posición</h3>
+                  </div>
+                  <button type="button" onClick={() => setEditingItemLocation(null)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
 
-            <div className="flex items-center justify-center gap-4 mt-3 text-xs text-slate-400">
-              <span>Mínimo: <strong className="text-white">{activeItem.stock_min || 0}</strong></span>
-              <span>•</span>
-              <span>Máximo: <strong className="text-white">{activeItem.stock_max || 0}</strong></span>
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs font-mono">
+                  <p className="text-slate-400 font-sans font-bold text-[10px]">Producto:</p>
+                  <p className="font-sans font-bold text-white text-xs">{editingItemLocation.description || editingItemLocation.code}</p>
+                  <p className="text-slate-400 font-sans font-bold text-[10px] mt-1">Ubicación Registrada:</p>
+                  <p className="font-bold text-amber-300">{editingItemLocation.location || 'Sin Asignar'}</p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-bold text-slate-300">
+                    Nueva Posición en Almacén (ej. GAMA B03 02):
+                  </label>
+                  <input
+                    type="text"
+                    value={locationEditInput}
+                    onChange={(e) => setLocationEditInput(e.target.value.toUpperCase())}
+                    placeholder="Escribe la nueva ubicación..."
+                    className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-white uppercase outline-none focus:border-amber-400"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex flex-col gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSaveItemLocation(editingItemLocation, false)}
+                    className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-xs"
+                  >
+                    <span>⚠️</span>
+                    <span>Guardar Cambio de Lugar (Marcar Amarillo en Excel)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSaveItemLocation(editingItemLocation, true)}
+                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs transition flex items-center justify-center gap-1.5 shadow-xs"
+                  >
+                    <span>✓</span>
+                    <span>Confirmar que está Todo Bien (Marcar Verde en Excel)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setEditingItemLocation(null)}
+                    className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* LISTADO DE PARTIDAS SEGÚN EL FILTRO SELECCIONADO */}
+          {activeBatch && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black text-slate-300 uppercase">
+                  Partidas ({filteredBatchItems.length} de {batchStats.total}):
+                </span>
+                
+                {/* Buscador dentro del lote */}
+                <input
+                  type="text"
+                  placeholder="Filtrar por clave o descripción..."
+                  value={batchSearchQuery}
+                  onChange={(e) => setBatchSearchQuery(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-1 text-[11px] text-white outline-none w-48 font-medium"
+                />
+              </div>
+
+              {filteredBatchItems.length === 0 ? (
+                <div className="bg-slate-900/60 p-6 rounded-2xl border border-slate-800 text-center">
+                  <p className="text-xs text-slate-400 font-bold">No hay partidas que coincidan con este filtro.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 max-h-[500px] overflow-y-auto pr-1">
+                  {filteredBatchItems.map((item) => {
+                    const exp = item.expectedQty || 0;
+                    const rcv = item.scannedQty || 0;
+                    const pending = Math.max(0, exp - rcv);
+                    const isComplete = rcv >= exp && exp > 0;
+                    const isSurplus = rcv > exp;
+
+                    return (
+                      <div
+                        key={item.id}
+                        className={`p-3 rounded-2xl border transition flex flex-col gap-2 ${
+                          isSurplus ? 'bg-purple-950/40 border-purple-800/80' :
+                          isComplete ? 'bg-emerald-950/30 border-emerald-800/80' :
+                          rcv > 0 ? 'bg-amber-950/20 border-amber-800/60' :
+                          'bg-slate-900/80 border-slate-800'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-black text-xs text-white bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+                                {item.code}
+                              </span>
+                              {item.barcode && (
+                                <span className="font-mono text-[10px] text-slate-400">
+                                  {item.barcode}
+                                </span>
+                              )}
+                              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                                isSurplus ? 'bg-purple-900 text-purple-200' :
+                                isComplete ? 'bg-emerald-900 text-emerald-200' :
+                                rcv > 0 ? 'bg-amber-900 text-amber-200' :
+                                'bg-slate-800 text-slate-400'
+                              }`}>
+                                {isSurplus ? `+${rcv - exp} EXCEDENTE` : isComplete ? '✓ COMPLETO' : `FALTAN ${pending}`}
+                              </span>
+
+                              {/* Marca de auditoría de ubicación */}
+                              {item.locationStatus === 'RELOCATED' && (
+                                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded font-bold">
+                                  ⚠️ REUBICADA
+                                </span>
+                              )}
+                              {item.locationStatus === 'VERIFIED_OK' && (
+                                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">
+                                  ✓ VERIFICADA
+                                </span>
+                              )}
+                            </div>
+
+                            <p className="text-xs text-slate-300 font-medium mt-1 truncate max-w-md">
+                              {item.description}
+                            </p>
+
+                            <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1.5">
+                              <span>📍 Ubicación:</span>
+                              <strong className="text-emerald-400">{item.location || 'Sin Asignar'}</strong>
+                            </p>
+                          </div>
+
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            <div className="text-right">
+                              <span className="font-mono font-black text-sm text-white">
+                                {rcv} / {exp}
+                              </span>
+                              <span className="text-[10px] text-slate-400 block">piezas</span>
+                            </div>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCapturingItem(item);
+                                  setScannedBarcodeForLinking(item.barcode || item.code);
+                                  const rem = Math.max(1, exp - rcv);
+                                  setCaptureQuantity(rem);
+                                }}
+                                className="bg-purple-600 hover:bg-purple-500 text-white font-black text-[11px] px-2.5 py-1 rounded-xl transition cursor-pointer"
+                              >
+                                + Recibir
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingItemLocation(item);
+                                  setLocationEditInput(item.location || '');
+                                }}
+                                className="bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold text-[11px] px-2 py-1 rounded-xl transition border border-slate-700"
+                                title="Cambiar o verificar posición"
+                              >
+                                📍
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Barra de progreso de la partida */}
+                        <div className="w-full h-1.5 bg-slate-950 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full transition-all ${
+                              isSurplus ? 'bg-purple-400' : isComplete ? 'bg-emerald-400' : 'bg-amber-400'
+                            }`}
+                            style={{ width: `${Math.min(100, exp > 0 ? (rcv / exp) * 100 : 0)}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* VISTA 2: MODO CATÁLOGO GENERAL Y AUDITORÍA DE UBICACIONES */}
+      {/* ========================================================================= */}
+      {activeMode === 'CATALOG' && (
+        <div className="flex flex-col gap-4">
+          <div className="bg-slate-900/90 p-4 rounded-3xl border border-slate-800 flex flex-col gap-3 shadow-xl">
+            <label className="text-xs font-black text-slate-200 uppercase tracking-wide flex items-center justify-between">
+              <span>Consulta de Catálogo y Ubicación Física:</span>
+              <span className="text-[10px] text-blue-400 font-bold">Catálogo Maestro</span>
+            </label>
+
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="ESCANEA O ESCRIBE LA CLAVE O MODELO..."
+                value={catalogScanInput}
+                onChange={(e) => setCatalogScanInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleProcessCatalogScan(catalogScanInput);
+                  }
+                }}
+                className="flex-1 bg-slate-950 border-2 border-blue-500 rounded-2xl px-4 py-3 text-sm font-mono font-black text-white uppercase outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => handleProcessCatalogScan(catalogScanInput)}
+                className="bg-blue-600 hover:bg-blue-500 text-white font-black px-5 rounded-2xl text-xs transition"
+              >
+                Buscar
+              </button>
             </div>
           </div>
 
-          {/* Botón para vincular otro código de barras a este mismo producto */}
-          {!showManualLinkInput ? (
-            <button
-              type="button"
-              onClick={() => setShowManualLinkInput(true)}
-              className="text-xs text-amber-400 hover:text-amber-300 font-bold flex items-center justify-center gap-1 cursor-pointer"
-            >
-              <span>🔗</span>
-              <span>+ Vincular otro código de barras a este consumible</span>
-            </button>
-          ) : (
-            <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex flex-col gap-2">
-              <span className="text-[11px] font-bold text-slate-300">Escanea o escribe el nuevo código a vincular:</span>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Escanea aquí con la pistola..."
-                  value={additionalBarcodeInput}
-                  onChange={(e) => setAdditionalBarcodeInput(e.target.value)}
-                  className="flex-1 bg-slate-900 border border-slate-700 text-white rounded-lg px-2.5 py-1 text-xs font-mono font-bold outline-none"
-                  autoFocus
-                />
+          {/* TARJETA DE PRODUCTO ACTIVO EN MODO CATÁLOGO */}
+          {activeCatalogItem && (
+            <div className="bg-slate-900 border-2 border-blue-500 rounded-3xl p-5 shadow-2xl flex flex-col gap-4">
+              <div className="flex items-start justify-between gap-3 border-b border-slate-800 pb-3">
+                <div>
+                  <span className="bg-blue-600 font-mono font-black text-xs px-2.5 py-0.5 rounded-lg text-white">
+                    {activeCatalogItem.clave}
+                  </span>
+                  <h3 className="text-base font-black text-white mt-1">
+                    {activeCatalogItem.modelo || activeCatalogItem.descripcion}
+                  </h3>
+                </div>
                 <button
                   type="button"
-                  onClick={() => handleConfirmLink(activeItem, additionalBarcodeInput)}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1 rounded-lg cursor-pointer"
-                >
-                  Vincular
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowManualLinkInput(false)}
-                  className="bg-slate-800 text-slate-400 text-xs px-2 py-1 rounded-lg"
+                  onClick={() => setActiveCatalogItem(null)}
+                  className="text-slate-400 hover:text-white font-bold text-lg"
                 >
                   ✕
                 </button>
               </div>
+
+              {/* Ubicación actual */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                <span className="text-[10px] font-black text-slate-400 uppercase">Ubicación Física Actual:</span>
+                <p className="text-lg font-black text-emerald-400 mt-1 flex items-center gap-2">
+                  <span>📍</span>
+                  <span>{activeCatalogItem.seccion || 'Sin Sección'} [Anaquel: {activeCatalogItem.anaquel || 'S/N'} - Espacio: {activeCatalogItem.espacio || 'S/N'}]</span>
+                </p>
+                <p className="text-xs text-slate-400 mt-1">Almacén: <strong className="text-slate-200">{activeCatalogItem.almacen || 'Principal'}</strong></p>
+              </div>
+
+              {/* Botones de acción */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleConfirmLocationOkCatalog(activeCatalogItem)}
+                  className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                >
+                  <span>✓</span>
+                  <span>Todo en Orden (Verde)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsEditingCatalogLocation(true)}
+                  className="py-3 px-4 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-2xl text-xs transition flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                >
+                  <span>✏️</span>
+                  <span>Cambiar Ubicación (Amarillo)</span>
+                </button>
+              </div>
+
+              {/* Formulario de edición de ubicación si se activó */}
+              {isEditingCatalogLocation && (
+                <div className="bg-slate-950 p-4 rounded-2xl border border-amber-500/60 flex flex-col gap-3 animate-in fade-in">
+                  <h4 className="text-xs font-black text-amber-300 uppercase">Reubicar Producto en Almacén:</h4>
+                  
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 block mb-1">Sección/Fila:</label>
+                      <input
+                        type="text"
+                        value={editSeccion}
+                        onChange={(e) => setEditSeccion(e.target.value.toUpperCase())}
+                        placeholder="Ej. B03..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-bold text-white uppercase outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 block mb-1">Anaquel/Nivel:</label>
+                      <input
+                        type="text"
+                        value={editAnaquel}
+                        onChange={(e) => setEditAnaquel(e.target.value.toUpperCase())}
+                        placeholder="Ej. 02..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-bold text-white uppercase outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-400 block mb-1">Espacio/Caja:</label>
+                      <input
+                        type="text"
+                        value={editEspacio}
+                        onChange={(e) => setEditEspacio(e.target.value.toUpperCase())}
+                        placeholder="Ej. 1..."
+                        className="w-full bg-slate-900 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs font-bold text-white uppercase outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingCatalogLocation(false)}
+                      className="flex-1 py-2 bg-slate-800 text-slate-300 font-bold rounded-xl text-xs"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveModifiedLocationCatalog}
+                      className="flex-1 py-2 bg-amber-600 hover:bg-amber-500 text-white font-black rounded-xl text-xs transition"
+                    >
+                      Guardar Reubicación
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Botón para reiniciar o escanear otro */}
-          <button
-            type="button"
-            onClick={() => {
-              setActiveItem(null);
-              setCandidates([]);
-              setUnlinkedCode(null);
-              if (scanInputRef.current) scanInputRef.current.focus();
-            }}
-            className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs py-3 rounded-xl border border-slate-700 transition"
-          >
-            Limpiar y Escanear Siguiente
-          </button>
-        </div>
-      ) : (
-        !unlinkedCode && scanInput.trim().length === 0 && candidates.length === 0 && (
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 text-center flex flex-col items-center justify-center gap-2">
-            <div className="w-16 h-16 rounded-2xl bg-slate-800/80 flex items-center justify-center text-3xl mb-1 border border-slate-700 shadow-inner">
-              🔫
-            </div>
-            <h3 className="text-sm font-black text-white">Listo para Buscar o Escanear Consumible</h3>
-            <p className="text-xs text-slate-400 max-w-sm">
-              Escribe la clave o modelo arriba (ej. <strong>03847</strong> o <strong>MX61</strong>) para ver los parecidos, o usa la pistola lectora.
-            </p>
-            <div className="flex items-center gap-1.5 flex-wrap justify-center mt-2">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Ejemplos rápidos:</span>
-              {['03847', 'MX61', 'WC52', 'TN450', 'DR420'].map(ex => (
+          {/* MODAL PARA VINCULAR CÓDIGO NUEVO A UN CONSUMIBLE */}
+          {unlinkedCode && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-amber-500 w-full max-w-md rounded-3xl p-5 shadow-2xl flex flex-col gap-3 text-white">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <h3 className="text-sm font-black text-amber-300">Vincular Código Nuevo al Catálogo</h3>
+                  <button type="button" onClick={() => setUnlinkedCode(null)} className="text-slate-400 hover:text-white">✕</button>
+                </div>
+
+                <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 text-xs">
+                  <span className="text-slate-400 text-[10px] uppercase font-bold">Código Escaneado:</span>
+                  <p className="font-mono font-black text-amber-400 text-sm">{unlinkedCode}</p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-xs font-bold text-slate-300">
+                    Busca la Clave o Producto al que pertenece:
+                  </label>
+                  <input
+                    type="text"
+                    value={linkingSearch}
+                    onChange={(e) => setLinkingSearch(e.target.value)}
+                    placeholder="Escribe la clave (ej. TN-450, HP 85A)..."
+                    className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-white outline-none"
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+                  {ConsumiblesController.searchPredictive(linkingSearch, catalog, 6).map(it => (
+                    <button
+                      key={it.id}
+                      type="button"
+                      onClick={async () => {
+                        await ConsumiblesRepository.linkBarcodeToConsumible(unlinkedCode, it.clave);
+                        soundEffects.playScanSuccess();
+                        showToast('success', `✓ Código vinculado a ${it.clave}`);
+                        setUnlinkedCode(null);
+                        loadCatalogData();
+                      }}
+                      className="bg-slate-800/80 hover:bg-slate-700 p-2.5 rounded-xl border border-slate-700 text-left flex items-center justify-between cursor-pointer"
+                    >
+                      <div>
+                        <span className="font-mono font-bold text-amber-300 text-xs">{it.clave}</span>
+                        <p className="text-[11px] text-slate-300 truncate max-w-[200px]">{it.modelo || it.descripcion}</p>
+                      </div>
+                      <span className="text-emerald-400 text-xs font-bold">+ Vincular</span>
+                    </button>
+                  ))}
+                </div>
+
                 <button
-                  key={ex}
                   type="button"
-                  onClick={() => {
-                    setScanInput(ex);
-                    if (scanInputRef.current) scanInputRef.current.focus();
-                  }}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-mono text-xs px-2.5 py-1 rounded-lg border border-slate-700 cursor-pointer transition active:scale-95"
+                  onClick={() => setUnlinkedCode(null)}
+                  className="w-full py-2 bg-slate-800 text-slate-400 hover:text-white font-bold rounded-xl text-xs mt-2"
                 >
-                  {ex}
+                  Cancelar
                 </button>
-              ))}
-            </div>
-          </div>
-        )
-      )}
-
-      {/* CANDIDATOS SIMILARES CUANDO SE PROCESÓ UNA BÚSQUEDA O ESCANEO */}
-      {candidates.length > 0 && scanInput.trim().length === 0 && (
-        <div className="bg-slate-900 border-2 border-amber-500/60 rounded-3xl p-4 shadow-2xl flex flex-col gap-2.5 animate-in fade-in">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-xs font-black text-amber-400">
-              <span>🎯</span>
-              <span>¿Cuál de estos es el bueno? ({candidates.length} encontrados):</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCandidates([])}
-              className="text-[10px] text-slate-400 hover:text-white bg-slate-800 px-2 py-0.5 rounded-md cursor-pointer"
-            >
-              ✕ Cerrar
-            </button>
-          </div>
-
-          <p className="text-[11px] text-slate-400">
-            Toca el consumible que necesitas para ver su ubicación en almacén y existencias:
-          </p>
-
-          <div className="flex flex-col gap-2 max-h-96 overflow-y-auto pr-1">
-            {candidates.map(cand => (
-              <div
-                key={cand.id}
-                onClick={() => handleSelectProduct(cand)}
-                className="bg-slate-800/90 hover:bg-slate-800 active:scale-[0.99] transition border-2 border-slate-700/80 hover:border-amber-500/70 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 cursor-pointer shadow-md group"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-1">
-                    <span className="bg-amber-500/20 text-amber-300 font-mono font-black text-sm px-2.5 py-0.5 rounded-lg border border-amber-500/40">
-                      {cand.clave}
-                    </span>
-                    {cand._matchReason && (
-                      <span className="bg-indigo-950 text-indigo-300 text-[10px] font-bold px-2 py-0.5 rounded-md border border-indigo-800/50">
-                        {cand._matchReason}
-                      </span>
-                    )}
-                    <span className="bg-slate-700/60 text-slate-300 text-[10px] font-bold px-2 py-0.5 rounded-md">
-                      {cand.categoria || 'Consumible'}
-                    </span>
-                  </div>
-                  <div className="text-xs font-bold text-white group-hover:text-amber-300 transition line-clamp-2">
-                    {cand.nombre}
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between sm:justify-end gap-3 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-700/60">
-                  <div className="text-left sm:text-right">
-                    <div className="bg-emerald-950/80 text-emerald-300 border border-emerald-600/50 px-2.5 py-1 rounded-xl text-xs font-mono font-black">
-                      📍 {cand.seccion || 'S/N'} [{cand.anaquel || 'S/N'}]
-                    </div>
-                    <div className="text-[10px] text-slate-400 font-semibold mt-1">
-                      Stock: <strong className="text-white">{cand.existencias ?? 0}</strong> pzas
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSelectProduct(cand);
-                    }}
-                    className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-3.5 py-2.5 rounded-xl shadow-md active:scale-95 transition flex items-center gap-1 shrink-0 cursor-pointer"
-                  >
-                    <span>Elegir</span>
-                    <span>✓</span>
-                  </button>
-                </div>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* HISTORIAL Y AUDITORÍA DE REVISIÓN EN ESTA SESIÓN */}
-      {scanHistory.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-5 flex flex-col gap-3 shadow-xl">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-800 pb-3">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm font-black text-white">Auditoría de Ubicaciones</span>
-                <span className="bg-slate-800 text-slate-300 text-[11px] font-bold px-2 py-0.5 rounded-md">
-                  {scanHistory.length} revisados
-                </span>
-                <span className="bg-emerald-950 text-emerald-300 border border-emerald-800 text-[11px] font-black px-2 py-0.5 rounded-md">
-                  ✓ {scanHistory.filter(h => !h.wasChanged && h.status === 'VERIFIED_OK').length} Correctos (Verde)
-                </span>
-                <span className="bg-amber-950 text-amber-300 border border-amber-800 text-[11px] font-black px-2 py-0.5 rounded-md">
-                  ⚠️ {scanHistory.filter(h => h.wasChanged || h.status === 'RELOCATED').length} Modificados (Amarillo)
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Los consumibles modificados quedan marcados en amarillo en pantalla y en el reporte Excel.
-              </p>
             </div>
+          )}
 
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={handleExportAuditExcel}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs px-3.5 py-2 rounded-xl transition shadow-md flex items-center gap-1.5 cursor-pointer active:scale-95"
-                title="Descargar archivo Excel oficial marcando en amarillo los modificados"
-              >
-                <span>📥</span>
-                <span>Descargar Excel de Revisión</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setScanHistory([])}
-                className="text-[11px] text-slate-400 hover:text-rose-400 px-2 py-1 bg-slate-800 rounded-lg cursor-pointer"
-              >
-                Limpiar
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
-            {scanHistory.map((h, idx) => {
-              const isMod = h.wasChanged || h.status === 'RELOCATED';
-              return (
-                <div
-                  key={idx}
-                  onClick={() => handleSelectProduct(h.item)}
-                  className={`p-3 rounded-2xl border transition flex items-center justify-between text-xs cursor-pointer ${
-                    isMod
-                      ? 'bg-amber-950/30 hover:bg-amber-950/50 border-amber-500/70'
-                      : 'bg-slate-800/60 hover:bg-slate-800 border-slate-700/60'
-                  }`}
-                >
-                  <div className="min-w-0 pr-3">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="font-mono font-black text-white text-xs">{h.item.clave}</span>
-                      {isMod ? (
-                        <span className="bg-amber-500 text-slate-950 text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
-                          ⚠️ Modificada / Reubicado
-                        </span>
-                      ) : (
-                        <span className="bg-emerald-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
-                          ✓ Correcto
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[11px] text-slate-300 truncate block">{h.item.nombre}</span>
-                    {isMod && h.prevLocationStr && (
-                      <span className="text-[10px] text-amber-300/90 block mt-0.5">
-                        Antes: {h.prevLocationStr} ➔ Ahora: {h.item.seccion} [{h.item.anaquel} - {h.item.espacio}]
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <span className={`text-xs font-mono font-black block px-2 py-1 rounded-lg ${
-                      isMod ? 'bg-amber-400 text-slate-950' : 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                    }`}>
-                      📍 {h.item.seccion || 'S/N'} [{h.item.anaquel || 'S/N'}]
-                    </span>
-                    <span className="text-[10px] text-slate-500 mt-1 block">
-                      {h.timestamp}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
 

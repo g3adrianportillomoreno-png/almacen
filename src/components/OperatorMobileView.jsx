@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import CameraScanner from './CameraScanner.jsx';
 import SerialSimilarityModal from './SerialSimilarityModal.jsx';
 import SimilarPrintersModal from './SimilarPrintersModal.jsx';
@@ -12,6 +12,7 @@ import { getNextSpace, adjustNumericRow, adjustNumericSpace } from '../utils/loc
 import MercadoLibreScanView from './MercadoLibreScanView.jsx';
 import BajasSessionView from './BajasSessionView.jsx';
 import ConsumiblesOperatorScanView from './ConsumiblesOperatorScanView.jsx';
+import { ConsumiblesChecklistRepository } from '../services/ConsumiblesChecklistRepository.js';
 import OfflineSyncBanner from './OfflineSyncBanner.jsx';
 import useOfflineSync from '../hooks/useOfflineSync.js';
 
@@ -40,6 +41,24 @@ export default function OperatorMobileView({
   
   // Lote activo si el operador eligió un checklist
   const [activeChecklistId, setActiveChecklistId] = useState(null);
+
+  // Lotes y recepción de consumibles en modo operador
+  const [consumablesBatches, setConsumablesBatches] = useState([]);
+  const [activeConsumablesBatchId, setActiveConsumablesBatchId] = useState(null);
+  const [lotesSubTab, setLotesSubTab] = useState('EQUIPOS'); // 'EQUIPOS' | 'CONSUMIBLES'
+
+  useEffect(() => {
+    loadConsumablesBatches();
+  }, []);
+
+  const loadConsumablesBatches = async () => {
+    try {
+      const list = await ConsumiblesChecklistRepository.fetchAllConsumablesBatches();
+      setConsumablesBatches(list || []);
+    } catch (e) {
+      console.warn('Nota cargando lotes de consumibles para operador:', e);
+    }
+  };
 
   // Lote activo si el operador eligió Mercado Libre
   const [activeMlBatchId, setActiveMlBatchId] = useState(null);
@@ -947,7 +966,10 @@ export default function OperatorMobileView({
 
         {/* SI ESTÁ EN MODO CONSUMIBLES */}
         {operatorTab === 'consumibles' && (
-          <ConsumiblesOperatorScanView />
+          <ConsumiblesOperatorScanView
+            initialBatchId={activeConsumablesBatchId}
+            onSelectBatch={(id) => setActiveConsumablesBatchId(id)}
+          />
         )}
 
         {/* SI ESTÁ EN MODO BAJAS */}
@@ -967,33 +989,101 @@ export default function OperatorMobileView({
         {/* SI ESTÁ VIENDO LA LISTA DE CHECKLISTS */}
         {operatorTab === 'checklists' && !activeChecklistId && (
           <div className="flex flex-col gap-3">
-            <h2 className="text-sm font-bold text-slate-200">Selecciona el Checklist a Recibir:</h2>
-            {receptionBatches.length === 0 ? (
-              <div className="bg-slate-800/60 p-6 rounded-2xl border border-slate-700 text-center">
-                <p className="text-xs text-slate-400">No hay checklists de recepción de equipos nuevos pendientes.</p>
-              </div>
-            ) : (
-              receptionBatches.map(batch => (
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-slate-200">Selecciona el Checklist a Recibir:</h2>
+              
+              {/* Selector de tipo de lote: Equipos vs Consumibles */}
+              <div className="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-700">
                 <button
-                  key={batch.id}
-                  onClick={() => setActiveChecklistId(batch.id)}
-                  className="bg-slate-800 hover:bg-slate-700/80 p-4 rounded-2xl border border-slate-700 text-left transition flex items-center justify-between active:scale-98"
+                  type="button"
+                  onClick={() => setLotesSubTab('EQUIPOS')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                    lotesSubTab === 'EQUIPOS'
+                      ? 'bg-red-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
                 >
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="bg-red-600 text-white font-bold text-xs px-2.5 py-0.5 rounded-lg">
-                        {batch.folio}
-                      </span>
-                      <span className="text-xs font-bold text-white">{batch.cleanName || batch.name}</span>
-                    </div>
-                    <span className="text-[11px] text-slate-400">
-                      {batch.completed.length} de {batch.totalCount} escaneados
-                    </span>
-                  </div>
-                  <span className="text-red-400 text-sm font-bold">&rarr;</span>
+                  🖨️ Equipos ({receptionBatches.length})
                 </button>
-              ))
+                <button
+                  type="button"
+                  onClick={() => setLotesSubTab('CONSUMIBLES')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition ${
+                    lotesSubTab === 'CONSUMIBLES'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-purple-300 hover:text-white'
+                  }`}
+                >
+                  🧪 Consumibles ({consumablesBatches.length})
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-pestaña: Equipos */}
+            {lotesSubTab === 'EQUIPOS' && (
+              receptionBatches.length === 0 ? (
+                <div className="bg-slate-800/60 p-6 rounded-2xl border border-slate-700 text-center">
+                  <p className="text-xs text-slate-400">No hay checklists de recepción de equipos nuevos pendientes.</p>
+                </div>
+              ) : (
+                receptionBatches.map(batch => (
+                  <button
+                    key={batch.id}
+                    onClick={() => setActiveChecklistId(batch.id)}
+                    className="bg-slate-800 hover:bg-slate-700/80 p-4 rounded-2xl border border-slate-700 text-left transition flex items-center justify-between active:scale-98 cursor-pointer"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="bg-red-600 text-white font-bold text-xs px-2.5 py-0.5 rounded-lg">
+                          {batch.folio}
+                        </span>
+                        <span className="text-xs font-bold text-white">{batch.cleanName || batch.name}</span>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        {batch.completed.length} de {batch.totalCount} escaneados
+                      </span>
+                    </div>
+                    <span className="text-red-400 text-sm font-bold">&rarr;</span>
+                  </button>
+                ))
+              )
             )}
+
+            {/* Sub-pestaña: Consumibles */}
+            {lotesSubTab === 'CONSUMIBLES' && (
+              consumablesBatches.length === 0 ? (
+                <div className="bg-slate-800/60 p-6 rounded-2xl border border-slate-700 text-center">
+                  <p className="text-xs text-slate-400">No hay lotes de consumibles pendientes. Sube una factura en Oficina para iniciar.</p>
+                </div>
+              ) : (
+                consumablesBatches.map(cBatch => (
+                  <button
+                    key={cBatch.id}
+                    onClick={() => {
+                      setActiveConsumablesBatchId(cBatch.id);
+                      setOperatorTab('consumibles');
+                    }}
+                    className="bg-slate-800 hover:bg-purple-950/60 p-4 rounded-2xl border border-purple-800/50 hover:border-purple-500 text-left transition flex items-center justify-between active:scale-98 cursor-pointer shadow-sm"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="bg-purple-600 text-white font-bold text-xs px-2.5 py-0.5 rounded-lg">
+                          {cBatch.folio}
+                        </span>
+                        <span className="text-xs font-bold text-white truncate max-w-[200px]">
+                          {cBatch.cleanName || cBatch.name}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-purple-300 font-mono">
+                        {cBatch.totalScannedUnits || 0} de {cBatch.totalExpectedUnits || 0} piezas recibidas
+                      </span>
+                    </div>
+                    <span className="text-purple-400 text-sm font-bold">&rarr;</span>
+                  </button>
+                ))
+              )
+            )}
+
           </div>
         )}
 

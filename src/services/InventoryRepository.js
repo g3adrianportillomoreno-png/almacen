@@ -570,7 +570,7 @@ export class InventoryRepository {
 
     // 3. Actualizar en Supabase con hora exacta de detección
     try {
-      const { error } = await supabase
+      let query = supabase
         .from('expected_series')
         .update({
           printer_status: 'BAJA',
@@ -578,8 +578,13 @@ export class InventoryRepository {
           scanned_at: nowIso,
           assigned_at: nowIso
         })
-        .eq('checklist_id', checklistId)
         .eq('serial_number', serial);
+
+      if (checklistId) {
+        query = query.eq('checklist_id', checklistId);
+      }
+
+      const { error } = await query;
 
       if (error) {
         OfflineSyncService.addToQueue('MARK_CHECKLIST_BAJA', {
@@ -707,6 +712,81 @@ export class InventoryRepository {
         serialNumber: serial
       });
     }
+
+    return cache.serials[serial];
+  }
+
+  /**
+   * Actualiza el nombre que solicita y la persona que entrega en un registro de baja existente
+   */
+  static async updateBajaPersonas(serialNumber, requestedBy, dispatchedBy) {
+    const serial = String(serialNumber || '').trim().toUpperCase();
+    if (!serial) return null;
+
+    // 1. Guardar en metadataCache
+    const cache = this.getMetadataCache();
+    cache.serials = cache.serials || {};
+    const existing = cache.serials[serial] || {};
+    cache.serials[serial] = {
+      ...existing,
+      requestedBy: requestedBy || existing.requestedBy || null,
+      dispatchedBy: dispatchedBy || existing.dispatchedBy || null
+    };
+    this.saveMetadataCache(cache);
+
+    // 2. Actualizar en inventory_departures de Supabase
+    try {
+      await supabase
+        .from('inventory_departures')
+        .update({
+          requested_by: requestedBy || null,
+          dispatched_by: dispatchedBy || null
+        })
+        .eq('serial', serial);
+    } catch (e) {
+      console.warn('Error actualizando personas en inventory_departures:', e);
+    }
+
+    // 3. Actualizar en caché local de inventory_departures
+    try {
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('cdm_inventory_departures_v1') : null;
+      if (raw) {
+        const deps = JSON.parse(raw);
+        if (Array.isArray(deps)) {
+          const updatedDeps = deps.map(d => {
+            if (String(d.serial || '').trim().toUpperCase() === serial) {
+              return {
+                ...d,
+                requested_by: requestedBy,
+                requestedBy: requestedBy,
+                dispatched_by: dispatchedBy,
+                dispatchedBy: dispatchedBy
+              };
+            }
+            return d;
+          });
+          localStorage.setItem('cdm_inventory_departures_v1', JSON.stringify(updatedDeps));
+        }
+      }
+    } catch {}
+
+    // 4. Actualizar en historial de sesiones de bajas
+    try {
+      const sessions = this.getBajasSessionsHistory();
+      let changed = false;
+      sessions.forEach(sess => {
+        (sess.items || []).forEach(it => {
+          if (String(it.serial || '').trim().toUpperCase() === serial) {
+            it.requestedBy = requestedBy;
+            it.dispatchedBy = dispatchedBy;
+            changed = true;
+          }
+        });
+      });
+      if (changed) {
+        this.saveBajasSessionsHistory(sessions);
+      }
+    } catch {}
 
     return cache.serials[serial];
   }

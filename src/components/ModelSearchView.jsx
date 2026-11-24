@@ -13,6 +13,11 @@ export default function ModelSearchView({
   const [selectedPrinterForBaja, setSelectedPrinterForBaja] = useState(null);
   const [displayLimit, setDisplayLimit] = useState(30);
 
+  // Estados para detalles de baja
+  const [bajaRequestedBy, setBajaRequestedBy] = useState('ROBERTO');
+  const [bajaDispatchedBy, setBajaDispatchedBy] = useState('OPERADOR');
+  const [bajaReason, setBajaReason] = useState('Venta');
+
   // Extraer todas las impresoras del inventario maestro
   const allPrinters = useMemo(() => {
     return InventoryController.extractAllPrinters(checklists);
@@ -65,8 +70,12 @@ export default function ModelSearchView({
     if (onStatusChange) onStatusChange();
   };
 
-  const handleConfirmBaja = async (serial) => {
-    await InventoryController.markAsBaja(serial);
+  const handleConfirmBaja = async (printer) => {
+    if (!printer) return;
+    const reqBy = (bajaRequestedBy || '').trim() || 'Sin especificar';
+    const dispBy = (bajaDispatchedBy || '').trim() || 'Operador';
+    const reason = (bajaReason || '').trim() || 'Baja de almacén';
+    await InventoryController.markAsBaja(printer.serial, reqBy, dispBy, reason);
     setSelectedPrinterForBaja(null);
     if (onStatusChange) onStatusChange();
   };
@@ -396,13 +405,81 @@ export default function ModelSearchView({
               ¿Confirmar que la siguiente unidad sale definitivamente del almacén?
             </p>
 
-            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl my-4 text-xs">
+            <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-xl my-3 text-xs">
               <p className="text-slate-400 font-medium uppercase text-[10px]">Número de Serie:</p>
               <p className="font-mono text-sm font-bold text-slate-800 mt-0.5">{selectedPrinterForBaja.serial}</p>
               <p className="text-slate-400 font-medium uppercase text-[10px] mt-2">Modelo:</p>
               <p className="font-semibold text-slate-700 mt-0.5">{selectedPrinterForBaja.material}</p>
               <p className="text-slate-400 font-medium uppercase text-[10px] mt-2">Fila Actual:</p>
               <p className="font-semibold text-blue-700 mt-0.5">{selectedPrinterForBaja.warehouseRow}</p>
+            </div>
+
+            {/* Espacios para capturar Nombre que solicita y Persona que entrega */}
+            <div className="flex flex-col gap-2.5 mb-4 text-xs">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>👤</span>
+                  <span>Nombre de la persona que solicita:</span>
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={bajaRequestedBy}
+                    onChange={(e) => setBajaRequestedBy(e.target.value.toUpperCase())}
+                    placeholder="Ej. ROBERTO, DANIEL..."
+                    className="flex-1 px-3 py-1.5 border border-slate-300 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-rose-500"
+                  />
+                  <select
+                    value={bajaRequestedBy}
+                    onChange={(e) => setBajaRequestedBy(e.target.value)}
+                    className="bg-slate-100 border border-slate-300 rounded-xl px-2 text-[11px] font-semibold text-slate-700 outline-none"
+                  >
+                    <option value="ROBERTO">ROBERTO</option>
+                    <option value="DANIEL">DANIEL</option>
+                    <option value="JESUS">JESUS</option>
+                    <option value="ADRIAN">ADRIAN</option>
+                    <option value="VENTAS">VENTAS</option>
+                    <option value="TALLER">TALLER</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>🚚</span>
+                  <span>Persona que entrega / da el producto:</span>
+                </label>
+                <input
+                  type="text"
+                  value={bajaDispatchedBy}
+                  onChange={(e) => setBajaDispatchedBy(e.target.value.toUpperCase())}
+                  placeholder="Ej. OPERADOR, ALMACÉN..."
+                  className="w-full px-3 py-1.5 border border-slate-300 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-rose-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>📝</span>
+                  <span>Motivo de la baja:</span>
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {['Venta', 'Taller', 'Garantía', 'Baja de almacén'].map(mot => (
+                    <button
+                      key={mot}
+                      type="button"
+                      onClick={() => setBajaReason(mot)}
+                      className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition ${
+                        bajaReason === mot 
+                          ? 'bg-rose-100 border-rose-400 text-rose-800' 
+                          : 'bg-slate-100 border-slate-200 text-slate-600 hover:bg-slate-200'
+                      }`}
+                    >
+                      {mot}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="flex gap-2.5">
@@ -413,7 +490,7 @@ export default function ModelSearchView({
                 Cancelar
               </button>
               <button
-                onClick={() => handleConfirmBaja(selectedPrinterForBaja.serial)}
+                onClick={() => handleConfirmBaja(selectedPrinterForBaja)}
                 className="flex-1 py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-medium text-xs transition shadow-xs"
               >
                 Confirmar Baja

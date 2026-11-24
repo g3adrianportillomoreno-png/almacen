@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { InventoryController } from '../controllers/InventoryController.js';
 
 export default function BajasTableViewModal({
@@ -11,24 +11,35 @@ export default function BajasTableViewModal({
   onExportExcel = null,
   batchDetails = null
 }) {
+  const [localItems, setLocalItems] = useState(items);
   const [searchQuery, setSearchQuery] = useState('');
   const [modelFilter, setModelFilter] = useState('ALL');
   const [copiedSerial, setCopiedSerial] = useState(null);
 
+  // Estados para asignación rápida / edición de nombres (solicita y entrega)
+  const [editingItemForPersonas, setEditingItemForPersonas] = useState(null);
+  const [editRequesterVal, setEditRequesterVal] = useState('');
+  const [editDispatcherVal, setEditDispatcherVal] = useState('OPERADOR');
+  const [isSavingPersonas, setIsSavingPersonas] = useState(false);
+
+  useEffect(() => {
+    setLocalItems(items);
+  }, [items]);
+
   // Lista única de modelos presentes en las bajas
   const availableModels = useMemo(() => {
     const set = new Set();
-    items.forEach(it => {
+    localItems.forEach(it => {
       const m = it.material || it.material_model;
       if (m && m.trim()) set.add(m.trim());
     });
     return Array.from(set).sort();
-  }, [items]);
+  }, [localItems]);
 
   // Filtrado reactivo en tiempo real
   const filteredItems = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return items.filter(it => {
+    return localItems.filter(it => {
       const serial = (it.serial || it.serial_number || '').toLowerCase();
       const material = (it.material || it.material_model || '').toLowerCase();
       const internal = String(it.internalNumber || it.internal_number || '');
@@ -58,7 +69,7 @@ export default function BajasTableViewModal({
         reason.includes(q)
       );
     });
-  }, [items, searchQuery, modelFilter]);
+  }, [localItems, searchQuery, modelFilter]);
 
   // Ordenar de la más nueva a la más vieja de forma estricta por fecha/hora
   const sortedItems = useMemo(() => {
@@ -67,14 +78,56 @@ export default function BajasTableViewModal({
       const rawB = b.scannedAt || b.bajaAt || b.departure_date || b.assignedAt;
       const timeA = rawA ? new Date(rawA).getTime() : 0;
       const timeB = rawB ? new Date(rawB).getTime() : 0;
-      if (timeA && timeB && timeA !== timeB) return timeB - timeA;
-      if (timeA && !timeB) return -1;
-      if (!timeA && timeB) return 1;
+      const validA = !isNaN(timeA) && timeA > 0;
+      const validB = !isNaN(timeB) && timeB > 0;
+      if (validA && validB && timeA !== timeB) return timeB - timeA;
+      if (validA && !validB) return -1;
+      if (!validA && validB) return 1;
       const sA = String(a.serial || a.serial_number || '');
       const sB = String(b.serial || b.serial_number || '');
       return sA.localeCompare(sB);
     });
   }, [filteredItems]);
+
+  const handleOpenEditPersonas = (item) => {
+    setEditingItemForPersonas(item);
+    setEditRequesterVal(item.requestedBy || item.requested_by || 'ROBERTO');
+    setEditDispatcherVal(item.dispatchedBy || item.dispatched_by || item.operator || 'OPERADOR');
+  };
+
+  const handleSavePersonas = async () => {
+    if (!editingItemForPersonas) return;
+    const serial = editingItemForPersonas.serial || editingItemForPersonas.serial_number;
+    if (!serial) return;
+
+    setIsSavingPersonas(true);
+    try {
+      const req = (editRequesterVal || '').trim().toUpperCase() || 'Sin especificar';
+      const disp = (editDispatcherVal || '').trim().toUpperCase() || 'Operador';
+
+      await InventoryController.updateBajaPersonas(serial, req, disp);
+
+      setLocalItems(prev => prev.map(it => {
+        const itSerial = it.serial || it.serial_number;
+        if (itSerial === serial) {
+          return {
+            ...it,
+            requestedBy: req,
+            requested_by: req,
+            dispatchedBy: disp,
+            dispatched_by: disp
+          };
+        }
+        return it;
+      }));
+
+      setEditingItemForPersonas(null);
+    } catch (e) {
+      alert("Error guardando personas de la baja: " + e.message);
+    } finally {
+      setIsSavingPersonas(false);
+    }
+  };
 
   const handleCopy = (serial) => {
     if (!serial) return;
@@ -312,18 +365,34 @@ export default function BajasTableViewModal({
 
                       {/* Nombre que solicita */}
                       <td className="py-2.5 px-3">
-                        <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200 px-2.5 py-0.5 rounded-md text-[11px] font-bold">
-                          <span>👤</span>
-                          <span>{item.requestedBy || item.requested_by || 'Sin especificar'}</span>
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditPersonas(item)}
+                            className="inline-flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 hover:border-amber-300 px-2 py-0.5 rounded-md text-[11px] font-bold transition text-left cursor-pointer group/btn"
+                            title="Haz clic para modificar o asignar el nombre del solicitante"
+                          >
+                            <span>👤</span>
+                            <span>{item.requestedBy || item.requested_by || 'Sin especificar'}</span>
+                            <span className="opacity-0 group-hover/btn:opacity-100 text-[10px] text-amber-700 ml-0.5">✏️</span>
+                          </button>
+                        </div>
                       </td>
 
                       {/* Persona que entrega / da el producto */}
                       <td className="py-2.5 px-3">
-                        <span className="inline-flex items-center gap-1 bg-blue-50 text-blue-900 border border-blue-200 px-2.5 py-0.5 rounded-md text-[11px] font-bold">
-                          <span>🚚</span>
-                          <span>{item.dispatchedBy || item.dispatched_by || item.operator || 'Operador'}</span>
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditPersonas(item)}
+                            className="inline-flex items-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-200 hover:border-blue-300 px-2 py-0.5 rounded-md text-[11px] font-bold transition text-left cursor-pointer group/btn"
+                            title="Haz clic para modificar o asignar el nombre de quien entrega"
+                          >
+                            <span>🚚</span>
+                            <span>{item.dispatchedBy || item.dispatched_by || item.operator || 'Operador'}</span>
+                            <span className="opacity-0 group-hover/btn:opacity-100 text-[10px] text-blue-700 ml-0.5">✏️</span>
+                          </button>
+                        </div>
                       </td>
 
                       {/* Motivo */}
@@ -380,6 +449,101 @@ export default function BajasTableViewModal({
         </div>
 
       </div>
+
+      {/* MODAL PARA EDITAR / ASIGNAR NOMBRES DE LA BAJA */}
+      {editingItemForPersonas && (
+        <div className="fixed inset-0 z-60 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl max-w-md w-full p-5 shadow-2xl border border-slate-200 animate-in zoom-in-95">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">✏️</span>
+                <h3 className="text-sm font-black text-slate-800">
+                  Asignar Solicitante y Despachador
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingItemForPersonas(null)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 mb-4 text-xs font-mono">
+              <p className="text-slate-500 text-[10px] uppercase font-sans font-bold">Número de Serie:</p>
+              <p className="text-sm font-black text-slate-900">{editingItemForPersonas.serial || editingItemForPersonas.serial_number}</p>
+              <p className="text-slate-500 text-[10px] uppercase font-sans font-bold mt-1">Modelo:</p>
+              <p className="font-sans font-semibold text-slate-700">{editingItemForPersonas.material || editingItemForPersonas.material_model}</p>
+            </div>
+
+            <div className="space-y-3 text-xs mb-5">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>👤</span>
+                  <span>Nombre de la persona que solicita:</span>
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={editRequesterVal}
+                    onChange={(e) => setEditRequesterVal(e.target.value.toUpperCase())}
+                    placeholder="Ej. ROBERTO, DANIEL..."
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-rose-500 text-xs"
+                    autoFocus
+                  />
+                  <select
+                    value={editRequesterVal}
+                    onChange={(e) => setEditRequesterVal(e.target.value)}
+                    className="bg-slate-100 border border-slate-300 rounded-xl px-2 text-[11px] font-semibold text-slate-700 outline-none"
+                  >
+                    <option value="ROBERTO">ROBERTO</option>
+                    <option value="DANIEL">DANIEL</option>
+                    <option value="JESUS">JESUS</option>
+                    <option value="ADRIAN">ADRIAN</option>
+                    <option value="VENTAS">VENTAS</option>
+                    <option value="TALLER">TALLER</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>🚚</span>
+                  <span>Persona que entrega / da el producto:</span>
+                </label>
+                <input
+                  type="text"
+                  value={editDispatcherVal}
+                  onChange={(e) => setEditDispatcherVal(e.target.value.toUpperCase())}
+                  placeholder="Ej. OPERADOR, ALMACÉN..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-rose-500 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingItemForPersonas(null)}
+                className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSavePersonas}
+                disabled={isSavingPersonas}
+                className="flex-1 py-2 px-3 bg-rose-700 hover:bg-rose-800 text-white rounded-xl font-bold text-xs transition shadow-xs flex items-center justify-center gap-1.5"
+              >
+                <span>💾</span>
+                <span>{isSavingPersonas ? 'Guardando...' : 'Guardar Datos'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
