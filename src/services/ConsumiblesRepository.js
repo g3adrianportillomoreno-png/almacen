@@ -169,9 +169,12 @@ export class ConsumiblesRepository {
       );
 
       if (isMatch) {
-        const existingBarcodes = Array.isArray(item.barcodes) ? item.barcodes : [];
+        const existingBarcodes = Array.isArray(item.barcodes) ? [...item.barcodes] : [];
         if (!existingBarcodes.includes(barcode)) {
           existingBarcodes.push(barcode);
+        }
+        if (cleanBarcode && !existingBarcodes.includes(cleanBarcode)) {
+          existingBarcodes.push(cleanBarcode);
         }
         targetItem = {
           ...item,

@@ -23,10 +23,13 @@ export default function ConsumiblesOperatorScanView({
   const [receptionFilter, setReceptionFilter] = useState('ALL');
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
-  // Estados de escaneo y captura rápida de recepción
+  // Estados de escaneo y captura rápida de recepción por cajas (Multiplicación)
   const [receptionScanInput, setReceptionScanInput] = useState('');
   const [capturingItem, setCapturingItem] = useState(null);
-  const [captureQuantity, setCaptureQuantity] = useState(1);
+  const [piecesPerBox, setPiecesPerBox] = useState(10);
+  const [boxCount, setBoxCount] = useState(1);
+  const [directTotalQty, setDirectTotalQty] = useState(10);
+  const [barcodeToLinkInput, setBarcodeToLinkInput] = useState('');
   const [scannedBarcodeForLinking, setScannedBarcodeForLinking] = useState('');
 
   // Modificación de ubicación de partida en recepción
@@ -215,11 +218,16 @@ export default function ConsumiblesOperatorScanView({
     soundEffects.playScanSuccess();
     setCapturingItem(matchedItem);
     setScannedBarcodeForLinking(raw);
+    setBarcodeToLinkInput(raw || matchedItem.barcode || '');
 
-    // Calcular cantidad sugerida por defecto:
-    // Si quedan pendientes, sugerir las piezas que faltan para completar o mínimo 1
-    const pending = Math.max(1, (matchedItem.expectedQty || 0) - (matchedItem.scannedQty || 0));
-    setCaptureQuantity(pending > 0 ? pending : 1);
+    // Calcular cantidad sugerida por defecto de piezas por caja y cajas
+    const pending = Math.max(0, (matchedItem.expectedQty || 0) - (matchedItem.scannedQty || 0));
+    const defPieces = (pending > 0 && pending <= 5) ? pending : 10;
+    const defBoxes = (pending > 0 && defPieces > 0) ? Math.max(1, Math.floor(pending / defPieces)) : 1;
+    
+    setPiecesPerBox(defPieces);
+    setBoxCount(defBoxes);
+    setDirectTotalQty(defPieces * defBoxes);
     setReceptionScanInput('');
   };
 
@@ -227,15 +235,25 @@ export default function ConsumiblesOperatorScanView({
   const handleConfirmReceptionQuantity = async () => {
     if (!capturingItem || !activeBatch) return;
 
-    const qty = parseInt(captureQuantity, 10);
+    const qty = parseInt(directTotalQty, 10);
     if (isNaN(qty) || qty <= 0) {
       alert("Por favor ingresa una cantidad numérica válida mayor a 0.");
       return;
     }
 
-    const codeToSubmit = scannedBarcodeForLinking || capturingItem.barcode || capturingItem.code;
+    const barcodeFinal = (barcodeToLinkInput || scannedBarcodeForLinking || capturingItem.barcode || '').trim();
 
-    // 1. Registrar escaneo con multiplicador
+    // 1. AUTO-VINCULAR DE FORMA PERMANENTE EL CÓDIGO DE BARRAS AL PRODUCTO EN EL CATÁLOGO MAESTRO
+    if (barcodeFinal && capturingItem.code) {
+      try {
+        await ConsumiblesRepository.linkBarcodeToConsumible(barcodeFinal, capturingItem.code);
+      } catch (e) {
+        console.warn('Nota auto-vinculación:', e);
+      }
+    }
+
+    // 2. Registrar escaneo con la cantidad total calculada en el checklist
+    const codeToSubmit = barcodeFinal || capturingItem.code;
     const result = await ConsumiblesChecklistRepository.recordScan(
       activeBatch.id,
       codeToSubmit,
@@ -249,31 +267,23 @@ export default function ConsumiblesOperatorScanView({
       return;
     }
 
-    // 2. Auto-vincular el código de barras escaneado al producto en el catálogo maestro
-    if (scannedBarcodeForLinking && scannedBarcodeForLinking !== capturingItem.code) {
-      try {
-        await ConsumiblesRepository.linkBarcodeToConsumible(scannedBarcodeForLinking, capturingItem.code);
-      } catch (e) {
-        console.warn('Nota auto-vinculación:', e);
-      }
-    }
-
     // 3. Sonido y notificación
     if (result.isSurplus) {
       soundEffects.playScanDuplicate();
-      showToast('warning', `⚠️ ¡Excedente! Se contaron +${qty} pzas de ${capturingItem.code} (${result.item.scannedQty}/${capturingItem.expectedQty}).`);
+      showToast('warning', `⚠️ ¡Excedente! Se ingresaron +${qty} pzas (${boxCount} cajas × ${piecesPerBox} pzas) de ${capturingItem.code}.`);
     } else if (result.isItemCompleted) {
       soundEffects.playScanSuccess();
-      showToast('success', `🎉 ¡Partida completada al 100%! ${capturingItem.code} (${result.item.scannedQty}/${capturingItem.expectedQty} pzas).`);
+      showToast('success', `🎉 ¡Partida completada! ${capturingItem.code} (+${qty} pzas, ${boxCount} cajas × ${piecesPerBox} pzas). Barcode ${barcodeFinal || ''} ligado ✓`);
     } else {
       soundEffects.playScanSuccess();
-      showToast('success', `✓ +${qty} pzas recibidas de ${capturingItem.code}. Faltan ${result.item.pendingQty} pzas.`);
+      showToast('success', `✓ +${qty} pzas recibidas (${boxCount} cajas × ${piecesPerBox} pzas) de ${capturingItem.code}. Faltan ${result.item.pendingQty} pzas. Código ligado ✓`);
     }
 
     setActiveBatch(result.batch);
     setConsumiblesBatches(prev => prev.map(b => b.id === result.batch.id ? result.batch : b));
     setCapturingItem(null);
     setScannedBarcodeForLinking('');
+    setBarcodeToLinkInput('');
 
     if (scanInputRef.current) scanInputRef.current.focus();
   };
@@ -771,110 +781,203 @@ export default function ConsumiblesOperatorScanView({
                   </div>
                 </div>
 
-                {/* ESPACIO PARA INTRODUCIR LA CANTIDAD QUE LLEGÓ */}
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-black text-slate-200 uppercase flex items-center justify-between">
-                    <span>Cantidad de piezas a ingresar:</span>
-                    <span className="text-[11px] text-purple-300 font-bold">Escribe o toca las cajas abajo</span>
-                  </label>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(prev => Math.max(1, (parseInt(prev, 10) || 1) - 1))}
-                      className="w-12 h-12 bg-slate-800 hover:bg-slate-700 text-white font-black text-lg rounded-2xl flex items-center justify-center transition active:scale-95"
-                    >
-                      -1
-                    </button>
-                    <input
-                      type="number"
-                      min="1"
-                      value={captureQuantity}
-                      onChange={(e) => setCaptureQuantity(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                      className="flex-1 bg-slate-950 border-2 border-purple-500 focus:border-emerald-400 rounded-2xl py-2.5 px-4 text-center font-mono text-2xl font-black text-white outline-none"
-                      autoFocus
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 1)}
-                      className="w-12 h-12 bg-slate-800 hover:bg-slate-700 text-white font-black text-lg rounded-2xl flex items-center justify-center transition active:scale-95"
-                    >
-                      +1
-                    </button>
+                {/* CÓDIGO DE BARRAS QUE SE LIGARÁ PERMANENTEMENTE AL PRODUCTO */}
+                <div className="bg-purple-950/40 p-3 rounded-2xl border border-purple-800/60 flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-black text-purple-200 uppercase flex items-center gap-1.5">
+                      <span>🔗</span>
+                      <span>Código de Barras a vincular:</span>
+                    </label>
+                    <span className="text-[10px] text-emerald-400 font-bold">
+                      Se ligará de por vida a {capturingItem.code}
+                    </span>
                   </div>
+                  <input
+                    type="text"
+                    value={barcodeToLinkInput}
+                    onChange={(e) => setBarcodeToLinkInput(e.target.value.trim())}
+                    placeholder="Escanear o escribir código de barras..."
+                    className="w-full bg-slate-950 border border-purple-500/80 rounded-xl px-3 py-1.5 font-mono font-bold text-xs text-white outline-none focus:border-emerald-400"
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    Al confirmar, este código quedará asociado permanentemente a este consumible para no tener que ligarlo uno por uno al acomodar.
+                  </p>
                 </div>
 
-                {/* MAS ABAJO LAS CAJAS QUE LLEGARON PARA FÁCIL CAPTURA */}
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-wide">
-                    📦 Botones Rápidos de Cajas y Paquetes:
-                  </span>
+                {/* ================================================================ */}
+                {/* CÁLCULO POR MULTIPLICACIÓN: CANTIDAD × NÚMERO DE CAJAS */}
+                {/* ================================================================ */}
+                <div className="bg-slate-950 p-4 rounded-3xl border border-slate-800 flex flex-col gap-3.5">
                   
-                  <div className="grid grid-cols-4 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(10)}
-                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
-                    >
-                      📦 1 Caja (10)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(20)}
-                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
-                    >
-                      📦 2 Cajas (20)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(50)}
-                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
-                    >
-                      📦 5 Cajas (50)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(100)}
-                      className="bg-slate-800 hover:bg-purple-900/60 border border-slate-700 hover:border-purple-500 text-purple-200 font-bold text-xs py-2 rounded-xl transition text-center"
-                    >
-                      📦 10 Cajas (100)
-                    </button>
+                  {/* FILA 1: CANTIDAD DE PIEZAS POR CAJA */}
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-black text-slate-200 uppercase flex items-center gap-1.5">
+                        <span className="text-purple-400">📦</span>
+                        <span>Piezas por cada caja (Cantidad):</span>
+                      </label>
+                      <span className="text-[11px] font-mono font-bold text-purple-300">
+                        {piecesPerBox} pzas/caja
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={piecesPerBox}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                          setPiecesPerBox(val);
+                          setDirectTotalQty(val * boxCount);
+                        }}
+                        className="flex-1 bg-slate-900 border-2 border-slate-700 focus:border-purple-400 rounded-xl py-2 px-3 text-center font-mono text-lg font-black text-white outline-none"
+                      />
+                    </div>
+
+                    {/* Botones rápidos de piezas por caja */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 5, 10, 12, 15, 20, 25, 50, 100].map(n => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => {
+                            setPiecesPerBox(n);
+                            setDirectTotalQty(n * boxCount);
+                          }}
+                          className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer ${
+                            piecesPerBox === n
+                              ? 'bg-purple-600 text-white border-purple-400 shadow-xs'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          {n} {n === 1 ? 'pza' : 'pzas'}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-4 gap-1.5 mt-1">
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 5)}
-                      className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold text-[11px] py-1.5 rounded-lg border border-slate-800"
-                    >
-                      +5 pzas
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 10)}
-                      className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold text-[11px] py-1.5 rounded-lg border border-slate-800"
-                    >
-                      +10 pzas
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCaptureQuantity(prev => (parseInt(prev, 10) || 0) + 25)}
-                      className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold text-[11px] py-1.5 rounded-lg border border-slate-800"
-                    >
-                      +25 pzas
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const remaining = Math.max(1, (capturingItem.expectedQty || 0) - (capturingItem.scannedQty || 0));
-                        setCaptureQuantity(remaining);
-                      }}
-                      className="bg-amber-950/80 hover:bg-amber-900 text-amber-200 font-black text-[11px] py-1.5 rounded-lg border border-amber-700"
-                      title="Completar todas las piezas que faltan para llegar al 100%"
-                    >
-                      🎯 Completar
-                    </button>
+                  {/* FILA 2: NÚMERO DE CAJAS QUE LLEGARON */}
+                  <div className="flex flex-col gap-1.5 pt-2 border-t border-slate-800/80">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-black text-slate-200 uppercase flex items-center gap-1.5">
+                        <span className="text-amber-400">🔢</span>
+                        <span>Número de cajas que llegaron:</span>
+                      </label>
+                      <span className="text-[11px] font-mono font-bold text-amber-300">
+                        {boxCount} {boxCount === 1 ? 'caja' : 'cajas'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const val = Math.max(1, boxCount - 1);
+                          setBoxCount(val);
+                          setDirectTotalQty(piecesPerBox * val);
+                        }}
+                        className="w-10 h-10 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-white font-black text-base rounded-xl flex items-center justify-center transition active:scale-95 cursor-pointer"
+                      >
+                        -1
+                      </button>
+                      <input
+                        type="number"
+                        min="1"
+                        value={boxCount}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseInt(e.target.value, 10) || 1);
+                          setBoxCount(val);
+                          setDirectTotalQty(piecesPerBox * val);
+                        }}
+                        className="flex-1 bg-slate-900 border-2 border-slate-700 focus:border-amber-400 rounded-xl py-2 px-3 text-center font-mono text-lg font-black text-white outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const val = boxCount + 1;
+                          setBoxCount(val);
+                          setDirectTotalQty(piecesPerBox * val);
+                        }}
+                        className="w-10 h-10 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-white font-black text-base rounded-xl flex items-center justify-center transition active:scale-95 cursor-pointer"
+                      >
+                        +1
+                      </button>
+                    </div>
+
+                    {/* Botones rápidos de número de cajas */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 50].map(c => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => {
+                            setBoxCount(c);
+                            setDirectTotalQty(piecesPerBox * c);
+                          }}
+                          className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer ${
+                            boxCount === c
+                              ? 'bg-amber-600 text-white border-amber-400 shadow-xs'
+                              : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800'
+                          }`}
+                        >
+                          {c} {c === 1 ? 'caja' : 'cajas'}
+                        </button>
+                      ))}
+                    </div>
                   </div>
+
+                  {/* MULTIPLICACIÓN Y TOTAL FINAL CALCULADO */}
+                  <div className="bg-gradient-to-r from-purple-950/80 via-slate-900 to-emerald-950/80 p-3.5 rounded-2xl border-2 border-purple-500/70 flex flex-col gap-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-300 uppercase text-[10px]">
+                        Fórmula de cálculo:
+                      </span>
+                      <span className="font-mono font-black text-xs text-purple-200">
+                        {piecesPerBox} pzas × {boxCount} cajas = {piecesPerBox * boxCount} pzas
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <span className="text-[11px] font-black text-emerald-300 uppercase block">
+                          Total de piezas a ingresar:
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          (Modificable directamente si hay piezas sueltas)
+                        </span>
+                      </div>
+
+                      <div className="w-32">
+                        <input
+                          type="number"
+                          min="1"
+                          value={directTotalQty}
+                          onChange={(e) => setDirectTotalQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                          className="w-full bg-slate-950 border-2 border-emerald-400 focus:ring-2 focus:ring-emerald-400/40 rounded-xl py-1.5 px-3 text-center font-mono text-2xl font-black text-emerald-300 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Botón rápido para tomar todo el faltante */}
+                    <div className="pt-1 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const remaining = Math.max(1, (capturingItem.expectedQty || 0) - (capturingItem.scannedQty || 0));
+                          setDirectTotalQty(remaining);
+                          if (piecesPerBox > 0) {
+                            setBoxCount(Math.max(1, Math.ceil(remaining / piecesPerBox)));
+                          }
+                        }}
+                        className="text-[11px] bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-600 px-3 py-1 rounded-xl font-bold transition cursor-pointer flex items-center gap-1"
+                      >
+                        <span>🎯</span>
+                        <span>Completar Faltante Exacto ({Math.max(0, (capturingItem.expectedQty || 0) - (capturingItem.scannedQty || 0))} pzas)</span>
+                      </button>
+                    </div>
+                  </div>
+
                 </div>
 
                 {/* ACCIONES FINALES */}
@@ -884,8 +987,9 @@ export default function ConsumiblesOperatorScanView({
                     onClick={() => {
                       setCapturingItem(null);
                       setScannedBarcodeForLinking('');
+                      setBarcodeToLinkInput('');
                     }}
-                    className="flex-1 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-2xl text-xs transition"
+                    className="flex-1 py-3 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-2xl text-xs transition cursor-pointer"
                   >
                     Cancelar
                   </button>
@@ -895,7 +999,7 @@ export default function ConsumiblesOperatorScanView({
                     className="flex-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                   >
                     <span>✓</span>
-                    <span>Confirmar Recepción (+{captureQuantity} pzas)</span>
+                    <span>Confirmar Recepción (+{directTotalQty} pzas)</span>
                   </button>
                 </div>
 
@@ -1067,8 +1171,13 @@ export default function ConsumiblesOperatorScanView({
                                 onClick={() => {
                                   setCapturingItem(item);
                                   setScannedBarcodeForLinking(item.barcode || item.code);
-                                  const rem = Math.max(1, exp - rcv);
-                                  setCaptureQuantity(rem);
+                                  setBarcodeToLinkInput(item.barcode || '');
+                                  const rem = Math.max(0, exp - rcv);
+                                  const defPieces = (rem > 0 && rem <= 5) ? rem : 10;
+                                  const defBoxes = (rem > 0 && defPieces > 0) ? Math.max(1, Math.floor(rem / defPieces)) : 1;
+                                  setPiecesPerBox(defPieces);
+                                  setBoxCount(defBoxes);
+                                  setDirectTotalQty(defPieces * defBoxes);
                                 }}
                                 className="bg-purple-600 hover:bg-purple-500 text-white font-black text-[11px] px-2.5 py-1 rounded-xl transition cursor-pointer"
                               >

@@ -287,12 +287,12 @@ export class ConsumiblesChecklistRepository {
     // Auto-vincular permanentemente el código escaneado con la clave del producto
     if (query && item.code && query !== item.code) {
       try {
-        ConsumiblesRepository.linkBarcodeToConsumible(query, item.code);
+        await ConsumiblesRepository.linkBarcodeToConsumible(query, item.code);
       } catch (e) {}
     }
     if (item.barcode && item.code && item.barcode !== item.code) {
       try {
-        ConsumiblesRepository.linkBarcodeToConsumible(item.barcode, item.code);
+        await ConsumiblesRepository.linkBarcodeToConsumible(item.barcode, item.code);
       } catch (e) {}
     }
 
