@@ -204,6 +204,118 @@ export class ConsumiblesRepository {
   }
 
   /**
+   * Suma piezas recibidas de un checklist directamente al inventario maestro de consumibles
+   * y guarda el código de barras en el registro del producto
+   */
+  static async addStockToMaster(claveOrCode, quantityToAdd = 0, barcode = null) {
+    if (!claveOrCode || quantityToAdd <= 0) return null;
+    const qty = parseInt(quantityToAdd, 10);
+    if (isNaN(qty) || qty <= 0) return null;
+
+    const queryKey = String(claveOrCode).trim().toUpperCase();
+    const catalog = await this.getAllConsumibles();
+    const aliases = this.getBarcodeAliases();
+    const mappedClave = (aliases[queryKey] || '').toUpperCase();
+
+    let targetItem = null;
+    const updated = catalog.map(item => {
+      const itClave = String(item.clave || '').trim().toUpperCase();
+      const itId = String(item.id);
+      const isMatch = itClave === queryKey || itId === queryKey || (mappedClave && itClave === mappedClave);
+
+      if (isMatch) {
+        const curStock = Number(item.existencias) || 0;
+        const newStock = curStock + qty;
+        const existingBarcodes = Array.isArray(item.barcodes) ? [...item.barcodes] : [];
+
+        if (barcode && String(barcode).trim()) {
+          const rawB = String(barcode).trim();
+          const cleanB = rawB.toUpperCase().replace(/[^A-Z0-9]/g, '');
+          if (!existingBarcodes.includes(rawB)) existingBarcodes.push(rawB);
+          if (cleanB && !existingBarcodes.includes(cleanB)) existingBarcodes.push(cleanB);
+          // Actualizar alias
+          aliases[rawB] = item.clave;
+          if (cleanB) aliases[cleanB] = item.clave;
+        }
+
+        targetItem = {
+          ...item,
+          existencias: newStock,
+          barcodes: existingBarcodes,
+          updatedAt: new Date().toISOString()
+        };
+        return targetItem;
+      }
+      return item;
+    });
+
+    if (targetItem) {
+      await this.saveAllConsumibles(updated);
+      await this.saveBarcodeAliases(aliases);
+    }
+
+    return targetItem;
+  }
+
+  /**
+   * Guarda un movimiento de ubicación física en el historial permanente
+   */
+  static recordLocationMovement(movement) {
+    if (!movement) return;
+    try {
+      const STORAGE_MOVEMENTS_KEY = 'cdm_consumables_location_movements_v1';
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_MOVEMENTS_KEY) : null;
+      const list = raw ? JSON.parse(raw) : [];
+      const entry = {
+        id: `mov_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        timestamp: movement.timestamp || new Date().toISOString(),
+        dateFormatted: movement.dateFormatted || new Date().toLocaleString('es-MX', { hour12: true }),
+        clave: movement.clave || movement.code || '',
+        description: movement.description || '',
+        barcode: movement.barcode || '',
+        prevLocation: movement.prevLocation || 'Sin Asignar',
+        newLocation: movement.newLocation || 'Sin Asignar',
+        movementType: movement.movementType || 'REUBICACIÓN',
+        operator: movement.operator || 'Operador',
+        batchFolio: movement.batchFolio || ''
+      };
+
+      const updated = [entry, ...(Array.isArray(list) ? list : [])].slice(0, 500);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(STORAGE_MOVEMENTS_KEY, JSON.stringify(updated));
+      }
+
+      // Respaldo asíncrono en Supabase
+      supabase
+        .from('warehouse_map_config')
+        .upsert({
+          id: 'consumables_location_movements',
+          layout: { movements: updated.slice(0, 300) },
+          updated_at: new Date().toISOString()
+        })
+        .then(() => {})
+        .catch(() => {});
+
+      return entry;
+    } catch (e) {
+      console.warn('Nota guardando movimiento de ubicación:', e);
+    }
+  }
+
+  /**
+   * Obtiene todos los movimientos de ubicación registrados
+   */
+  static getLocationMovements() {
+    try {
+      const STORAGE_MOVEMENTS_KEY = 'cdm_consumables_location_movements_v1';
+      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_MOVEMENTS_KEY) : null;
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Modifica la ubicación de un consumible desde el modo operador
    * Registra si hubo cambio de ubicación (wasChanged), la ubicación anterior y el operador
    */

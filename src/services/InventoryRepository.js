@@ -191,6 +191,21 @@ export class InventoryRepository {
         }
       } catch {}
 
+      // Enriquecer bajasLookup desde metadataCache
+      if (metadataCache.serials) {
+        Object.entries(metadataCache.serials).forEach(([sKey, sData]) => {
+          if (sData.status === 'BAJA' || sData.requestedBy || sData.bajaAt) {
+            const existing = bajasLookup[sKey] || {};
+            bajasLookup[sKey] = {
+              requestedBy: sData.requestedBy || existing.requestedBy || null,
+              dispatchedBy: sData.dispatchedBy || existing.dispatchedBy || 'Operador',
+              bajaAt: sData.bajaAt || existing.bajaAt || null,
+              reason: sData.bajaReason || existing.reason || 'Salida de almacén'
+            };
+          }
+        });
+      }
+
       // 3b. Agrupar las series esperadas por su checklist_id y enriquecer datos de bajas
       const seriesByChecklist = {};
       for (const item of allExpectedSeries) {
@@ -199,20 +214,32 @@ export class InventoryRepository {
         const isBaja = item.printer_status === 'BAJA' || metadataCache.serials?.[sUpper]?.status === 'BAJA';
 
         if (bInfo || isBaja) {
-          if (bInfo) {
-            if (!item.requested_by && bInfo.requestedBy) item.requested_by = bInfo.requestedBy;
-            if (!item.dispatched_by && bInfo.dispatchedBy) item.dispatched_by = bInfo.dispatchedBy;
-            if (!item.scanned_at && bInfo.bajaAt) item.scanned_at = bInfo.bajaAt;
-            if (!item.baja_at && bInfo.bajaAt) item.baja_at = bInfo.bajaAt;
-            if (!item.departure_date && bInfo.bajaAt) item.departure_date = bInfo.bajaAt;
-            if (!item.baja_reason && bInfo.reason) item.baja_reason = bInfo.reason;
-          }
+          const metaS = metadataCache.serials?.[sUpper] || {};
+          const finalReq = item.requested_by || item.requestedBy || bInfo?.requestedBy || metaS.requestedBy || null;
+          const finalDisp = item.dispatched_by || item.dispatchedBy || bInfo?.dispatchedBy || metaS.dispatchedBy || 'Operador';
+          const finalBajaAt = item.baja_at || item.bajaAt || bInfo?.bajaAt || metaS.bajaAt || item.departure_date || item.scanned_at || null;
+          const finalReason = item.baja_reason || item.bajaReason || bInfo?.reason || metaS.bajaReason || 'Baja de almacén';
+
+          item.requested_by = finalReq;
+          item.requestedBy = finalReq;
+          item.dispatched_by = finalDisp;
+          item.dispatchedBy = finalDisp;
+          item.baja_at = finalBajaAt;
+          item.bajaAt = finalBajaAt;
+          item.departure_date = finalBajaAt;
+          item.baja_reason = finalReason;
+          item.bajaReason = finalReason;
+          item.isBaja = true;
+          item.printer_status = 'BAJA';
+
           if (metadataCache.serials) {
             metadataCache.serials[sUpper] = {
               ...(metadataCache.serials[sUpper] || {}),
-              requestedBy: item.requested_by || bInfo?.requestedBy || metadataCache.serials[sUpper]?.requestedBy || null,
-              dispatchedBy: item.dispatched_by || bInfo?.dispatchedBy || metadataCache.serials[sUpper]?.dispatchedBy || null,
-              bajaAt: item.baja_at || item.scanned_at || bInfo?.bajaAt || metadataCache.serials[sUpper]?.bajaAt || null
+              status: 'BAJA',
+              requestedBy: finalReq,
+              dispatchedBy: finalDisp,
+              bajaAt: finalBajaAt,
+              bajaReason: finalReason
             };
           }
         }

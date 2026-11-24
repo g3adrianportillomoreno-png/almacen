@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { InventoryController } from '../controllers/InventoryController.js';
+import { InventoryRepository } from '../services/InventoryRepository.js';
 
 export default function BajasTableViewModal({
   isOpen,
@@ -22,8 +23,42 @@ export default function BajasTableViewModal({
   const [editDispatcherVal, setEditDispatcherVal] = useState('OPERADOR');
   const [isSavingPersonas, setIsSavingPersonas] = useState(false);
 
+  // Estados para asignación masiva de solicitante y entregador
+  const [showMassAssignModal, setShowMassAssignModal] = useState(false);
+  const [massRequesterVal, setMassRequesterVal] = useState('ROBERTO');
+  const [massDispatcherVal, setMassDispatcherVal] = useState('OPERADOR');
+  const [massTargetScope, setMassTargetScope] = useState('UNSPECIFIED'); // 'UNSPECIFIED' | 'ALL'
+  const [isSavingMass, setIsSavingMass] = useState(false);
+
   useEffect(() => {
-    setLocalItems(items);
+    // Enriquecer registros automáticamente desde metadataCache y salidas locales
+    const cache = InventoryRepository.getMetadataCache()?.serials || {};
+    let localDeps = [];
+    try {
+      const raw = localStorage.getItem('cdm_inventory_departures_v1');
+      if (raw) localDeps = JSON.parse(raw);
+    } catch {}
+
+    const enriched = (items || []).map(it => {
+      const s = String(it.serial || it.serial_number || '').trim().toUpperCase();
+      const meta = cache[s] || {};
+      const dep = Array.isArray(localDeps) ? (localDeps.find(d => String(d.serial || '').trim().toUpperCase() === s) || {}) : {};
+
+      const req = it.requestedBy || it.requested_by || meta.requestedBy || dep.requested_by || dep.requestedBy || null;
+      const disp = it.dispatchedBy || it.dispatched_by || it.operator || meta.dispatchedBy || dep.dispatched_by || dep.dispatchedBy || null;
+      const bAt = it.bajaAt || it.departure_date || it.departureDate || it.baja_date || it.bajaDate || meta.bajaAt || dep.departure_date || dep.bajaAt || null;
+
+      return {
+        ...it,
+        requestedBy: req,
+        requested_by: req,
+        dispatchedBy: disp,
+        dispatched_by: disp,
+        bajaAt: bAt || it.bajaAt || null
+      };
+    });
+
+    setLocalItems(enriched);
   }, [items]);
 
   // Lista única de modelos presentes en las bajas
@@ -71,16 +106,16 @@ export default function BajasTableViewModal({
     });
   }, [localItems, searchQuery, modelFilter]);
 
-  // Ordenar de la más nueva a la más vieja de forma estricta por fecha/hora
+  // Ordenar de la más nueva a la más vieja de forma estricta priorizando FECHA DE BAJA
   const sortedItems = useMemo(() => {
     return [...filteredItems].sort((a, b) => {
-      const rawA = a.scannedAt || a.bajaAt || a.departure_date || a.assignedAt;
-      const rawB = b.scannedAt || b.bajaAt || b.departure_date || b.assignedAt;
+      const rawA = a.bajaAt || a.departure_date || a.departureDate || a.baja_date || a.bajaDate || a.scannedAt || a.assignedAt;
+      const rawB = b.bajaAt || b.departure_date || b.departureDate || b.baja_date || b.bajaDate || b.scannedAt || b.assignedAt;
       const timeA = rawA ? new Date(rawA).getTime() : 0;
       const timeB = rawB ? new Date(rawB).getTime() : 0;
       const validA = !isNaN(timeA) && timeA > 0;
       const validB = !isNaN(timeB) && timeB > 0;
-      if (validA && validB && timeA !== timeB) return timeB - timeA;
+      if (validA && validB && timeA !== timeB) return timeB - timeA; // Más nueva arriba
       if (validA && !validB) return -1;
       if (!validA && validB) return 1;
       const sA = String(a.serial || a.serial_number || '');
@@ -126,6 +161,56 @@ export default function BajasTableViewModal({
       alert("Error guardando personas de la baja: " + e.message);
     } finally {
       setIsSavingPersonas(false);
+    }
+  };
+
+  const handleSaveMassAssign = async () => {
+    setIsSavingMass(true);
+    try {
+      const req = (massRequesterVal || '').trim().toUpperCase() || 'Sin especificar';
+      const disp = (massDispatcherVal || '').trim().toUpperCase() || 'Operador';
+
+      const targets = localItems.filter(it => {
+        if (massTargetScope === 'UNSPECIFIED') {
+          const curReq = it.requestedBy || it.requested_by;
+          return !curReq || curReq === 'Sin especificar' || curReq === 'SIN ESPECIFICAR';
+        }
+        return true;
+      });
+
+      if (targets.length === 0) {
+        alert("No hay registros que coincidan con el criterio seleccionado.");
+        setIsSavingMass(false);
+        return;
+      }
+
+      await Promise.all(
+        targets.map(it => {
+          const serial = it.serial || it.serial_number;
+          return InventoryController.updateBajaPersonas(serial, req, disp);
+        })
+      );
+
+      const targetSerials = new Set(targets.map(it => it.serial || it.serial_number));
+      setLocalItems(prev => prev.map(it => {
+        const itSerial = it.serial || it.serial_number;
+        if (targetSerials.has(itSerial)) {
+          return {
+            ...it,
+            requestedBy: req,
+            requested_by: req,
+            dispatchedBy: disp,
+            dispatched_by: disp
+          };
+        }
+        return it;
+      }));
+
+      setShowMassAssignModal(false);
+    } catch (e) {
+      alert("Error en asignación masiva: " + e.message);
+    } finally {
+      setIsSavingMass(false);
     }
   };
 
@@ -238,8 +323,19 @@ export default function BajasTableViewModal({
             )}
           </div>
 
-          <div className="text-xs text-slate-600 font-semibold flex items-center justify-between sm:justify-end gap-2 shrink-0">
-            <span>Mostrando: <strong className="text-rose-800 font-bold">{filteredItems.length}</strong> de {items.length}</span>
+          <div className="flex items-center gap-2.5 shrink-0 flex-wrap justify-end">
+            <button
+              type="button"
+              onClick={() => setShowMassAssignModal(true)}
+              className="bg-rose-100 hover:bg-rose-200 border border-rose-300 text-rose-900 font-bold text-xs px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="Asignar nombres de solicitante y entregador a múltiples registros en 1 solo clic"
+            >
+              <span>👥</span>
+              <span>Asignar Nombres Masivo</span>
+            </button>
+            <span className="text-xs text-slate-600 font-semibold">
+              Mostrando: <strong className="text-rose-800 font-bold">{filteredItems.length}</strong> de {items.length}
+            </span>
             {(searchQuery || modelFilter !== 'ALL') && (
               <button
                 type="button"
@@ -291,7 +387,7 @@ export default function BajasTableViewModal({
                   const internal = item.internalNumber !== undefined && item.internalNumber !== null 
                     ? item.internalNumber 
                     : (item.internal_number || null);
-                  const rawTime = item.scannedAt || item.bajaAt || item.departure_date || item.assignedAt;
+                  const rawTime = item.bajaAt || item.departure_date || item.departureDate || item.baja_date || item.bajaDate || item.scannedAt || item.assignedAt;
                   
                   let formattedDate = '-';
                   let formattedTime = '-';
@@ -538,6 +634,121 @@ export default function BajasTableViewModal({
               >
                 <span>💾</span>
                 <span>{isSavingPersonas ? 'Guardando...' : 'Guardar Datos'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PARA ASIGNACIÓN MASIVA DE PERSONAS */}
+      {showMassAssignModal && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md p-5 text-slate-800">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">👥</span>
+                <h3 className="font-black text-slate-900 text-sm">
+                  Asignación Masiva de Nombres
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowMassAssignModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-4 text-xs">
+              <p className="font-bold text-rose-900">
+                Aplica a los registros de bajas en esta tabla:
+              </p>
+              <div className="mt-2 space-y-1.5">
+                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                  <input
+                    type="radio"
+                    name="massScope"
+                    checked={massTargetScope === 'UNSPECIFIED'}
+                    onChange={() => setMassTargetScope('UNSPECIFIED')}
+                    className="accent-rose-700"
+                  />
+                  <span>Solo a los que dicen <strong>"Sin especificar"</strong> ({localItems.filter(it => !it.requestedBy || it.requestedBy === 'Sin especificar').length} equipos)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer font-medium text-slate-700">
+                  <input
+                    type="radio"
+                    name="massScope"
+                    checked={massTargetScope === 'ALL'}
+                    onChange={() => setMassTargetScope('ALL')}
+                    className="accent-rose-700"
+                  />
+                  <span>A todos los registros visibles ({localItems.length} equipos)</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs mb-5">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>👤</span>
+                  <span>Nombre de la persona que solicita:</span>
+                </label>
+                <div className="flex gap-1.5">
+                  <input
+                    type="text"
+                    value={massRequesterVal}
+                    onChange={(e) => setMassRequesterVal(e.target.value.toUpperCase())}
+                    placeholder="Ej. ROBERTO, DANIEL..."
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-rose-500 text-xs"
+                  />
+                  <select
+                    value={massRequesterVal}
+                    onChange={(e) => setMassRequesterVal(e.target.value)}
+                    className="bg-slate-100 border border-slate-300 rounded-xl px-2 text-[11px] font-semibold text-slate-700 outline-none"
+                  >
+                    <option value="ROBERTO">ROBERTO</option>
+                    <option value="DANIEL">DANIEL</option>
+                    <option value="JESUS">JESUS</option>
+                    <option value="ADRIAN">ADRIAN</option>
+                    <option value="DANIA">DANIA</option>
+                    <option value="VENTAS">VENTAS</option>
+                    <option value="TALLER">TALLER</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1">
+                  <span>🚚</span>
+                  <span>Persona que entrega / da el producto:</span>
+                </label>
+                <input
+                  type="text"
+                  value={massDispatcherVal}
+                  onChange={(e) => setMassDispatcherVal(e.target.value.toUpperCase())}
+                  placeholder="Ej. OPERADOR, ALMACÉN..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-bold uppercase text-slate-800 outline-none focus:border-rose-500 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowMassAssignModal(false)}
+                className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveMassAssign}
+                disabled={isSavingMass}
+                className="flex-1 py-2 px-3 bg-rose-700 hover:bg-rose-800 text-white rounded-xl font-bold text-xs transition shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span>💾</span>
+                <span>{isSavingMass ? 'Aplicando a todos...' : 'Aplicar a Selección'}</span>
               </button>
             </div>
           </div>

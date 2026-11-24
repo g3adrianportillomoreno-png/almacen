@@ -284,7 +284,7 @@ export class ConsumiblesChecklistRepository {
 
     items[matchedItemIndex] = item;
 
-    // Auto-vincular permanentemente el código escaneado con la clave del producto
+    // 3b. Auto-vincular permanentemente el código escaneado con la clave del producto
     if (query && item.code && query !== item.code) {
       try {
         await ConsumiblesRepository.linkBarcodeToConsumible(query, item.code);
@@ -294,6 +294,14 @@ export class ConsumiblesChecklistRepository {
       try {
         await ConsumiblesRepository.linkBarcodeToConsumible(item.barcode, item.code);
       } catch (e) {}
+    }
+
+    // 3c. Sumar automáticamente las unidades recibidas al Maestro de Consumibles y registrar código de barras
+    try {
+      const barcodeFinal = (query && query !== item.code) ? query : (item.barcode || null);
+      await ConsumiblesRepository.addStockToMaster(item.code, qtyToAdd, barcodeFinal);
+    } catch (e) {
+      console.warn("Nota sumando al inventario maestro de consumibles:", e);
     }
 
     // 4. Recalcular métricas del lote completo
@@ -458,7 +466,7 @@ export class ConsumiblesChecklistRepository {
    * Actualiza la ubicación física de una partida en el lote de recepción
    * Registra si fue verificada (VERIFIED_OK) o modificada de lugar (RELOCATED)
    */
-  static async updateItemLocation(batchId, itemId, newLocation, isVerified = false, prevLocation = null) {
+  static async updateItemLocation(batchId, itemId, newLocation, isVerified = false, prevLocation = null, operator = 'Operador') {
     const batches = this.getLocalBatches();
     const batchIndex = batches.findIndex(b => String(b.id) === String(batchId));
     if (batchIndex === -1) return null;
@@ -474,6 +482,27 @@ export class ConsumiblesChecklistRepository {
     it.prevLocation = prevLoc;
     it.locationStatus = isVerified ? 'VERIFIED_OK' : 'RELOCATED';
     it.locationUpdatedAt = new Date().toISOString();
+
+    // Registrar en el historial de movimientos de ubicación del lote
+    const movement = {
+      timestamp: it.locationUpdatedAt,
+      timeStr: new Date().toLocaleString('es-MX', { hour12: true }),
+      code: it.code,
+      barcode: it.barcode || '',
+      description: it.description || '',
+      prevLocation: prevLoc,
+      newLocation: newLocation,
+      type: isVerified ? 'VERIFICACIÓN' : 'REUBICACIÓN',
+      operator: operator || 'Operador',
+      batchFolio: batch.folio || ''
+    };
+
+    batch.locationMovements = [movement, ...(batch.locationMovements || [])];
+
+    // Registrar permanentemente en ConsumiblesRepository para el historial maestro
+    try {
+      ConsumiblesRepository.recordLocationMovement(movement);
+    } catch (e) {}
 
     items[itIndex] = it;
     batch.items = items;
@@ -622,6 +651,74 @@ export class ConsumiblesChecklistRepository {
       { wch: 22 }
     ];
     XLSX.utils.book_append_sheet(wb, wsFaltantes, "FALTANTES_PROVEEDOR");
+
+    // 4. HOJA MOVIMIENTOS DE UBICACIONES (PASADO Y NUEVA UBICACIÓN)
+    const movementsList = [];
+    if (Array.isArray(batch.locationMovements) && batch.locationMovements.length > 0) {
+      batch.locationMovements.forEach((m, idx) => {
+        movementsList.push({
+          'NO.': idx + 1,
+          'FECHA Y HORA': m.timeStr || (m.timestamp ? new Date(m.timestamp).toLocaleString('es-MX', { hour12: true }) : '-'),
+          'CLAVE / CÓDIGO': m.code || '',
+          'CÓDIGO DE BARRAS': m.barcode || '',
+          'DESCRIPCIÓN': m.description || '',
+          'UBICACIÓN ANTERIOR (PASADA)': m.prevLocation || 'Sin Asignar',
+          'UBICACIÓN NUEVA (ACTUAL)': m.newLocation || 'Sin Asignar',
+          'TIPO DE MOVIMIENTO': m.type || 'REUBICACIÓN',
+          'OPERADOR RESPONSABLE': m.operator || 'Operador',
+          'FOLIO DE RECEPCIÓN': m.batchFolio || batch.folio || ''
+        });
+      });
+    }
+
+    // Agregar también partidas que hayan sido reubicadas o verificadas si no estaban en el array
+    batch.items.forEach(it => {
+      if (it.locationStatus === 'RELOCATED' && it.prevLocation && it.prevLocation !== it.location) {
+        const alreadyIn = movementsList.some(m => m['CLAVE / CÓDIGO'] === it.code && m['UBICACIÓN NUEVA (ACTUAL)'] === it.location);
+        if (!alreadyIn) {
+          movementsList.push({
+            'NO.': movementsList.length + 1,
+            'FECHA Y HORA': it.locationUpdatedAt ? new Date(it.locationUpdatedAt).toLocaleString('es-MX', { hour12: true }) : downloadTimeStr,
+            'CLAVE / CÓDIGO': it.code || '',
+            'CÓDIGO DE BARRAS': it.barcode || '',
+            'DESCRIPCIÓN': it.description || '',
+            'UBICACIÓN ANTERIOR (PASADA)': it.prevLocation,
+            'UBICACIÓN NUEVA (ACTUAL)': it.location,
+            'TIPO DE MOVIMIENTO': 'REUBICACIÓN',
+            'OPERADOR RESPONSABLE': 'Operador',
+            'FOLIO DE RECEPCIÓN': batch.folio || ''
+          });
+        }
+      }
+    });
+
+    const wsMovimientos = XLSX.utils.json_to_sheet(
+      movementsList.length > 0 ? movementsList : [{
+        'NO.': '',
+        'FECHA Y HORA': '',
+        'CLAVE / CÓDIGO': 'SIN CAMBIOS',
+        'CÓDIGO DE BARRAS': '',
+        'DESCRIPCIÓN': 'No se realizaron modificaciones de ubicación en este lote.',
+        'UBICACIÓN ANTERIOR (PASADA)': '',
+        'UBICACIÓN NUEVA (ACTUAL)': '',
+        'TIPO DE MOVIMIENTO': '',
+        'OPERADOR RESPONSABLE': '',
+        'FOLIO DE RECEPCIÓN': batch.folio || ''
+      }]
+    );
+    wsMovimientos['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 40 },
+      { wch: 28 },
+      { wch: 28 },
+      { wch: 22 },
+      { wch: 22 },
+      { wch: 20 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsMovimientos, "MOVIMIENTOS_UBICACIONES");
 
     const dateStr = new Date().toISOString().slice(0, 10);
     const cleanFolio = (batch.folio || 'LOTE').replace(/[^a-zA-Z0-9_-]/g, '_');

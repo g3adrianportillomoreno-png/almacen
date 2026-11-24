@@ -32,6 +32,9 @@ export default function ConsumiblesOperatorScanView({
   const [barcodeToLinkInput, setBarcodeToLinkInput] = useState('');
   const [scannedBarcodeForLinking, setScannedBarcodeForLinking] = useState('');
 
+  // Animación visual de confirmación de recepción
+  const [receptionSuccessAnimation, setReceptionSuccessAnimation] = useState(null);
+
   // Modificación de ubicación de partida en recepción
   const [editingItemLocation, setEditingItemLocation] = useState(null);
   const [locationEditInput, setLocationEditInput] = useState('');
@@ -279,6 +282,22 @@ export default function ConsumiblesOperatorScanView({
       showToast('success', `✓ +${qty} pzas recibidas (${boxCount} cajas × ${piecesPerBox} pzas) de ${capturingItem.code}. Faltan ${result.item.pendingQty} pzas. Código ligado ✓`);
     }
 
+    // Disparar animación visual prominente de confirmación
+    setReceptionSuccessAnimation({
+      code: capturingItem.code,
+      description: capturingItem.description,
+      qtyAdded: qty,
+      boxCount: boxCount,
+      piecesPerBox: piecesPerBox,
+      barcode: barcodeFinal,
+      isCompleted: result.isItemCompleted,
+      isSurplus: result.isSurplus,
+      pendingQty: result.item.pendingQty,
+      scannedQty: result.item.scannedQty,
+      expectedQty: result.item.expectedQty,
+      location: capturingItem.location || 'Sin Asignar'
+    });
+
     setActiveBatch(result.batch);
     setConsumiblesBatches(prev => prev.map(b => b.id === result.batch.id ? result.batch : b));
     setCapturingItem(null);
@@ -287,6 +306,16 @@ export default function ConsumiblesOperatorScanView({
 
     if (scanInputRef.current) scanInputRef.current.focus();
   };
+
+  // Auto-cerrar animación de recepción después de 2.2 segundos
+  useEffect(() => {
+    if (receptionSuccessAnimation) {
+      const timer = setTimeout(() => {
+        setReceptionSuccessAnimation(null);
+      }, 2300);
+      return () => clearTimeout(timer);
+    }
+  }, [receptionSuccessAnimation]);
 
   // Modificar la ubicación de una partida en el checklist (marca AMARILLA o VERDE)
   const handleSaveItemLocation = async (item, isVerifiedOk = false) => {
@@ -299,7 +328,8 @@ export default function ConsumiblesOperatorScanView({
       item.id,
       newLoc,
       isVerifiedOk,
-      item.location
+      item.location,
+      operatorName
     );
 
     if (res?.batch) {
@@ -1003,6 +1033,103 @@ export default function ConsumiblesOperatorScanView({
                   </button>
                 </div>
 
+              </div>
+            </div>
+          )}
+
+          {/* ===================================================================== */}
+          {/* ANIMACIÓN / OVERLAY VISUAL DE CONFIRMACIÓN DE RECEPCIÓN */}
+          {/* ===================================================================== */}
+          {receptionSuccessAnimation && (
+            <div 
+              onClick={() => setReceptionSuccessAnimation(null)}
+              className="fixed inset-0 z-60 bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200 cursor-pointer"
+            >
+              <div 
+                onClick={(e) => e.stopPropagation()}
+                className={`w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl text-center relative overflow-hidden border-2 animate-in zoom-in-95 duration-200 ${
+                  receptionSuccessAnimation.isSurplus 
+                    ? 'bg-gradient-to-b from-amber-950/90 to-slate-950 border-amber-500/60' 
+                    : receptionSuccessAnimation.isCompleted
+                    ? 'bg-gradient-to-b from-emerald-950/90 to-slate-950 border-emerald-400'
+                    : 'bg-gradient-to-b from-slate-900 to-slate-950 border-emerald-500/60'
+                }`}
+              >
+                {/* Círculo animado con Checkmark y rebote */}
+                <div className="relative mx-auto w-24 h-24 flex items-center justify-center">
+                  <div className={`absolute inset-0 rounded-full animate-ping opacity-25 ${
+                    receptionSuccessAnimation.isSurplus ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`} />
+                  <div className={`w-20 h-20 rounded-full flex items-center justify-center text-4xl font-black text-white shadow-2xl relative z-10 transition-transform ${
+                    receptionSuccessAnimation.isSurplus 
+                      ? 'bg-amber-600 shadow-amber-500/40' 
+                      : receptionSuccessAnimation.isCompleted
+                      ? 'bg-gradient-to-br from-emerald-400 to-emerald-600 shadow-emerald-500/50'
+                      : 'bg-emerald-600 shadow-emerald-500/40'
+                  }`}>
+                    {receptionSuccessAnimation.isSurplus ? '⚠️' : '✓'}
+                  </div>
+                </div>
+
+                {/* Cantidad recibida en grande */}
+                <h2 className="text-2xl sm:text-3xl font-black text-white mt-4 tracking-tight">
+                  +{receptionSuccessAnimation.qtyAdded} Piezas Recibidas
+                </h2>
+
+                {/* Fórmula visual de multiplicación de cajas */}
+                <div className="mt-2.5 inline-flex items-center gap-2 bg-white/10 border border-white/20 rounded-2xl py-1.5 px-4 font-mono font-bold text-emerald-300 text-xs">
+                  <span>📦 {receptionSuccessAnimation.boxCount} {receptionSuccessAnimation.boxCount === 1 ? 'caja' : 'cajas'}</span>
+                  <span>×</span>
+                  <span>{receptionSuccessAnimation.piecesPerBox} pzas/caja</span>
+                  <span>=</span>
+                  <span className="text-white font-black">{receptionSuccessAnimation.qtyAdded} pzas</span>
+                </div>
+
+                {/* Producto y clave */}
+                <div className="mt-4 bg-slate-900/80 border border-slate-800 rounded-2xl p-3 text-left">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-black px-2 py-0.5 rounded-md font-mono">
+                      {receptionSuccessAnimation.code}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      📍 {receptionSuccessAnimation.location}
+                    </span>
+                  </div>
+                  <p className="text-xs font-bold text-white mt-1.5 line-clamp-2">
+                    {receptionSuccessAnimation.description || receptionSuccessAnimation.code}
+                  </p>
+
+                  {/* Estado de avance de la partida */}
+                  <div className="mt-3 pt-2.5 border-t border-slate-800 flex items-center justify-between text-xs">
+                    <span className="text-slate-400">Progreso en Checklist:</span>
+                    <span className="font-mono font-bold text-white">
+                      {receptionSuccessAnimation.scannedQty} / {receptionSuccessAnimation.expectedQty} pzas
+                    </span>
+                  </div>
+                </div>
+
+                {/* Badges de confirmación del sistema */}
+                <div className="mt-4 flex flex-col gap-1.5 text-[11px] text-left">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold bg-emerald-950/40 border border-emerald-800/40 rounded-xl px-3 py-1.5">
+                    <span>✓</span>
+                    <span>Sumado automáticamente a existencias maestras</span>
+                  </div>
+                  {receptionSuccessAnimation.barcode && (
+                    <div className="flex items-center gap-2 text-blue-300 font-bold bg-blue-950/40 border border-blue-800/40 rounded-xl px-3 py-1.5 font-mono">
+                      <span>🏷️</span>
+                      <span>Código de barras ({receptionSuccessAnimation.barcode}) vinculado</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Botón de cerrar rápido */}
+                <button
+                  type="button"
+                  onClick={() => setReceptionSuccessAnimation(null)}
+                  className="mt-5 w-full py-2.5 px-4 bg-white/10 hover:bg-white/20 text-white font-bold rounded-xl text-xs transition cursor-pointer"
+                >
+                  Continuar Escaneando (Enter / Clic)
+                </button>
               </div>
             </div>
           )}

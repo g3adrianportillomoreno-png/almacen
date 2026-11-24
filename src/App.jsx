@@ -400,10 +400,14 @@ function App() {
           return {
             ...p,
             status: 'BAJA',
+            isBaja: true,
             bajaAt: dateVal,
+            departure_date: dateVal,
             bajaReason: reason,
             requestedBy: requestedBy || p.requestedBy || null,
-            dispatchedBy: dispatchedBy || p.dispatchedBy || null,
+            requested_by: requestedBy || p.requested_by || p.requestedBy || null,
+            dispatchedBy: dispatchedBy || p.dispatchedBy || 'Operador',
+            dispatched_by: dispatchedBy || p.dispatched_by || p.dispatchedBy || 'Operador',
             isScanned: true
           };
         }
