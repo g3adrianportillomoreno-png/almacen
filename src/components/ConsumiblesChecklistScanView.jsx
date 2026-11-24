@@ -209,11 +209,29 @@ export default function ConsumiblesChecklistScanView({
     }).slice(0, 6);
   }, [scanInput, batch?.items]);
 
-  if (loading || !batch) {
+  if (loading) {
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 bg-slate-50">
         <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-3"></div>
         <p className="text-sm font-bold text-slate-700">Cargando checklist de consumibles...</p>
+      </div>
+    );
+  }
+
+  if (!batch) {
+    return (
+      <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 bg-slate-50 text-center gap-3">
+        <div className="text-4xl">📦</div>
+        <p className="text-base font-bold text-slate-800">No se encontró el checklist de consumibles solicitado.</p>
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-xl transition cursor-pointer"
+          >
+            &larr; Volver a Recepciones
+          </button>
+        )}
       </div>
     );
   }

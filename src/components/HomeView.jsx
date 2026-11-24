@@ -259,6 +259,8 @@ export default function HomeView({
         if (extracted && extracted.isConsumables) {
           setPendingUploadData({
             isConsumables: true,
+            series: [],
+            files: [{ name: file.name, count: extracted.totalUnits || 0 }],
             fileName: file.name,
             cleanName: extracted.supplierName ? `${extracted.supplierName} (${extracted.invoiceNumber || 'Factura'})` : file.name,
             supplierName: extracted.supplierName,
@@ -1321,7 +1323,9 @@ export default function HomeView({
                       </div>
                       <div className="text-right shrink-0">
                         <span className="font-black text-slate-800 font-mono">{it.expectedQty} pzas</span>
-                        <span className="text-[10px] text-emerald-600 font-bold block">📍 {it.location?.label || 'Sin ubicación'}</span>
+                        <span className="text-[10px] text-emerald-600 font-bold block">
+                          📍 {typeof it.location === 'object' ? (it.location?.label || 'Sin ubicación') : (it.location || 'Sin ubicación')}
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -1340,7 +1344,7 @@ export default function HomeView({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     <span className="text-xs font-semibold">
-                      Total detectado: <strong className="text-sm font-black text-emerald-700">{pendingUploadData.series.length} impresoras</strong> ({pendingUploadData.files?.length || 1} doc{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
+                      Total detectado: <strong className="text-sm font-black text-emerald-700">{pendingUploadData.series?.length || 0} impresoras</strong> ({pendingUploadData.files?.length || 1} doc{(pendingUploadData.files?.length || 1) > 1 ? 's' : ''})
                     </span>
                   </div>
 
@@ -1615,7 +1619,7 @@ export default function HomeView({
                         className="mt-0.5"
                       />
                       <span>
-                        <strong>Reemplazar lista base con este documento:</strong> Usa las {pendingUploadData.series.length} series de este PDF pero conserva todo lo ya escaneado y cruza los errores.
+                        <strong>Reemplazar lista base con este documento:</strong> Usa las {pendingUploadData.series?.length || 0} series de este PDF pero conserva todo lo ya escaneado y cruza los errores.
                       </span>
                     </label>
                   </div>
@@ -1641,22 +1645,26 @@ export default function HomeView({
               <button
                 type="button"
                 onClick={() => setPendingUploadData(null)}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition"
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium text-xs transition cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
                 disabled={isProcessingFile}
-                className={`flex-1 py-2.5 px-4 rounded-xl text-white font-bold text-xs transition shadow-xs ${
-                  uploadSaveMode === 'MERGE_EXISTING'
+                className={`flex-1 py-2.5 px-4 rounded-xl text-white font-bold text-xs transition shadow-xs cursor-pointer ${
+                  pendingUploadData.isConsumables
+                    ? 'bg-indigo-600 hover:bg-indigo-700'
+                    : uploadSaveMode === 'MERGE_EXISTING'
                     ? 'bg-indigo-600 hover:bg-indigo-700'
                     : 'bg-red-600 hover:bg-red-700'
                 }`}
               >
-                {uploadSaveMode === 'MERGE_EXISTING'
-                  ? `🔗 Fusionar con Checklist (${pendingUploadData.series.length})`
-                  : `Guardar Checklist (${pendingUploadData.series.length})`}
+                {pendingUploadData.isConsumables
+                  ? `Guardar y Comenzar Escaneo (${pendingUploadData.totalUnits || 0} pzas)`
+                  : uploadSaveMode === 'MERGE_EXISTING'
+                  ? `🔗 Fusionar con Checklist (${pendingUploadData.series?.length || 0})`
+                  : `Guardar Checklist (${pendingUploadData.series?.length || 0})`}
               </button>
             </div>
           </form>
