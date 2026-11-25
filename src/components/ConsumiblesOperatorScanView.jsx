@@ -32,6 +32,9 @@ export default function ConsumiblesOperatorScanView({
   const [barcodeToLinkInput, setBarcodeToLinkInput] = useState('');
   const [scannedBarcodeForLinking, setScannedBarcodeForLinking] = useState('');
 
+  // Alerta de seguridad ante excedente de factura (Idea 2)
+  const [surplusWarningData, setSurplusWarningData] = useState(null);
+
   // Animación visual de confirmación de recepción
   const [receptionSuccessAnimation, setReceptionSuccessAnimation] = useState(null);
 
@@ -117,10 +120,10 @@ export default function ConsumiblesOperatorScanView({
 
   // 3. Autoenfoque constante en el input lector
   useEffect(() => {
-    if (!isCameraActive && !capturingItem && !editingItemLocation && !unlinkedCode && scanInputRef.current) {
+    if (!isCameraActive && !capturingItem && !editingItemLocation && !unlinkedCode && !surplusWarningData && scanInputRef.current) {
       scanInputRef.current.focus();
     }
-  }, [isCameraActive, capturingItem, editingItemLocation, unlinkedCode, activeMode, selectedBatchId]);
+  }, [isCameraActive, capturingItem, editingItemLocation, unlinkedCode, surplusWarningData, activeMode, selectedBatchId]);
 
   const showToast = (type, text) => {
     setNotification({ type, text });
@@ -235,7 +238,7 @@ export default function ConsumiblesOperatorScanView({
   };
 
   // Confirmar y aplicar la cantidad recibida
-  const handleConfirmReceptionQuantity = async () => {
+  const handleConfirmReceptionQuantity = async (forceConfirm = false) => {
     if (!capturingItem || !activeBatch) return;
 
     const qty = parseInt(directTotalQty, 10);
@@ -243,6 +246,31 @@ export default function ConsumiblesOperatorScanView({
       alert("Por favor ingresa una cantidad numérica válida mayor a 0.");
       return;
     }
+
+    const currentScanned = capturingItem.scannedQty || 0;
+    const expected = capturingItem.expectedQty || 0;
+    const newTotal = currentScanned + qty;
+
+    // ALERTA DE SEGURIDAD (IDEA 2): Si la cantidad supera lo facturado y no ha sido confirmada expresamente
+    if (!forceConfirm && expected > 0 && newTotal > expected) {
+      const surplus = newTotal - expected;
+      soundEffects.playScanDuplicate();
+      setSurplusWarningData({
+        item: capturingItem,
+        qtyToIngest: qty,
+        boxCount: boxCount,
+        piecesPerBox: piecesPerBox,
+        currentScanned: currentScanned,
+        expected: expected,
+        newTotal: newTotal,
+        surplus: surplus,
+        barcodeFinal: (barcodeToLinkInput || scannedBarcodeForLinking || capturingItem.barcode || '').trim()
+      });
+      return;
+    }
+
+    // Si procedió o fue forzado por el operador, cerramos el modal de advertencia de excedente
+    setSurplusWarningData(null);
 
     const barcodeFinal = (barcodeToLinkInput || scannedBarcodeForLinking || capturingItem.barcode || '').trim();
 
@@ -1059,11 +1087,127 @@ export default function ConsumiblesOperatorScanView({
                   </button>
                   <button
                     type="button"
-                    onClick={handleConfirmReceptionQuantity}
+                    onClick={() => handleConfirmReceptionQuantity(false)}
                     className="flex-2 py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs transition shadow-lg flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                   >
                     <span>✓</span>
                     <span>Confirmar Recepción (+{directTotalQty} pzas)</span>
+                  </button>
+                </div>
+
+              </div>
+            </div>
+          )}
+
+          {/* ===================================================================== */}
+          {/* MODAL DE ALERTA DE EXCEDENTE DE FACTURA (IDEA 2) */}
+          {/* ===================================================================== */}
+          {surplusWarningData && (
+            <div className="fixed inset-0 z-60 bg-black/85 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 animate-in fade-in">
+              <div className="bg-gradient-to-b from-slate-900 via-slate-900 to-amber-950/40 border-2 border-amber-500 w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl flex flex-col gap-4 text-white animate-in zoom-in-95">
+                
+                {/* ENCABEZADO DE ADVERTENCIA */}
+                <div className="flex items-start gap-3 border-b border-amber-500/30 pb-3">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-2xl shrink-0">
+                    ⚠️
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-black px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                      Control de Recepción de Proveedores
+                    </span>
+                    <h3 className="text-lg font-black text-amber-400 mt-1 leading-snug">
+                      Alerta de Excedente: Supera la Factura
+                    </h3>
+                    <p className="text-xs text-slate-300 mt-0.5">
+                      La cantidad ingresada excede el total estipulado en la orden/factura.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSurplusWarningData(null)}
+                    className="text-slate-400 hover:text-white font-bold text-lg p-1"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                {/* DETALLE DEL PRODUCTO */}
+                <div className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-black text-amber-300 text-xs bg-slate-900 px-2 py-0.5 rounded-md border border-slate-700">
+                      {surplusWarningData.item.code}
+                    </span>
+                    <span className="text-[11px] text-emerald-400 font-bold">
+                      📍 {surplusWarningData.item.location || 'Sin Asignar'}
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-bold text-white mt-1.5 leading-snug">
+                    {surplusWarningData.item.description || surplusWarningData.item.code}
+                  </h4>
+                </div>
+
+                {/* COMPARATIVA DE CANTIDADES */}
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">📄 Facturado / Esperado</span>
+                    <span className="font-mono font-black text-lg text-white mt-0.5 block">
+                      {surplusWarningData.expected} <span className="text-xs font-normal text-slate-400">pzas</span>
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">📦 Ya Recibido Previo</span>
+                    <span className="font-mono font-black text-lg text-slate-300 mt-0.5 block">
+                      {surplusWarningData.currentScanned} <span className="text-xs font-normal text-slate-400">pzas</span>
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950/80 p-3 rounded-2xl border border-amber-500/30">
+                    <span className="text-[10px] text-amber-400 uppercase font-bold block">➕ Ingresando Ahora</span>
+                    <span className="font-mono font-black text-lg text-amber-300 mt-0.5 block">
+                      +{surplusWarningData.qtyToIngest} <span className="text-xs font-normal text-amber-400/80">pzas</span>
+                    </span>
+                    <span className="text-[10px] text-slate-400 block font-mono">
+                      ({surplusWarningData.boxCount} cajas × {surplusWarningData.piecesPerBox} pzas)
+                    </span>
+                  </div>
+
+                  <div className="bg-slate-950/80 p-3 rounded-2xl border border-purple-500/30">
+                    <span className="text-[10px] text-purple-300 uppercase font-bold block">📊 Nuevo Total</span>
+                    <span className="font-mono font-black text-lg text-purple-200 mt-0.5 block">
+                      {surplusWarningData.newTotal} <span className="text-xs font-normal text-purple-400/80">pzas</span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* BANNER DESTACADO DE EXCEDENTE */}
+                <div className="bg-amber-500/15 border-2 border-amber-500/50 rounded-2xl p-3 text-center">
+                  <div className="font-mono font-black text-base text-amber-300 flex items-center justify-center gap-2">
+                    <span>🚨</span>
+                    <span>EXCEDENTE DETECTADO: +{surplusWarningData.surplus} PIEZAS DE MÁS</span>
+                  </div>
+                  <p className="text-[11px] text-slate-300 mt-1">
+                    ¿El proveedor envió producto de más o hubo un error al capturar cajas/piezas?
+                  </p>
+                </div>
+
+                {/* BOTONES DE DECISIÓN */}
+                <div className="flex gap-2.5 pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setSurplusWarningData(null)}
+                    className="flex-1 py-3 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-2xl text-xs transition cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <span>✏️</span>
+                    <span>Corregir Cantidad</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmReceptionQuantity(true)}
+                    className="flex-1 py-3 px-3 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-white font-black rounded-2xl text-xs transition shadow-lg shadow-amber-600/30 flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
+                  >
+                    <span>✓</span>
+                    <span>Confirmar Excedente (+{surplusWarningData.surplus} pzas)</span>
                   </button>
                 </div>
 

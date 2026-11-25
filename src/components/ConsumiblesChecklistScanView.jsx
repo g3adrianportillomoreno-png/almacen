@@ -111,6 +111,14 @@ export default function ConsumiblesChecklistScanView({
       return;
     }
 
+    if (item.expectedQty > 0 && newQty > item.expectedQty) {
+      const surplus = newQty - item.expectedQty;
+      const ok = window.confirm(
+        `⚠️ ALERTA DE EXCEDENTE:\n\nLa cantidad ingresada (${newQty} pzas) supera las ${item.expectedQty} pzas esperadas en la factura (+${surplus} pzas excedentes).\n\n¿Confirmas el ingreso de este excedente de proveedor?`
+      );
+      if (!ok) return;
+    }
+
     const updatedBatch = await ConsumiblesChecklistRepository.adjustItemQuantity(batch.id, item.id, newQty, 'Operador');
     if (updatedBatch) {
       setBatch(updatedBatch);
