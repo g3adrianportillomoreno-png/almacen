@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import UniversalSearchBar from './UniversalSearchBar.jsx';
+import PWAInstallButton from './PWAInstallButton.jsx';
 import { isSoundMuted, toggleSoundMute } from '../utils/soundEffects.js';
 
 export default function Header({ 
@@ -55,6 +56,9 @@ export default function Header({
             <span>{soundMuted ? '🔇' : '🔊'}</span>
             <span className="hidden lg:inline text-[11px] font-semibold">{soundMuted ? 'Mudo' : 'Audio'}</span>
           </button>
+
+          {/* Botón de Descarga / Instalación PWA (Desaparece si ya está instalada en pantalla completa) */}
+          <PWAInstallButton />
           {activeBatchId ? (
             <div className="flex items-center gap-2">
               <span className="text-xs bg-red-800 text-white px-3 py-1.5 rounded-full font-bold flex items-center gap-1.5 animate-pulse">

@@ -5,6 +5,7 @@ import { ConsumiblesRepository } from '../services/ConsumiblesRepository.js';
 import { ConsumiblesChecklistRepository } from '../services/ConsumiblesChecklistRepository.js';
 import { soundEffects } from '../utils/soundEffects.js';
 import CameraScanner from './CameraScanner.jsx';
+import PWAInstallButton from './PWAInstallButton.jsx';
 
 export default function ConsumiblesOperatorScanView({
   initialBatchId = null,
@@ -540,6 +541,9 @@ export default function ConsumiblesOperatorScanView({
           <button type="button" onClick={() => setNotification(null)} className="text-white/60 hover:text-white">✕</button>
         </div>
       )}
+
+      {/* BANNER PARA INSTALAR APP EN EL CELULAR Y OCULTAR NAVEGADOR (Desaparece si ya es standalone) */}
+      <PWAInstallButton variant="banner" />
 
       {/* SELECTOR DE MODO SUPERIOR (RECEPCIÓN vs CATÁLOGO) */}
       <div className="bg-slate-900/90 p-2 rounded-2xl border border-slate-800 flex items-center justify-between gap-2 shadow-sm">

@@ -48,3 +48,12 @@ createRoot(document.getElementById('root')).render(
     <App />
   </StrictMode>,
 )
+
+// Registro de Service Worker para PWA (permite descarga e instalación en celular y pantalla completa)
+if ('serviceWorker' in navigator && !window.location.hostname.includes('localhost.disabled')) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.warn('Registro de Service Worker no disponible en este entorno:', err);
+    });
+  });
+}
