@@ -517,8 +517,23 @@ export class ConsumiblesChecklistRepository {
    * Exporta a archivo Excel oficial el reporte completo de recepción de consumibles
    */
   static exportChecklistToExcel(batch) {
-    if (!batch || !batch.items || batch.items.length === 0) {
+    if (!batch) {
       alert("No hay partidas para exportar.");
+      return;
+    }
+
+    // Refrescar con la versión más reciente del lote guardada en almacenamiento
+    const localBatches = this.getLocalBatches();
+    const freshBatch = (batch.id ? localBatches.find(b => String(b.id) === String(batch.id)) : null) || batch;
+    const finalBatch = {
+      ...freshBatch,
+      ...batch,
+      items: (freshBatch.items && freshBatch.items.length > 0) ? freshBatch.items : (batch.items || []),
+      locationMovements: (freshBatch.locationMovements && freshBatch.locationMovements.length > 0) ? freshBatch.locationMovements : (batch.locationMovements || [])
+    };
+
+    if (!finalBatch.items || finalBatch.items.length === 0) {
+      alert("No hay partidas para exportar en este lote.");
       return;
     }
 
@@ -528,24 +543,24 @@ export class ConsumiblesChecklistRepository {
     // 1. HOJA RESUMEN
     const resumenRows = [
       { 'CAMPO': 'REPORTE DE RECEPCIÓN DE CONSUMIBLES (CHECKLIST)', 'VALOR': '' },
-      { 'CAMPO': 'FOLIO DEL LOTE', 'VALOR': batch.folio },
-      { 'CAMPO': 'FACTURA / INVOICE', 'VALOR': batch.invoiceNumber || 'Sin Factura' },
-      { 'CAMPO': 'PROVEEDOR', 'VALOR': batch.supplierName || 'Zhejiang Besda / General' },
-      { 'CAMPO': 'FECHA DE DOCUMENTO', 'VALOR': batch.invoiceDate || 'N/A' },
+      { 'CAMPO': 'FOLIO DEL LOTE', 'VALOR': finalBatch.folio },
+      { 'CAMPO': 'FACTURA / INVOICE', 'VALOR': finalBatch.invoiceNumber || 'Sin Factura' },
+      { 'CAMPO': 'PROVEEDOR', 'VALOR': finalBatch.supplierName || 'Zhejiang Besda / General' },
+      { 'CAMPO': 'FECHA DE DOCUMENTO', 'VALOR': finalBatch.invoiceDate || 'N/A' },
       { 'CAMPO': 'FECHA Y HORA DE DESCARGA', 'VALOR': downloadTimeStr },
       { 'CAMPO': '', 'VALOR': '' },
-      { 'CAMPO': 'TOTAL DE PARTIDAS (SKUs)', 'VALOR': batch.totalItems || batch.items.length },
-      { 'CAMPO': 'PARTIDAS COMPLETADAS AL 100%', 'VALOR': batch.completedItemsCount || 0 },
-      { 'CAMPO': 'PARTIDAS CON FALTANTES', 'VALOR': batch.items.filter(it => (it.pendingQty || 0) > 0).length },
-      { 'CAMPO': 'PARTIDAS CON EXCEDENTES', 'VALOR': batch.items.filter(it => (it.scannedQty || 0) > it.expectedQty).length },
-      { 'CAMPO': 'UBICACIONES MODIFICADAS / REUBICADAS (AMARILLO)', 'VALOR': batch.items.filter(it => it.locationStatus === 'RELOCATED').length },
-      { 'CAMPO': 'UBICACIONES VERIFICADAS CORRECTAS (VERDE)', 'VALOR': batch.items.filter(it => it.locationStatus === 'VERIFIED_OK').length },
+      { 'CAMPO': 'TOTAL DE PARTIDAS (SKUs)', 'VALOR': finalBatch.totalItems || finalBatch.items.length },
+      { 'CAMPO': 'PARTIDAS COMPLETADAS AL 100%', 'VALOR': finalBatch.completedItemsCount || 0 },
+      { 'CAMPO': 'PARTIDAS CON FALTANTES', 'VALOR': finalBatch.items.filter(it => (it.pendingQty || 0) > 0).length },
+      { 'CAMPO': 'PARTIDAS CON EXCEDENTES', 'VALOR': finalBatch.items.filter(it => (it.scannedQty || 0) > it.expectedQty).length },
+      { 'CAMPO': 'UBICACIONES MODIFICADAS / REUBICADAS (AMARILLO)', 'VALOR': finalBatch.items.filter(it => it.locationStatus === 'RELOCATED').length },
+      { 'CAMPO': 'UBICACIONES VERIFICADAS CORRECTAS (VERDE)', 'VALOR': finalBatch.items.filter(it => it.locationStatus === 'VERIFIED_OK').length },
       { 'CAMPO': '', 'VALOR': '' },
-      { 'CAMPO': 'TOTAL PIEZAS ESPERADAS / FACTURADAS', 'VALOR': batch.totalExpectedUnits || 0 },
-      { 'CAMPO': 'TOTAL PIEZAS FÍSICAMENTE RECIBIDAS', 'VALOR': batch.totalScannedUnits || 0 },
-      { 'CAMPO': 'DIFERENCIA NETA (FALTANTES)', 'VALOR': batch.totalPendingUnits || 0 },
-      { 'CAMPO': 'ESTADO DEL LOTE', 'VALOR': (batch.status === 'completed' ? 'COMPLETO' : 'INCOMPLETO / EN PROCESO') },
-      { 'CAMPO': 'STOCK INGRESADO AL ALMACÉN', 'VALOR': batch.stockCommittedAt ? `SÍ (${new Date(batch.stockCommittedAt).toLocaleString('es-MX')})` : 'NO' }
+      { 'CAMPO': 'TOTAL PIEZAS ESPERADAS / FACTURADAS', 'VALOR': finalBatch.totalExpectedUnits || 0 },
+      { 'CAMPO': 'TOTAL PIEZAS FÍSICAMENTE RECIBIDAS', 'VALOR': finalBatch.totalScannedUnits || 0 },
+      { 'CAMPO': 'DIFERENCIA NETA (FALTANTES)', 'VALOR': finalBatch.totalPendingUnits || 0 },
+      { 'CAMPO': 'ESTADO DEL LOTE', 'VALOR': (finalBatch.status === 'completed' ? 'COMPLETO' : 'INCOMPLETO / EN PROCESO') },
+      { 'CAMPO': 'STOCK INGRESADO AL ALMACÉN', 'VALOR': finalBatch.stockCommittedAt ? `SÍ (${new Date(finalBatch.stockCommittedAt).toLocaleString('es-MX')})` : 'NO' }
     ];
 
     const wsResumen = XLSX.utils.json_to_sheet(resumenRows);
@@ -553,7 +568,7 @@ export class ConsumiblesChecklistRepository {
     XLSX.utils.book_append_sheet(wb, wsResumen, "RESUMEN");
 
     // 2. HOJA DETALLE COMPLETO
-    const detailRows = batch.items.map((it, idx) => {
+    const detailRows = finalBatch.items.map((it, idx) => {
       const exp = it.expectedQty || 0;
       const rcv = it.scannedQty || 0;
       const diff = rcv - exp;
@@ -566,9 +581,9 @@ export class ConsumiblesChecklistRepository {
 
       let auditStatus = 'SIN AUDITAR';
       if (it.locationStatus === 'RELOCATED') {
-        auditStatus = '⚠️ CAMBIO DE LUGAR (MODIFICADA)';
+        auditStatus = '⚠️ CAMBIO DE LUGAR (MODIFICADA - AMARILLO)';
       } else if (it.locationStatus === 'VERIFIED_OK') {
-        auditStatus = '✓ TODO BIEN (VERIFICADA)';
+        auditStatus = '✓ TODO BIEN (VERIFICADA - VERDE)';
       }
 
       return {
@@ -576,15 +591,16 @@ export class ConsumiblesChecklistRepository {
         'CLAVE / CÓDIGO': it.code || '',
         'CÓDIGO DE BARRAS (BARCODE)': it.barcode || '',
         'DESCRIPCIÓN': it.description || '',
-        'COMPATIBILIDAD (MODELOS)': it.forUseIn || '',
-        'UBICACIÓN FÍSICA ALMACÉN': it.location || 'Sin Asignar',
-        'AUDITORÍA DE UBICACIÓN': auditStatus,
-        'UBICACIÓN ANTERIOR (SI CAMBIÓ)': it.locationStatus === 'RELOCATED' ? (it.prevLocation || '') : '',
+        'ESTADO DE AUDITORÍA UBICACIÓN': auditStatus,
+        'UBICACIÓN ANTERIOR (PASADA)': it.prevLocation || (it.locationStatus === 'RELOCATED' ? 'Reubicada' : '-'),
+        'UBICACIÓN ACTUAL (NUEVA)': it.location || 'Sin Asignar',
+        'FECHA DE MOVIMIENTO / VERIFICACIÓN': it.locationUpdatedAt ? new Date(it.locationUpdatedAt).toLocaleString('es-MX', { hour12: true }) : '-',
         'CANTIDAD ESPERADA': exp,
         'CANTIDAD RECIBIDA': rcv,
         'FALTANTES': it.pendingQty || 0,
         'DIFERENCIA': diff,
         'ESTATUS': estatusStr,
+        'COMPATIBILIDAD (MODELOS)': it.forUseIn || '',
         'PRECIO UNITARIO ($)': it.unitPrice || 0,
         'TOTAL FACTURADO ($)': Math.round((exp * (it.unitPrice || 0)) * 100) / 100,
         'ÚLTIMA LECTURA': it.lastScannedAt ? new Date(it.lastScannedAt).toLocaleString('es-MX', { hour12: true }) : '-'
@@ -595,17 +611,18 @@ export class ConsumiblesChecklistRepository {
     wsDetail['!cols'] = [
       { wch: 6 },
       { wch: 18 },
-      { wch: 22 },
+      { wch: 24 },
       { wch: 40 },
-      { wch: 35 },
-      { wch: 28 },
-      { wch: 32 },
-      { wch: 28 },
+      { wch: 42 }, // ESTADO DE AUDITORÍA UBICACIÓN
+      { wch: 30 }, // UBICACIÓN ANTERIOR
+      { wch: 30 }, // UBICACIÓN ACTUAL
+      { wch: 25 }, // FECHA DE MOVIMIENTO
       { wch: 18 },
       { wch: 18 },
       { wch: 14 },
       { wch: 14 },
       { wch: 22 },
+      { wch: 35 },
       { wch: 18 },
       { wch: 20 },
       { wch: 22 }
@@ -613,7 +630,7 @@ export class ConsumiblesChecklistRepository {
     XLSX.utils.book_append_sheet(wb, wsDetail, "DETALLE_RECEPCION");
 
     // 3. HOJA FALTANTES PROVEEDOR (Para reclamar faltantes)
-    const faltantesItems = batch.items.filter(it => (it.pendingQty || 0) > 0);
+    const faltantesItems = finalBatch.items.filter(it => (it.pendingQty || 0) > 0);
     const faltantesRows = faltantesItems.map((it, idx) => ({
       'NO.': idx + 1,
       'CLAVE / CÓDIGO': it.code || '',
@@ -654,26 +671,26 @@ export class ConsumiblesChecklistRepository {
 
     // 4. HOJA MOVIMIENTOS DE UBICACIONES (PASADO Y NUEVA UBICACIÓN)
     const movementsList = [];
-    if (Array.isArray(batch.locationMovements) && batch.locationMovements.length > 0) {
-      batch.locationMovements.forEach((m, idx) => {
+    if (Array.isArray(finalBatch.locationMovements) && finalBatch.locationMovements.length > 0) {
+      finalBatch.locationMovements.forEach((m, idx) => {
         movementsList.push({
           'NO.': idx + 1,
           'FECHA Y HORA': m.timeStr || (m.timestamp ? new Date(m.timestamp).toLocaleString('es-MX', { hour12: true }) : '-'),
-          'CLAVE / CÓDIGO': m.code || '',
+          'CLAVE / CÓDIGO': m.code || m.clave || '',
           'CÓDIGO DE BARRAS': m.barcode || '',
           'DESCRIPCIÓN': m.description || '',
           'UBICACIÓN ANTERIOR (PASADA)': m.prevLocation || 'Sin Asignar',
           'UBICACIÓN NUEVA (ACTUAL)': m.newLocation || 'Sin Asignar',
-          'TIPO DE MOVIMIENTO': m.type || 'REUBICACIÓN',
+          'TIPO DE MOVIMIENTO': m.type || m.movementType || 'REUBICACIÓN',
           'OPERADOR RESPONSABLE': m.operator || 'Operador',
-          'FOLIO DE RECEPCIÓN': m.batchFolio || batch.folio || ''
+          'FOLIO DE RECEPCIÓN': m.batchFolio || finalBatch.folio || ''
         });
       });
     }
 
-    // Agregar también partidas que hayan sido reubicadas o verificadas si no estaban en el array
-    batch.items.forEach(it => {
-      if (it.locationStatus === 'RELOCATED' && it.prevLocation && it.prevLocation !== it.location) {
+    // Agregar partidas del lote que hayan sido reubicadas
+    finalBatch.items.forEach(it => {
+      if (it.locationStatus === 'RELOCATED') {
         const alreadyIn = movementsList.some(m => m['CLAVE / CÓDIGO'] === it.code && m['UBICACIÓN NUEVA (ACTUAL)'] === it.location);
         if (!alreadyIn) {
           movementsList.push({
@@ -682,28 +699,52 @@ export class ConsumiblesChecklistRepository {
             'CLAVE / CÓDIGO': it.code || '',
             'CÓDIGO DE BARRAS': it.barcode || '',
             'DESCRIPCIÓN': it.description || '',
-            'UBICACIÓN ANTERIOR (PASADA)': it.prevLocation,
-            'UBICACIÓN NUEVA (ACTUAL)': it.location,
-            'TIPO DE MOVIMIENTO': 'REUBICACIÓN',
+            'UBICACIÓN ANTERIOR (PASADA)': it.prevLocation || 'Sin Asignar',
+            'UBICACIÓN NUEVA (ACTUAL)': it.location || 'Sin Asignar',
+            'TIPO DE MOVIMIENTO': 'REUBICACIÓN (AMARILLO)',
             'OPERADOR RESPONSABLE': 'Operador',
-            'FOLIO DE RECEPCIÓN': batch.folio || ''
+            'FOLIO DE RECEPCIÓN': finalBatch.folio || ''
           });
         }
       }
     });
 
+    // Enriquecer adicionalmente con los movimientos globales registrados en el almacén
+    try {
+      const globalMovements = ConsumiblesRepository.getLocationMovements();
+      if (Array.isArray(globalMovements)) {
+        globalMovements.forEach(gm => {
+          const already = movementsList.some(m => m['CLAVE / CÓDIGO'] === (gm.clave || gm.code) && m['UBICACIÓN NUEVA (ACTUAL)'] === gm.newLocation);
+          if (!already) {
+            movementsList.push({
+              'NO.': movementsList.length + 1,
+              'FECHA Y HORA': gm.dateFormatted || (gm.timestamp ? new Date(gm.timestamp).toLocaleString('es-MX', { hour12: true }) : downloadTimeStr),
+              'CLAVE / CÓDIGO': gm.clave || gm.code || '',
+              'CÓDIGO DE BARRAS': gm.barcode || '',
+              'DESCRIPCIÓN': gm.description || '',
+              'UBICACIÓN ANTERIOR (PASADA)': gm.prevLocation || 'Sin Asignar',
+              'UBICACIÓN NUEVA (ACTUAL)': gm.newLocation || 'Sin Asignar',
+              'TIPO DE MOVIMIENTO': gm.movementType || 'REUBICACIÓN',
+              'OPERADOR RESPONSABLE': gm.operator || 'Operador',
+              'FOLIO DE RECEPCIÓN': gm.batchFolio || finalBatch.folio || ''
+            });
+          }
+        });
+      }
+    } catch {}
+
     const wsMovimientos = XLSX.utils.json_to_sheet(
       movementsList.length > 0 ? movementsList : [{
         'NO.': '',
-        'FECHA Y HORA': '',
-        'CLAVE / CÓDIGO': 'SIN CAMBIOS',
+        'FECHA Y HORA': downloadTimeStr,
+        'CLAVE / CÓDIGO': 'SIN CAMBIOS REGISTRADOS',
         'CÓDIGO DE BARRAS': '',
         'DESCRIPCIÓN': 'No se realizaron modificaciones de ubicación en este lote.',
         'UBICACIÓN ANTERIOR (PASADA)': '',
         'UBICACIÓN NUEVA (ACTUAL)': '',
         'TIPO DE MOVIMIENTO': '',
         'OPERADOR RESPONSABLE': '',
-        'FOLIO DE RECEPCIÓN': batch.folio || ''
+        'FOLIO DE RECEPCIÓN': finalBatch.folio || ''
       }]
     );
     wsMovimientos['!cols'] = [
@@ -714,14 +755,41 @@ export class ConsumiblesChecklistRepository {
       { wch: 40 },
       { wch: 28 },
       { wch: 28 },
-      { wch: 22 },
+      { wch: 26 },
       { wch: 22 },
       { wch: 20 }
     ];
     XLSX.utils.book_append_sheet(wb, wsMovimientos, "MOVIMIENTOS_UBICACIONES");
 
+    // 5. HOJA EXCLUSIVA DE CONSUMIBLES MODIFICADOS / REUBICADOS (AMARILLO)
+    const modifiedBatchItems = finalBatch.items.filter(it => it.locationStatus === 'RELOCATED');
+    if (modifiedBatchItems.length > 0) {
+      const modRows = modifiedBatchItems.map((it, idx) => ({
+        'NO.': idx + 1,
+        'CLAVE / CÓDIGO': it.code || '',
+        'DESCRIPCIÓN': it.description || '',
+        'ESTADO': '⚠️ REUBICADA / CAMBIO DE LUGAR',
+        'UBICACIÓN ANTERIOR (PASADA)': it.prevLocation || 'Sin Asignar',
+        'UBICACIÓN NUEVA (ACTUAL)': it.location || 'Sin Asignar',
+        'FECHA DE CAMBIO': it.locationUpdatedAt ? new Date(it.locationUpdatedAt).toLocaleString('es-MX', { hour12: true }) : '-',
+        'CANTIDAD RECIBIDA': it.scannedQty || 0
+      }));
+      const wsMod = XLSX.utils.json_to_sheet(modRows);
+      wsMod['!cols'] = [
+        { wch: 6 },
+        { wch: 18 },
+        { wch: 40 },
+        { wch: 35 },
+        { wch: 30 },
+        { wch: 30 },
+        { wch: 24 },
+        { wch: 18 }
+      ];
+      XLSX.utils.book_append_sheet(wb, wsMod, "CAMBIOS_AMARILLO");
+    }
+
     const dateStr = new Date().toISOString().slice(0, 10);
-    const cleanFolio = (batch.folio || 'LOTE').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const cleanFolio = (finalBatch.folio || 'LOTE').replace(/[^a-zA-Z0-9_-]/g, '_');
     XLSX.writeFile(wb, `Checklist_Consumibles_${cleanFolio}_${dateStr}.xlsx`);
   }
 }

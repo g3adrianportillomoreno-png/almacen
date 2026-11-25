@@ -323,6 +323,8 @@ export class ConsumiblesRepository {
     const list = await this.getAllConsumibles();
     let updatedItem = null;
     let wasChanged = false;
+    let capturedPrevLoc = null;
+    let capturedNewLoc = null;
 
     const updated = list.map(item => {
       const isMatch = String(item.id) === String(idOrClave) || 
@@ -342,6 +344,9 @@ export class ConsumiblesRepository {
         anaquel: (newLocation.anaquel !== undefined ? newLocation.anaquel : item.anaquel) || '',
         espacio: (newLocation.espacio !== undefined ? newLocation.espacio : item.espacio) || ''
       };
+
+      capturedPrevLoc = prevLoc;
+      capturedNewLoc = newLoc;
 
       // Verificar si realmente cambió de posición física
       wasChanged = (
@@ -365,6 +370,23 @@ export class ConsumiblesRepository {
 
     if (updatedItem) {
       await this.saveAllConsumibles(updated);
+
+      // Registrar permanentemente en el historial de movimientos de ubicación
+      const pStr = capturedPrevLoc ? `${capturedPrevLoc.seccion || ''} [${capturedPrevLoc.anaquel || ''} - ${capturedPrevLoc.espacio || ''}]`.trim() : 'Sin Asignar';
+      const nStr = capturedNewLoc ? `${capturedNewLoc.seccion || ''} [${capturedNewLoc.anaquel || ''} - ${capturedNewLoc.espacio || ''}]`.trim() : 'Sin Asignar';
+
+      this.recordLocationMovement({
+        timestamp: updatedItem.lastVerifiedAt,
+        dateFormatted: new Date().toLocaleString('es-MX', { hour12: true }),
+        clave: updatedItem.clave,
+        description: updatedItem.nombre || updatedItem.descripcion || '',
+        barcode: Array.isArray(updatedItem.barcodes) ? updatedItem.barcodes.join(', ') : '',
+        prevLocation: pStr,
+        newLocation: nStr,
+        movementType: wasChanged ? 'REUBICACIÓN' : 'VERIFICACIÓN',
+        operator: operator || 'Operador',
+        batchFolio: 'CATÁLOGO MAESTRO'
+      });
     }
     return { item: updatedItem, wasChanged };
   }
@@ -531,47 +553,190 @@ export class ConsumiblesRepository {
   /**
    * Exporta el catálogo actual a un archivo Excel (.xlsx)
    */
+  /**
+   * Exporta el catálogo actual a un archivo Excel (.xlsx) con marcas de auditoría
+   * y pestaña dedicada de MOVIMIENTOS_UBICACIONES (pasado y nueva ubicación)
+   */
   static exportToExcel(items = []) {
     if (!items || items.length === 0) {
       alert('No hay consumibles para exportar.');
       return;
     }
 
-    const rows = items.map((it, idx) => ({
-      'No.': idx + 1,
-      'Clave': it.clave || '',
-      'Códigos de Barras Vinculados': Array.isArray(it.barcodes) ? it.barcodes.join(', ') : '',
-      'Nombre': it.nombre || '',
-      'Categoría': it.categoria || '',
-      'Existencias': it.existencias ?? 0,
-      'Zona': it.zona || '',
-      'Sección': it.seccion || '',
-      'Anaquel': it.anaquel || '',
-      'Espacio': it.espacio || '',
-      'Almacén': it.almacen || 'Principal',
-      'Stock Min.': it.stock_min ?? 0,
-      'Stock Max.': it.stock_max ?? 0
-    }));
-
+    const downloadTimeStr = new Date().toLocaleString('es-MX', { hour12: true });
     const wb = XLSX.utils.book_new();
+
+    // 1. HOJA PRINCIPAL: CONSUMIBLES_CATALOGO (con columnas de auditoría y marcas de color/estado)
+    const rows = items.map((it, idx) => {
+      let auditStatus = 'SIN AUDITAR';
+      if (it.locationStatus === 'RELOCATED') {
+        auditStatus = '⚠️ CAMBIO DE LUGAR (MODIFICADA - AMARILLO)';
+      } else if (it.locationStatus === 'VERIFIED_OK') {
+        auditStatus = '✓ TODO BIEN (VERIFICADA - VERDE)';
+      }
+
+      const prevLocStr = it.previousLocation 
+        ? (typeof it.previousLocation === 'object' 
+            ? `${it.previousLocation.seccion || ''} [${it.previousLocation.anaquel || ''} - ${it.previousLocation.espacio || ''}]`.trim() 
+            : String(it.previousLocation))
+        : (it.locationStatus === 'RELOCATED' ? 'Reubicada' : '-');
+
+      const curLocStr = `${it.seccion || ''} [${it.anaquel || ''} - ${it.espacio || ''}]`.trim() || it.location || 'Sin Asignar';
+
+      return {
+        'No.': idx + 1,
+        'Clave': it.clave || '',
+        'Nombre': it.nombre || '',
+        'ESTADO DE AUDITORÍA': auditStatus,
+        'UBICACIÓN ANTERIOR (PASADA)': prevLocStr,
+        'UBICACIÓN ACTUAL (NUEVA)': curLocStr,
+        'Almacén': it.almacen || 'Principal',
+        'Sección': it.seccion || '',
+        'Anaquel': it.anaquel || '',
+        'Espacio': it.espacio || '',
+        'Existencias': it.existencias ?? 0,
+        'FECHA DE AUDITORÍA / CAMBIO': it.lastVerifiedAt ? new Date(it.lastVerifiedAt).toLocaleString('es-MX', { hour12: true }) : '-',
+        'OPERADOR RESPONSABLE': it.verifiedBy || 'Operador',
+        'Códigos de Barras Vinculados': Array.isArray(it.barcodes) ? it.barcodes.join(', ') : (it.barcode || ''),
+        'Categoría': it.categoria || '',
+        'Zona': it.zona || '',
+        'Stock Min.': it.stock_min ?? 0,
+        'Stock Max.': it.stock_max ?? 0
+      };
+    });
+
     const ws = XLSX.utils.json_to_sheet(rows);
     ws['!cols'] = [
       { wch: 6 },
       { wch: 18 },
-      { wch: 25 },
       { wch: 45 },
+      { wch: 42 }, // ESTADO DE AUDITORÍA
+      { wch: 30 }, // UBICACIÓN ANTERIOR (PASADA)
+      { wch: 30 }, // UBICACIÓN ACTUAL (NUEVA)
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 24 }, // FECHA DE AUDITORÍA
+      { wch: 20 }, // OPERADOR
+      { wch: 30 },
       { wch: 22 },
-      { wch: 12 },
       { wch: 10 },
-      { wch: 14 },
-      { wch: 12 },
-      { wch: 12 },
-      { wch: 14 },
       { wch: 12 },
       { wch: 12 }
     ];
-
     XLSX.utils.book_append_sheet(wb, ws, 'CONSUMIBLES_CATALOGO');
+
+    // 2. HOJA DEDICADA: MOVIMIENTOS_UBICACIONES (historial completo de cambios)
+    const storedMovements = this.getLocationMovements();
+    const movementsList = [];
+
+    if (Array.isArray(storedMovements) && storedMovements.length > 0) {
+      storedMovements.forEach((m, idx) => {
+        movementsList.push({
+          'NO.': idx + 1,
+          'FECHA Y HORA': m.dateFormatted || (m.timestamp ? new Date(m.timestamp).toLocaleString('es-MX', { hour12: true }) : '-'),
+          'CLAVE / CÓDIGO': m.clave || m.code || '',
+          'DESCRIPCIÓN': m.description || '',
+          'CÓDIGO DE BARRAS': m.barcode || '',
+          'UBICACIÓN ANTERIOR (PASADA)': m.prevLocation || 'Sin Asignar',
+          'UBICACIÓN NUEVA (ACTUAL)': m.newLocation || 'Sin Asignar',
+          'TIPO DE MOVIMIENTO': m.movementType || 'REUBICACIÓN',
+          'OPERADOR RESPONSABLE': m.operator || 'Operador',
+          'ORIGEN / LOTE': m.batchFolio || 'CATÁLOGO MAESTRO'
+        });
+      });
+    }
+
+    // Incorporar también cualquier consumible en items con estado RELOCATED que aún no esté en la lista
+    items.forEach(it => {
+      if (it.locationStatus === 'RELOCATED') {
+        const curLoc = `${it.seccion || ''} [${it.anaquel || ''} - ${it.espacio || ''}]`.trim() || it.location || '';
+        const prevLoc = it.previousLocation 
+          ? (typeof it.previousLocation === 'object' ? `${it.previousLocation.seccion || ''} [${it.previousLocation.anaquel || ''} - ${it.previousLocation.espacio || ''}]`.trim() : String(it.previousLocation)) 
+          : 'Sin Asignar';
+        const alreadyIn = movementsList.some(m => m['CLAVE / CÓDIGO'] === it.clave && m['UBICACIÓN NUEVA (ACTUAL)'] === curLoc);
+        if (!alreadyIn) {
+          movementsList.push({
+            'NO.': movementsList.length + 1,
+            'FECHA Y HORA': it.lastVerifiedAt ? new Date(it.lastVerifiedAt).toLocaleString('es-MX', { hour12: true }) : downloadTimeStr,
+            'CLAVE / CÓDIGO': it.clave || '',
+            'DESCRIPCIÓN': it.nombre || '',
+            'CÓDIGO DE BARRAS': Array.isArray(it.barcodes) ? it.barcodes.join(', ') : '',
+            'UBICACIÓN ANTERIOR (PASADA)': prevLoc,
+            'UBICACIÓN NUEVA (ACTUAL)': curLoc,
+            'TIPO DE MOVIMIENTO': 'REUBICACIÓN (AMARILLO)',
+            'OPERADOR RESPONSABLE': it.verifiedBy || 'Operador',
+            'ORIGEN / LOTE': 'CATÁLOGO MAESTRO'
+          });
+        }
+      }
+    });
+
+    const wsMovimientos = XLSX.utils.json_to_sheet(
+      movementsList.length > 0 ? movementsList : [{
+        'NO.': '',
+        'FECHA Y HORA': downloadTimeStr,
+        'CLAVE / CÓDIGO': 'SIN CAMBIOS REGISTRADOS',
+        'DESCRIPCIÓN': 'No se han registrado reubicaciones de consumibles aún.',
+        'CÓDIGO DE BARRAS': '',
+        'UBICACIÓN ANTERIOR (PASADA)': '',
+        'UBICACIÓN NUEVA (ACTUAL)': '',
+        'TIPO DE MOVIMIENTO': '',
+        'OPERADOR RESPONSABLE': '',
+        'ORIGEN / LOTE': ''
+      }]
+    );
+    wsMovimientos['!cols'] = [
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 40 },
+      { wch: 25 },
+      { wch: 30 },
+      { wch: 30 },
+      { wch: 26 },
+      { wch: 22 },
+      { wch: 20 }
+    ];
+    XLSX.utils.book_append_sheet(wb, wsMovimientos, 'MOVIMIENTOS_UBICACIONES');
+
+    // 3. HOJA DEDICADA DE SÓLO MODIFICADOS / REUBICADOS (AMARILLO)
+    const modifiedItems = items.filter(it => it.locationStatus === 'RELOCATED');
+    if (modifiedItems.length > 0) {
+      const modifiedRows = modifiedItems.map((it, idx) => {
+        const prevLocStr = it.previousLocation 
+          ? (typeof it.previousLocation === 'object' ? `${it.previousLocation.seccion || ''} [${it.previousLocation.anaquel || ''} - ${it.previousLocation.espacio || ''}]`.trim() : String(it.previousLocation)) 
+          : '-';
+        const curLocStr = `${it.seccion || ''} [${it.anaquel || ''} - ${it.espacio || ''}]`.trim();
+        return {
+          'NO.': idx + 1,
+          'CLAVE': it.clave || '',
+          'NOMBRE': it.nombre || '',
+          'ESTADO': '⚠️ CAMBIO DE LUGAR (MODIFICADA)',
+          'UBICACIÓN ANTERIOR (PASADA)': prevLocStr,
+          'UBICACIÓN NUEVA (ACTUAL)': curLocStr,
+          'EXISTENCIAS': it.existencias ?? 0,
+          'FECHA DE CAMBIO': it.lastVerifiedAt ? new Date(it.lastVerifiedAt).toLocaleString('es-MX', { hour12: true }) : '-',
+          'OPERADOR RESPONSABLE': it.verifiedBy || 'Operador'
+        };
+      });
+      const wsModified = XLSX.utils.json_to_sheet(modifiedRows);
+      wsModified['!cols'] = [
+        { wch: 6 },
+        { wch: 18 },
+        { wch: 40 },
+        { wch: 35 },
+        { wch: 30 },
+        { wch: 30 },
+        { wch: 14 },
+        { wch: 22 },
+        { wch: 20 }
+      ];
+      XLSX.utils.book_append_sheet(wb, wsModified, 'CAMBIOS_AMARILLO');
+    }
+
     const dateStr = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Reporte_Consumibles_CDM_${dateStr}.xlsx`);
   }

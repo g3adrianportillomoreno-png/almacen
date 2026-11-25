@@ -1,6 +1,7 @@
 // src/components/ConsumiblesView.jsx
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { ConsumiblesController } from '../controllers/ConsumiblesController.js';
+import { ConsumiblesRepository } from '../services/ConsumiblesRepository.js';
 import { soundEffects } from '../utils/soundEffects.js';
 
 export default function ConsumiblesView() {
@@ -196,11 +197,63 @@ export default function ConsumiblesView() {
     if (!editingItem) return;
 
     try {
-      const updated = await ConsumiblesController.updateItem(editingItem.id, editingItem);
+      const original = catalog.find(it => String(it.id) === String(editingItem.id));
+      const prevSeccion = original?.seccion || '';
+      const prevAnaquel = original?.anaquel || '';
+      const prevEspacio = original?.espacio || '';
+      const prevAlmacen = original?.almacen || 'Principal';
+
+      const newSeccion = editingItem.seccion || '';
+      const newAnaquel = editingItem.anaquel || '';
+      const newEspacio = editingItem.espacio || '';
+      const newAlmacen = editingItem.almacen || 'Principal';
+
+      const wasLocationChanged = (
+        prevSeccion.trim().toUpperCase() !== newSeccion.trim().toUpperCase() ||
+        prevAnaquel.trim().toUpperCase() !== newAnaquel.trim().toUpperCase() ||
+        prevEspacio.trim().toUpperCase() !== newEspacio.trim().toUpperCase() ||
+        prevAlmacen.trim().toUpperCase() !== newAlmacen.trim().toUpperCase()
+      );
+
+      let itemToSave = { ...editingItem };
+      if (wasLocationChanged) {
+        itemToSave.locationStatus = 'RELOCATED';
+        itemToSave.previousLocation = {
+          seccion: prevSeccion,
+          anaquel: prevAnaquel,
+          espacio: prevEspacio,
+          almacen: prevAlmacen
+        };
+        itemToSave.lastVerifiedAt = new Date().toISOString();
+        itemToSave.verifiedBy = 'Administrador / Almacén';
+
+        // Registrar en el historial permanente de movimientos
+        const prevStr = `${prevSeccion} [${prevAnaquel} - ${prevEspacio}]`.trim() || 'Sin Asignar';
+        const newStr = `${newSeccion} [${newAnaquel} - ${newEspacio}]`.trim() || 'Sin Asignar';
+
+        ConsumiblesRepository.recordLocationMovement({
+          timestamp: itemToSave.lastVerifiedAt,
+          dateFormatted: new Date().toLocaleString('es-MX', { hour12: true }),
+          clave: editingItem.clave,
+          description: editingItem.nombre || '',
+          barcode: Array.isArray(editingItem.barcodes) ? editingItem.barcodes.join(', ') : '',
+          prevLocation: prevStr,
+          newLocation: newStr,
+          movementType: 'REUBICACIÓN',
+          operator: 'Administrador / Almacén',
+          batchFolio: 'CATÁLOGO MAESTRO'
+        });
+      }
+
+      const updated = await ConsumiblesController.updateItem(editingItem.id, itemToSave);
       setCatalog(updated);
-      setHighlightedItem(editingItem);
+      setHighlightedItem(itemToSave);
       setEditingItem(null);
-      showToast('success', '✓ Consumible actualizado correctamente.');
+      if (wasLocationChanged) {
+        showToast('warning', `⚠️ ¡Ubicación cambiada a ${newSeccion} [${newAnaquel} - ${newEspacio}]! Registrada en Movimientos y marcada amarillo en Excel.`);
+      } else {
+        showToast('success', '✓ Consumible actualizado correctamente.');
+      }
     } catch (err) {
       showToast('error', 'Error al guardar cambios.');
     }

@@ -332,15 +332,27 @@ export default function ConsumiblesOperatorScanView({
       operatorName
     );
 
+    // Sincronizar de inmediato con el Catálogo Maestro de consumibles
+    try {
+      const parts = newLoc.split(/[\s\[\]-]+/).filter(Boolean);
+      await ConsumiblesRepository.updateConsumibleLocation(item.code, {
+        seccion: parts[0] || newLoc,
+        anaquel: parts[1] || '',
+        espacio: parts[2] || '',
+        almacen: 'Principal'
+      }, operatorName);
+      loadCatalogData();
+    } catch (e) {}
+
     if (res?.batch) {
       setActiveBatch(res.batch);
       setConsumiblesBatches(prev => prev.map(b => b.id === res.batch.id ? res.batch : b));
       soundEffects.playScanSuccess();
 
       if (isVerifiedOk) {
-        showToast('success', `✓ Ubicación verificada correcta: ${newLoc} (Marcada VERDE)`);
+        showToast('success', `✓ Ubicación verificada correcta: ${newLoc} (Marcada VERDE en Excel)`);
       } else {
-        showToast('warning', `⚠️ ¡Ubicación modificada a ${newLoc}! (Marcada AMARILLA en Excel)`);
+        showToast('warning', `⚠️ ¡Ubicación modificada a ${newLoc}! (Marcada AMARILLA en Excel y registrada en pestaña de movimientos)`);
       }
     }
 
@@ -418,8 +430,30 @@ export default function ConsumiblesOperatorScanView({
       setIsEditingCatalogLocation(false);
       soundEffects.playScanSuccess();
 
+      // Sincronizar también con el lote de recepción activo si este item pertenece a él
+      if (activeBatch && Array.isArray(activeBatch.items)) {
+        const itemInBatch = activeBatch.items.find(
+          it => String(it.code).trim().toUpperCase() === String(updated.clave).trim().toUpperCase()
+        );
+        if (itemInBatch) {
+          const newLocStr = `${updated.seccion || ''} [${updated.anaquel || ''} - ${updated.espacio || ''}]`.trim();
+          const batchRes = await ConsumiblesChecklistRepository.updateItemLocation(
+            activeBatch.id,
+            itemInBatch.id,
+            newLocStr,
+            !result.wasChanged,
+            itemInBatch.location,
+            operatorName
+          );
+          if (batchRes?.batch) {
+            setActiveBatch(batchRes.batch);
+            setConsumiblesBatches(prev => prev.map(b => b.id === batchRes.batch.id ? batchRes.batch : b));
+          }
+        }
+      }
+
       if (result.wasChanged) {
-        showToast('warning', `⚠️ ¡Ubicación reasignada! Se cambió de lugar a ${updated.seccion} [${updated.anaquel} - ${updated.espacio}]`);
+        showToast('warning', `⚠️ ¡Ubicación reasignada! Se cambió a ${updated.seccion} [${updated.anaquel} - ${updated.espacio}] (Registrada en pestaña de movimientos y marcada amarillo en Excel)`);
       } else {
         showToast('success', `✓ Misma ubicación guardada y confirmada.`);
       }
@@ -567,10 +601,10 @@ export default function ConsumiblesOperatorScanView({
                     type="button"
                     onClick={handleExportBatchExcel}
                     className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3 py-1.5 rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
-                    title="Descargar Excel oficial con marcas de reubicación y verificación"
+                    title="Descargar Excel oficial con marcas de reubicación y pestaña de movimientos"
                   >
                     <span>📥</span>
-                    <span className="hidden sm:inline">Excel Lote</span>
+                    <span className="hidden sm:inline">Excel Lote y Movimientos</span>
                   </button>
 
                   {consumablesBatches.length > 1 && (
@@ -1352,10 +1386,22 @@ export default function ConsumiblesOperatorScanView({
       {activeMode === 'CATALOG' && (
         <div className="flex flex-col gap-4">
           <div className="bg-slate-900/90 p-4 rounded-3xl border border-slate-800 flex flex-col gap-3 shadow-xl">
-            <label className="text-xs font-black text-slate-200 uppercase tracking-wide flex items-center justify-between">
-              <span>Consulta de Catálogo y Ubicación Física:</span>
-              <span className="text-[10px] text-blue-400 font-bold">Catálogo Maestro</span>
-            </label>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <label className="text-xs font-black text-slate-200 uppercase tracking-wide flex items-center gap-2">
+                <span>Consulta de Catálogo y Ubicación Física:</span>
+                <span className="text-[10px] text-blue-400 font-bold bg-blue-950/60 border border-blue-800/50 px-2 py-0.5 rounded-md">Catálogo Maestro</span>
+              </label>
+
+              <button
+                type="button"
+                onClick={() => ConsumiblesController.exportExcel(catalog)}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs px-3.5 py-1.5 rounded-xl transition shadow-xs flex items-center gap-1.5 cursor-pointer"
+                title="Descargar Excel oficial de consumibles con marcas de reubicación y pestaña de movimientos"
+              >
+                <span>📥</span>
+                <span>Exportar Excel (Ubicaciones y Movimientos)</span>
+              </button>
+            </div>
 
             <div className="flex gap-2">
               <input
