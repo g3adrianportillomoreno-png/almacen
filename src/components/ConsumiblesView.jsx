@@ -21,8 +21,13 @@ export default function ConsumiblesView() {
   // Modal para editar consumible
   const [editingItem, setEditingItem] = useState(null);
 
+  // Paginación para carga rápida (50 registros por página por defecto)
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
   const scanInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const tableContainerRef = useRef(null);
 
   useEffect(() => {
     loadData();
@@ -125,6 +130,27 @@ export default function ConsumiblesView() {
       );
     });
   }, [catalog, searchQuery, selectedCategory, selectedSeccion, selectedStockStatus]);
+
+  // Reiniciar a página 1 al cambiar búsqueda, filtros o tamaño de página
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedCategory, selectedSeccion, selectedStockStatus, pageSize]);
+
+  // Cálculo de paginación (solo renderiza 50 filas por vez para máxima velocidad)
+  const totalPages = Math.max(1, Math.ceil(filteredCatalog.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const startIndex = (safeCurrentPage - 1) * pageSize;
+  const paginatedCatalog = useMemo(() => {
+    return filteredCatalog.slice(startIndex, startIndex + pageSize);
+  }, [filteredCatalog, startIndex, pageSize]);
+
+  const goToPage = (page) => {
+    const target = Math.max(1, Math.min(page, totalPages));
+    setCurrentPage(target);
+    if (tableContainerRef.current) {
+      tableContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
   // Manejador de escaneo rápido / búsqueda por código de barras
   const handleScanSubmit = (e) => {
@@ -599,13 +625,22 @@ export default function ConsumiblesView() {
             </select>
           </div>
 
-          <div className="text-xs text-slate-500 font-semibold shrink-0">
-            Mostrando <strong>{filteredCatalog.length}</strong> de {catalog.length} consumibles
+          <div className="text-xs text-slate-500 font-semibold shrink-0 flex items-center gap-2">
+            <span>
+              Mostrando{' '}
+              <strong>
+                {filteredCatalog.length === 0
+                  ? 0
+                  : `${startIndex + 1}–${Math.min(startIndex + pageSize, filteredCatalog.length)}`}
+              </strong>{' '}
+              de <strong>{filteredCatalog.length}</strong>
+              {filteredCatalog.length !== catalog.length ? ` (${catalog.length} total)` : ' consumibles'}
+            </span>
           </div>
         </div>
 
         {/* TABLA CON HOJA DE DATOS */}
-        <div className="overflow-x-auto overflow-y-auto max-h-[600px]">
+        <div ref={tableContainerRef} className="overflow-x-auto overflow-y-auto max-h-[600px]">
           {loading ? (
             <div className="p-12 text-center text-slate-400">
               <div className="w-10 h-10 border-4 border-slate-200 border-t-red-600 rounded-full animate-spin mx-auto mb-2"></div>
@@ -633,13 +668,13 @@ export default function ConsumiblesView() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium">
-                {filteredCatalog.map((item, idx) => {
+                {paginatedCatalog.map((item, idx) => {
                   const stockStatus = ConsumiblesController.getStockStatus(item);
                   const isHighlighted = highlightedItem?.id === item.id;
 
                   return (
                     <tr
-                      key={item.id || idx}
+                      key={item.id || (startIndex + idx)}
                       onClick={() => setHighlightedItem(item)}
                       className={`cursor-pointer transition-colors ${
                         isHighlighted 
@@ -648,7 +683,7 @@ export default function ConsumiblesView() {
                       }`}
                     >
                       <td className="py-2.5 px-3 text-center text-slate-400 font-mono text-[11px]">
-                        {idx + 1}
+                        {startIndex + idx + 1}
                       </td>
 
                       <td className="py-2.5 px-3 font-mono font-bold text-slate-900 select-all">
@@ -729,6 +764,67 @@ export default function ConsumiblesView() {
             </table>
           )}
         </div>
+
+        {/* BARRA DE PAGINACIÓN INFERIOR */}
+        {!loading && filteredCatalog.length > 0 && (
+          <div className="px-4 py-3 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-slate-600 font-medium">
+              <span>Filas por página:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="bg-white border border-slate-300 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 outline-none focus:border-red-500 cursor-pointer"
+              >
+                <option value={25}>25</option>
+                <option value={50}>50 (Recomendado)</option>
+                <option value={100}>100</option>
+                <option value={200}>200</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => goToPage(1)}
+                disabled={safeCurrentPage <= 1}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-bold hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+                title="Primera página"
+              >
+                «
+              </button>
+              <button
+                type="button"
+                onClick={() => goToPage(safeCurrentPage - 1)}
+                disabled={safeCurrentPage <= 1}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-bold hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+              >
+                ‹ Anterior
+              </button>
+
+              <span className="px-3 py-1.5 font-mono font-bold text-slate-700 bg-white border border-slate-200 rounded-lg">
+                Página {safeCurrentPage} / {totalPages}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => goToPage(safeCurrentPage + 1)}
+                disabled={safeCurrentPage >= totalPages}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-bold hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+              >
+                Siguiente ›
+              </button>
+              <button
+                type="button"
+                onClick={() => goToPage(totalPages)}
+                disabled={safeCurrentPage >= totalPages}
+                className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-bold hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition cursor-pointer"
+                title="Última página"
+              >
+                »
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* MODAL DE EDICIÓN RÁPIDA DE CONSUMIBLE */}
