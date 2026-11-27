@@ -31,6 +31,21 @@ export class ConsumiblesRepository {
     return initial;
   }
 
+  /**
+   * Genera variantes normalizadas de un código de barras (incluye 0 inicial en UPC-A de 11/12 dígitos)
+   */
+  static getBarcodeVariants(rawBarcode) {
+    if (!rawBarcode) return [];
+    const raw = String(rawBarcode).trim();
+    const clean = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const set = new Set();
+    if (raw) set.add(raw);
+    if (clean) set.add(clean);
+    if (/^\d{11}$/.test(clean)) set.add('0' + clean);
+    if (/^0\d{11}$/.test(clean)) set.add(clean.slice(1));
+    return Array.from(set);
+  }
+
   static async saveBarcodeAliases(aliases) {
     try {
       localStorage.setItem(ALIASES_STORAGE_KEY, JSON.stringify(aliases));
@@ -38,7 +53,7 @@ export class ConsumiblesRepository {
         .from('warehouse_map_config')
         .upsert({
           id: SUPABASE_ALIASES_KEY,
-          config: aliases,
+          layout: aliases,
           updated_at: new Date().toISOString()
         });
     } catch (e) {
@@ -68,13 +83,13 @@ export class ConsumiblesRepository {
     try {
       const { data, error } = await supabase
         .from('warehouse_map_config')
-        .select('config')
+        .select('layout')
         .eq('id', SUPABASE_CONFIG_KEY)
         .maybeSingle();
 
-      if (!error && data?.config && Array.isArray(data.config) && data.config.length > 0) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.config));
-        return data.config;
+      if (!error && data?.layout && Array.isArray(data.layout) && data.layout.length > 0) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.layout));
+        return data.layout;
       }
     } catch (e) {
       console.warn('Error cargando consumibles de Supabase:', e);
@@ -98,24 +113,24 @@ export class ConsumiblesRepository {
     try {
       const { data, error } = await supabase
         .from('warehouse_map_config')
-        .select('config, updated_at')
+        .select('layout, updated_at')
         .eq('id', SUPABASE_CONFIG_KEY)
         .maybeSingle();
 
-      if (!error && data?.config && Array.isArray(data.config) && data.config.length > 0) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.config));
+      if (!error && data?.layout && Array.isArray(data.layout) && data.layout.length > 0) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data.layout));
       }
 
       // Sincronizar también los aliases
       const { data: aliasData } = await supabase
         .from('warehouse_map_config')
-        .select('config')
+        .select('layout')
         .eq('id', SUPABASE_ALIASES_KEY)
         .maybeSingle();
 
-      if (aliasData?.config) {
+      if (aliasData?.layout) {
         const localAliases = this.getBarcodeAliases();
-        const merged = { ...localAliases, ...aliasData.config };
+        const merged = { ...localAliases, ...aliasData.layout };
         localStorage.setItem(ALIASES_STORAGE_KEY, JSON.stringify(merged));
       }
     } catch (e) {
@@ -143,7 +158,7 @@ export class ConsumiblesRepository {
         .from('warehouse_map_config')
         .upsert({
           id: SUPABASE_CONFIG_KEY,
-          config: items,
+          layout: items,
           updated_at: new Date().toISOString()
         });
     } catch (e) {
@@ -152,12 +167,12 @@ export class ConsumiblesRepository {
   }
 
   /**
-   * Vincula permanentemente un código de barras (ej. EAN 6920952323115) a un consumible
+   * Vincula permanentemente un código de barras (ej. EAN/UPC) a un consumible
    */
   static async linkBarcodeToConsumible(rawBarcode, claveOrId) {
     if (!rawBarcode || !claveOrId) return null;
-    const barcode = String(rawBarcode).trim();
-    const cleanBarcode = barcode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const variants = this.getBarcodeVariants(rawBarcode);
+    if (variants.length === 0) return null;
 
     const catalog = await this.getAllConsumibles();
     let targetItem = null;
@@ -170,12 +185,11 @@ export class ConsumiblesRepository {
 
       if (isMatch) {
         const existingBarcodes = Array.isArray(item.barcodes) ? [...item.barcodes] : [];
-        if (!existingBarcodes.includes(barcode)) {
-          existingBarcodes.push(barcode);
-        }
-        if (cleanBarcode && !existingBarcodes.includes(cleanBarcode)) {
-          existingBarcodes.push(cleanBarcode);
-        }
+        variants.forEach(v => {
+          if (!existingBarcodes.includes(v)) {
+            existingBarcodes.push(v);
+          }
+        });
         targetItem = {
           ...item,
           barcodes: existingBarcodes,
@@ -196,11 +210,190 @@ export class ConsumiblesRepository {
 
     // Guardar en mapa rápido de aliases
     const aliases = this.getBarcodeAliases();
-    aliases[cleanBarcode] = targetItem.clave;
-    aliases[barcode] = targetItem.clave;
+    variants.forEach(v => {
+      aliases[v] = targetItem.clave;
+    });
     await this.saveBarcodeAliases(aliases);
 
     return targetItem;
+  }
+
+  /**
+   * Importa masivamente códigos de barras / UPC desde un archivo Excel o CSV
+   * sin sobrescribir existencias ni ubicaciones.
+   * Columnas esperadas: Codigo / Clave  y  Codigo de barras / UPC / Barcode
+   */
+  static async importBarcodesFromExcel(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: 'array', raw: false });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '', raw: false });
+
+          if (!rows || rows.length === 0) {
+            throw new Error('El archivo está vacío.');
+          }
+
+          const normalizeHeader = (val) =>
+            String(val || '')
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .trim()
+              .toLowerCase();
+
+          let headerRowIdx = -1;
+          let codeColIdx = -1;
+          let barcodeColIdx = -1;
+
+          // Buscar fila de encabezados en las primeras 15 filas
+          for (let r = 0; r < Math.min(rows.length, 15); r++) {
+            const row = rows[r];
+            if (!Array.isArray(row)) continue;
+            let foundCode = -1;
+            let foundBarcode = -1;
+
+            row.forEach((cell, idx) => {
+              const h = normalizeHeader(cell);
+              if (!h) return;
+              if (
+                foundBarcode === -1 &&
+                (h.includes('barra') || h.includes('upc') || h.includes('ean') || h.includes('barcode') || h.includes('gtin'))
+              ) {
+                foundBarcode = idx;
+              } else if (
+                foundCode === -1 &&
+                (h === 'codigo' || h === 'clave' || h === 'sku' || h === 'modelo' || h.includes('clave') || h.includes('codigo'))
+              ) {
+                foundCode = idx;
+              }
+            });
+
+            if (foundCode !== -1 && foundBarcode !== -1) {
+              headerRowIdx = r;
+              codeColIdx = foundCode;
+              barcodeColIdx = foundBarcode;
+              break;
+            }
+          }
+
+          if (headerRowIdx === -1) {
+            throw new Error(
+              'No se encontraron las columnas "Codigo" (o "Clave") y "Codigo de barras / UPC". Verifica los encabezados del archivo.'
+            );
+          }
+
+          const cleanKey = (s) => String(s || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          const parsedPairs = [];
+
+          for (let r = headerRowIdx + 1; r < rows.length; r++) {
+            const row = rows[r];
+            if (!Array.isArray(row)) continue;
+            const rawCode = String(row[codeColIdx] ?? '').trim();
+            const rawBarcode = String(row[barcodeColIdx] ?? '').trim();
+            if (!rawCode || !rawBarcode) continue;
+
+            // Evitar notación científica si Excel exportó número largo
+            const cleanBarcodeStr = rawBarcode.replace(/\s+/g, '');
+            const variants = this.getBarcodeVariants(cleanBarcodeStr);
+            if (variants.length === 0) continue;
+
+            parsedPairs.push({
+              clave: rawCode.toUpperCase(),
+              cleanClave: cleanKey(rawCode),
+              barcode: cleanBarcodeStr,
+              variants
+            });
+          }
+
+          if (parsedPairs.length === 0) {
+            throw new Error('No se encontraron filas válidas con código y número de barras.');
+          }
+
+          // Cargar catálogo y aliases actuales
+          const catalog = await this.getAllConsumibles();
+          const aliases = this.getBarcodeAliases();
+
+          const pairByCleanKey = new Map();
+          parsedPairs.forEach((p) => {
+            if (!pairByCleanKey.has(p.cleanClave)) {
+              pairByCleanKey.set(p.cleanClave, { clave: p.clave, variants: new Set() });
+            }
+            const entry = pairByCleanKey.get(p.cleanClave);
+            p.variants.forEach((v) => entry.variants.add(v));
+          });
+
+          let linkedInCatalog = 0;
+          const matchedCleanKeys = new Set();
+          const nowIso = new Date().toISOString();
+
+          const updatedCatalog = catalog.map((item) => {
+            const k = cleanKey(item.clave);
+            const entry = pairByCleanKey.get(k);
+            if (!entry) return item;
+
+            matchedCleanKeys.add(k);
+            linkedInCatalog++;
+            const existing = Array.isArray(item.barcodes) ? [...item.barcodes] : [];
+            entry.variants.forEach((v) => {
+              if (!existing.includes(v)) existing.push(v);
+            });
+
+            return {
+              ...item,
+              barcodes: existing,
+              updatedAt: nowIso
+            };
+          });
+
+          // Guardar TODOS los pares en aliases (incluyendo claves que aún no estén en el catálogo maestro)
+          const unmatchedCodes = [];
+          pairByCleanKey.forEach((entry, k) => {
+            const matchedItem = updatedCatalog.find((it) => cleanKey(it.clave) === k);
+            const targetClave = matchedItem ? matchedItem.clave : entry.clave;
+            entry.variants.forEach((v) => {
+              aliases[v] = targetClave;
+            });
+            if (!matchedCleanKeys.has(k)) {
+              unmatchedCodes.push(entry.clave);
+            }
+          });
+
+          await this.saveAllConsumibles(updatedCatalog);
+          await this.saveBarcodeAliases(aliases);
+
+          resolve({
+            totalRows: parsedPairs.length,
+            linkedInCatalog,
+            savedAliases: pairByCleanKey.size,
+            unmatchedCodes,
+            updatedCatalog
+          });
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = () => reject(new Error('No se pudo leer el archivo seleccionado.'));
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  /**
+   * Descarga una plantilla Excel lista para llenar y subir códigos de barras
+   */
+  static downloadBarcodesTemplate() {
+    const wb = XLSX.utils.book_new();
+    const sampleRows = [
+      { Codigo: 'TN920XXL', 'Codigo de barras / UPC': '012502665960' },
+      { Codigo: 'DR820', 'Codigo de barras / UPC': '012502642527' }
+    ];
+    const ws = XLSX.utils.json_to_sheet(sampleRows);
+    ws['!cols'] = [{ wch: 22 }, { wch: 26 }];
+    XLSX.utils.book_append_sheet(wb, ws, 'CODIGOS_BARRAS');
+    XLSX.writeFile(wb, 'Plantilla_Codigos_Barras_Consumibles.xlsx');
   }
 
   /**

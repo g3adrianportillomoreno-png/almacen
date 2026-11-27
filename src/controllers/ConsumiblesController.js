@@ -26,6 +26,14 @@ export class ConsumiblesController {
     return await ConsumiblesRepository.importFromExcel(file);
   }
 
+  static async importBarcodesExcel(file) {
+    return await ConsumiblesRepository.importBarcodesFromExcel(file);
+  }
+
+  static downloadBarcodesTemplate() {
+    return ConsumiblesRepository.downloadBarcodesTemplate();
+  }
+
   static exportExcel(items) {
     return ConsumiblesRepository.exportToExcel(items);
   }
@@ -74,7 +82,14 @@ export class ConsumiblesController {
 
     // 0. Revisar si coincide con un código de barras previamente vinculado (EAN/UPC/Serie de caja)
     const aliases = this.getAliases();
-    const mappedClave = aliases[query] || aliases[cleanQuery];
+    const queryVariants = ConsumiblesRepository.getBarcodeVariants(query);
+    let mappedClave = null;
+    for (const v of queryVariants) {
+      if (aliases[v]) {
+        mappedClave = aliases[v];
+        break;
+      }
+    }
     if (mappedClave) {
       const foundByAlias = catalog.find(
         item => String(item.clave || '').trim().toUpperCase() === String(mappedClave).trim().toUpperCase()
@@ -94,7 +109,7 @@ export class ConsumiblesController {
       if (!Array.isArray(item.barcodes)) return false;
       return item.barcodes.some(b => {
         const cleanB = this.cleanString(b);
-        return cleanB === cleanQuery || String(b).trim() === query;
+        return queryVariants.includes(cleanB) || queryVariants.includes(String(b).trim());
       });
     });
 

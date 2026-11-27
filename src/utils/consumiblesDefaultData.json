@@ -935,7 +935,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 20,
-    "stock_max": 40
+    "stock_max": 40,
+    "barcodes": [
+      "12502670070",
+      "012502670070"
+    ]
   },
   {
     "id": 68,
@@ -1019,7 +1023,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502668770",
+      "012502668770"
+    ]
   },
   {
     "id": 74,
@@ -1061,7 +1069,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502665960",
+      "012502665960"
+    ]
   },
   {
     "id": 77,
@@ -1089,7 +1101,11 @@
     "espacio": "02",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502646488",
+      "012502646488"
+    ]
   },
   {
     "id": 79,
@@ -1117,7 +1133,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 10
+    "stock_max": 10,
+    "barcodes": [
+      "12502681595",
+      "012502681595"
+    ]
   },
   {
     "id": 81,
@@ -1131,7 +1151,11 @@
     "espacio": "02",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 10
+    "stock_max": 10,
+    "barcodes": [
+      "12502681618",
+      "012502681618"
+    ]
   },
   {
     "id": 82,
@@ -1145,7 +1169,11 @@
     "espacio": "03",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 10
+    "stock_max": 10,
+    "barcodes": [
+      "12502681601",
+      "012502681601"
+    ]
   },
   {
     "id": 83,
@@ -1159,7 +1187,11 @@
     "espacio": "04",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 10
+    "stock_max": 10,
+    "barcodes": [
+      "12502681588",
+      "012502681588"
+    ]
   },
   {
     "id": 84,
@@ -1173,7 +1205,11 @@
     "espacio": "05",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502653578",
+      "012502653578"
+    ]
   },
   {
     "id": 85,
@@ -1201,7 +1237,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502655237",
+      "012502655237"
+    ]
   },
   {
     "id": 87,
@@ -1215,7 +1255,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 10
+    "stock_max": 10,
+    "barcodes": [
+      "12502664635",
+      "012502664635"
+    ]
   },
   {
     "id": 88,
@@ -5317,7 +5361,11 @@
     "espacio": "02",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502646068",
+      "012502646068"
+    ]
   },
   {
     "id": 381,
@@ -5345,7 +5393,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 1,
-    "stock_max": 2
+    "stock_max": 2,
+    "barcodes": [
+      "12502664703",
+      "012502664703"
+    ]
   },
   {
     "id": 383,
@@ -5359,7 +5411,11 @@
     "espacio": "02",
     "almacen": "Principal",
     "stock_min": 1,
-    "stock_max": 2
+    "stock_max": 2,
+    "barcodes": [
+      "12502664727",
+      "012502664727"
+    ]
   },
   {
     "id": 384,
@@ -5373,7 +5429,11 @@
     "espacio": "03",
     "almacen": "Principal",
     "stock_min": 1,
-    "stock_max": 2
+    "stock_max": 2,
+    "barcodes": [
+      "12502664710",
+      "012502664710"
+    ]
   },
   {
     "id": 385,
@@ -5387,7 +5447,11 @@
     "espacio": "04",
     "almacen": "Principal",
     "stock_min": 1,
-    "stock_max": 2
+    "stock_max": 2,
+    "barcodes": [
+      "12502664734",
+      "012502664734"
+    ]
   },
   {
     "id": 386,
@@ -5415,7 +5479,11 @@
     "espacio": "03",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502676768",
+      "012502676768"
+    ]
   },
   {
     "id": 388,
@@ -5429,7 +5497,11 @@
     "espacio": "04",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502676775",
+      "012502676775"
+    ]
   },
   {
     "id": 389,
@@ -5443,7 +5515,11 @@
     "espacio": "05",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502676782",
+      "012502676782"
+    ]
   },
   {
     "id": 390,
@@ -5471,7 +5547,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 10,
-    "stock_max": 20
+    "stock_max": 20,
+    "barcodes": [
+      "12502650386",
+      "012502650386"
+    ]
   },
   {
     "id": 392,
@@ -5485,7 +5565,11 @@
     "espacio": "02",
     "almacen": "Principal",
     "stock_min": 10,
-    "stock_max": 20
+    "stock_max": 20,
+    "barcodes": [
+      "12502641025",
+      "012502641025"
+    ]
   },
   {
     "id": 393,
@@ -5499,7 +5583,11 @@
     "espacio": "03",
     "almacen": "Principal",
     "stock_min": 8,
-    "stock_max": 16
+    "stock_max": 16,
+    "barcodes": [
+      "12502641032",
+      "012502641032"
+    ]
   },
   {
     "id": 394,
@@ -5513,7 +5601,11 @@
     "espacio": "04",
     "almacen": "Principal",
     "stock_min": 10,
-    "stock_max": 20
+    "stock_max": 20,
+    "barcodes": [
+      "12502641018",
+      "012502641018"
+    ]
   },
   {
     "id": 395,
@@ -5597,7 +5689,11 @@
     "espacio": "16",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502625421",
+      "012502625421"
+    ]
   },
   {
     "id": 401,
@@ -5611,7 +5707,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502646167",
+      "012502646167"
+    ]
   },
   {
     "id": 402,
@@ -5625,7 +5725,11 @@
     "espacio": "02",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502646181",
+      "012502646181"
+    ]
   },
   {
     "id": 403,
@@ -5639,7 +5743,11 @@
     "espacio": "03",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502646174",
+      "012502646174"
+    ]
   },
   {
     "id": 404,
@@ -12233,7 +12341,11 @@
     "espacio": "1-12",
     "almacen": "Principal",
     "stock_min": 10,
-    "stock_max": 20
+    "stock_max": 20,
+    "barcodes": [
+      "12502651604",
+      "012502651604"
+    ]
   },
   {
     "id": 875,
@@ -12275,7 +12387,11 @@
     "espacio": "21",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502642787",
+      "012502642787"
+    ]
   },
   {
     "id": 878,
@@ -12331,7 +12447,11 @@
     "espacio": "11-13",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502666530",
+      "012502666530"
+    ]
   },
   {
     "id": 882,
@@ -12373,7 +12493,11 @@
     "espacio": "03-07",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502666547",
+      "012502666547"
+    ]
   },
   {
     "id": 885,
@@ -12387,7 +12511,11 @@
     "espacio": "08-10",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502666554",
+      "012502666554"
+    ]
   },
   {
     "id": 886,
@@ -13101,7 +13229,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502642909",
+      "012502642909"
+    ]
   },
   {
     "id": 937,
@@ -18340,7 +18472,11 @@
     "espacio": "01",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502642527",
+      "012502642527"
+    ]
   },
   {
     "id": 1311,
@@ -18410,7 +18546,11 @@
     "espacio": "T02",
     "almacen": "Principal",
     "stock_min": 2,
-    "stock_max": 4
+    "stock_max": 4,
+    "barcodes": [
+      "12502676867",
+      "012502676867"
+    ]
   },
   {
     "id": 1316,
@@ -18970,7 +19110,11 @@
     "espacio": "",
     "almacen": "Principal",
     "stock_min": 0,
-    "stock_max": 0
+    "stock_max": 0,
+    "barcodes": [
+      "12502676720",
+      "012502676720"
+    ]
   },
   {
     "id": 1356,

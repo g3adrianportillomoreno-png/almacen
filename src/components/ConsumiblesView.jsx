@@ -17,6 +17,7 @@ export default function ConsumiblesView() {
   const [scanInput, setScanInput] = useState('');
   const [notification, setNotification] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [isUploadingBarcodes, setIsUploadingBarcodes] = useState(false);
 
   // Modal para editar consumible
   const [editingItem, setEditingItem] = useState(null);
@@ -27,6 +28,7 @@ export default function ConsumiblesView() {
 
   const scanInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const barcodeFileInputRef = useRef(null);
   const tableContainerRef = useRef(null);
 
   useEffect(() => {
@@ -218,6 +220,33 @@ export default function ConsumiblesView() {
     }
   };
 
+  // Subir archivo Excel o CSV masivo para vincular Códigos de Barras / UPC con Claves
+  const handleBarcodesFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingBarcodes(true);
+    try {
+      const result = await ConsumiblesController.importBarcodesExcel(file);
+      setCatalog(result.updatedCatalog);
+      soundEffects.playScanSuccess();
+      const extraNote = result.unmatchedCodes.length > 0
+        ? ` (${result.unmatchedCodes.length} claves nuevas guardadas en alias para futuras recepciones)`
+        : '';
+      showToast(
+        'success',
+        `✓ ¡Códigos vinculados! ${result.linkedInCatalog} productos actualizados en catálogo y ${result.savedAliases} códigos guardados en la nube.${extraNote}`
+      );
+    } catch (err) {
+      console.error('Error importando códigos de barras:', err);
+      soundEffects.playScanError();
+      showToast('error', `Error al subir códigos de barras: ${err.message}`);
+    } finally {
+      setIsUploadingBarcodes(false);
+      e.target.value = '';
+    }
+  };
+
   const handleSaveEdit = async (e) => {
     e.preventDefault();
     if (!editingItem) return;
@@ -319,7 +348,7 @@ export default function ConsumiblesView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-          {/* Input oculto para subir archivo */}
+          {/* Input oculto para subir archivo de catálogo completo */}
           <input
             ref={fileInputRef}
             type="file"
@@ -327,6 +356,26 @@ export default function ConsumiblesView() {
             onChange={handleFileUpload}
             className="hidden"
           />
+
+          {/* Input oculto para subir archivo masivo de Códigos de Barras / UPC */}
+          <input
+            ref={barcodeFileInputRef}
+            type="file"
+            accept=".xlsx, .xls, .csv"
+            onChange={handleBarcodesFileUpload}
+            className="hidden"
+          />
+
+          <button
+            type="button"
+            disabled={isUploadingBarcodes}
+            onClick={() => barcodeFileInputRef.current?.click()}
+            className="flex-1 sm:flex-none bg-amber-500 hover:bg-amber-400 text-slate-950 border border-amber-600/30 font-black text-xs px-3.5 py-2.5 rounded-xl transition shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+            title="Subir Excel o CSV con columnas 'Codigo' y 'Codigo de barras / UPC' para vincular códigos masivamente sin tocar existencias"
+          >
+            <span>🔗</span>
+            <span>{isUploadingBarcodes ? 'Vinculando...' : 'Subir Códigos de Barras'}</span>
+          </button>
 
           <button
             type="button"
