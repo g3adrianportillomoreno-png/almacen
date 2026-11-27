@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Routes, Route, Navigate, useLocation, useNavigate, matchPath } from 'react-router-dom';
 import './App.css';
 
 // Capa de Controladores (Patrón MVC)
@@ -27,33 +28,85 @@ import ConsumiblesChecklistScanView from './components/ConsumiblesChecklistScanV
 import { RealtimeSyncService } from './services/RealtimeSyncService';
 import { supabase } from './utils/supabaseClient';
 
-function App() {
-  const [view, setView] = useState(() => {
-    if (typeof window !== 'undefined') {
-      const urlParams = new URLSearchParams(window.location.search);
-      if (urlParams.get('modo') === 'operador' || window.location.hash.includes('operador')) {
-        return 'operator';
-      }
-      const saved = localStorage.getItem('preferred_view');
-      if (saved) return saved;
-      if (window.innerWidth < 768) {
-        return 'operator';
-      }
-    }
-    return 'masterInventory';
-  }); // 'masterInventory', 'home', 'scan', 'equipmentReading', 'modelSearch', 'warehouseMap', 'operator'
+const VIEW_TO_PATH = {
+  masterInventory: '/inventario',
+  home: '/recepciones',
+  mercadoLibre: '/mercado-libre',
+  bajas: '/bajas',
+  warehouseMap: '/mapa',
+  modelSearch: '/modelos',
+  consumibles: '/consumibles',
+  equipmentReading: '/acomodo',
+  assignment: '/acomodo',
+  operator: '/operador',
+};
 
-  const [activeBatchId, setActiveBatchId] = useState(null);
+const getViewFromPathname = (pathname) => {
+  if (pathname.startsWith('/operador')) return 'operator';
+  if (pathname.startsWith('/recepciones/escaneo/')) return 'scan';
+  if (pathname.startsWith('/recepciones')) return 'home';
+  if (pathname.startsWith('/consumibles/escaneo/')) return 'consumablesScan';
+  if (pathname.startsWith('/consumibles')) return 'consumibles';
+  if (pathname.startsWith('/mercado-libre/escaneo/')) return 'mercadoLibreScan';
+  if (pathname.startsWith('/mercado-libre')) return 'mercadoLibre';
+  if (pathname.startsWith('/bajas')) return 'bajas';
+  if (pathname.startsWith('/mapa')) return 'warehouseMap';
+  if (pathname.startsWith('/modelos')) return 'modelSearch';
+  if (pathname.startsWith('/acomodo')) return 'equipmentReading';
+  return 'masterInventory';
+};
+
+const getDefaultRoutePath = () => {
+  if (typeof window !== 'undefined') {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('modo') === 'operador' || window.location.hash.includes('operador')) {
+      return '/operador';
+    }
+    const saved = localStorage.getItem('preferred_view');
+    if (saved && VIEW_TO_PATH[saved]) {
+      return VIEW_TO_PATH[saved];
+    }
+    if (window.innerWidth < 768) {
+      return '/operador';
+    }
+  }
+  return '/inventario';
+};
+
+function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Vista actual derivada directamente de la URL del navegador
+  const view = useMemo(() => getViewFromPathname(location.pathname), [location.pathname]);
+
+  // IDs de lotes activos derivados directamente de los parámetros de la URL
+  const scanMatch = matchPath('/recepciones/escaneo/:batchId', location.pathname);
+  const consumablesScanMatch = matchPath('/consumibles/escaneo/:batchId', location.pathname);
+  const mlScanMatch = matchPath('/mercado-libre/escaneo/:batchId', location.pathname);
+
+  const activeBatchId = scanMatch?.params?.batchId || consumablesScanMatch?.params?.batchId || null;
+  const activeMlBatchId = mlScanMatch?.params?.batchId || null;
+
+  // Helper central de navegación por vista (actualiza URL real)
+  const setView = useCallback((nextView, options = {}) => {
+    const targetPath = VIEW_TO_PATH[nextView] || '/inventario';
+    navigate(targetPath, options);
+  }, [navigate]);
+
   const [batches, setBatches] = useState(() => ChecklistController.getCachedChecklistsSync());
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState(null);
 
   // Lotes y Sesiones de Mercado Libre
   const [mlBatches, setMlBatches] = useState([]);
-  const [activeMlBatchId, setActiveMlBatchId] = useState(null);
 
-  // Lote preseleccionado para Modo Bajas
+  // Lote preseleccionado para Modo Bajas (soporta ?lote=ID en URL)
   const [bajasPreselectedBatchId, setBajasPreselectedBatchId] = useState(null);
+  const effectiveBajasBatchId = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get('lote') || bajasPreselectedBatchId;
+  }, [location.search, bajasPreselectedBatchId]);
 
   // Notificación flotante de sincronización en tiempo real (ej. cuando se sube un nuevo archivo maestro)
   const [realtimeNotification, setRealtimeNotification] = useState(null);
@@ -135,14 +188,16 @@ function App() {
     return () => unsubscribe();
   }, [fetchBatches, fetchMlBatches, handleLayoutChange]);
 
-  // Lote activo en escaneo
+  // Lote activo en escaneo (comparación flexible String para soportar parámetros de URL)
   const activeBatch = useMemo(() => {
-    return batches.find(b => b.id === activeBatchId);
+    if (!activeBatchId) return null;
+    return batches.find(b => String(b.id) === String(activeBatchId)) || null;
   }, [batches, activeBatchId]);
 
   // Lote activo en escaneo de Mercado Libre
   const activeMlBatch = useMemo(() => {
-    return mlBatches.find(b => String(b.id) === String(activeMlBatchId));
+    if (!activeMlBatchId) return null;
+    return mlBatches.find(b => String(b.id) === String(activeMlBatchId)) || null;
   }, [mlBatches, activeMlBatchId]);
 
   // Todas las impresoras en inventario activo
@@ -190,8 +245,7 @@ function App() {
       setLoading(true);
       const batchData = await ChecklistController.createChecklist(fileName, series, consecutiveNumber);
       await fetchBatches();
-      setActiveBatchId(batchData.id);
-      setView('scan'); // Ir directamente a la sesión de escaneo
+      navigate(`/recepciones/escaneo/${encodeURIComponent(batchData.id)}`);
     } catch (err) {
       alert("Error al crear el lote: " + err.message);
       setLoading(false);
@@ -199,18 +253,17 @@ function App() {
   };
 
   const handleSelectBatch = (batchId, batchType = 'EQUIPMENT') => {
-    setActiveBatchId(batchId);
     if (batchType === 'CONSUMIBLES') {
-      setView('consumablesScan');
+      navigate(`/consumibles/escaneo/${encodeURIComponent(batchId)}`);
     } else {
-      setView('scan');
+      navigate(`/recepciones/escaneo/${encodeURIComponent(batchId)}`);
     }
   };
 
   // Registrar escaneo de impresora asignando su Almacén, Fila, Espacio y Número de inventario
   const handleCompleteTrailer = async (serie, assignmentData, specificBatchId = null) => {
-    const targetBatchId = specificBatchId || assignmentData?.batchId || activeBatchId;
-    const targetBatch = batches.find(b => b.id === targetBatchId) || activeBatch;
+    const targetBatchId = specificBatchId || assignmentData?.batchId || activeBatch?.id || activeBatchId;
+    const targetBatch = batches.find(b => String(b.id) === String(targetBatchId)) || activeBatch;
     if (!targetBatchId || !targetBatch) return;
 
     if (assignmentData?.warehouseRow) {
@@ -221,7 +274,7 @@ function App() {
     // Actualización optimista local en memoria
     setBatches(prevBatches => 
       prevBatches.map(batch => {
-        if (batch.id === targetBatchId) {
+        if (String(batch.id) === String(targetBatchId)) {
           const serial = serie.toUpperCase();
           const newCompleted = batch.completed.includes(serial)
             ? batch.completed
@@ -274,7 +327,7 @@ function App() {
 
   // Registrar serie fuera de lista
   const handleLogUnexpected = async (serie, specificBatchId = null) => {
-    const targetBatchId = specificBatchId || activeBatchId;
+    const targetBatchId = specificBatchId || activeBatch?.id || activeBatchId;
     if (!targetBatchId) return;
 
     const serial = serie.toUpperCase();
@@ -282,7 +335,7 @@ function App() {
     // Optimista local
     setBatches(prevBatches => 
       prevBatches.map(batch => {
-        if (batch.id === targetBatchId) {
+        if (String(batch.id) === String(targetBatchId)) {
           const logs = batch.unexpectedLogs || [];
           if (!logs.includes(serial)) {
             return {
@@ -300,8 +353,8 @@ function App() {
 
   // Reconciliar una serie faltante con una lectura que dio error por diferencia de OCR
   const handleReconcileSimilar = async (match, specificBatchId = null) => {
-    const targetBatchId = specificBatchId || activeBatchId;
-    const targetBatch = batches.find(b => b.id === targetBatchId) || activeBatch;
+    const targetBatchId = specificBatchId || activeBatch?.id || activeBatchId;
+    const targetBatch = batches.find(b => String(b.id) === String(targetBatchId)) || activeBatch;
     if (!targetBatchId || !targetBatch || !match) return;
 
     const oldSerial = String(match.expectedSerial || '').trim().toUpperCase();
@@ -311,7 +364,7 @@ function App() {
     // Actualización optimista inmediata en pantalla
     setBatches(prevBatches =>
       prevBatches.map(batch => {
-        if (batch.id !== targetBatchId) return batch;
+        if (String(batch.id) !== String(targetBatchId)) return batch;
 
         const updatedExpected = (batch.expectedSeries || []).map(item => {
           if (item.serial === oldSerial) {
@@ -380,13 +433,15 @@ function App() {
     const confirm = window.confirm("¿Seguro que deseas finalizar el lote? Faltan equipos por escanear.");
     if (!confirm) return;
 
-    setBatches(prev => prev.map(b => b.id === activeBatchId ? { ...b, status: 'closed' } : b));
-    await ChecklistController.forceFinishChecklist(activeBatchId);
+    const resolvedBatchId = activeBatch?.id || activeBatchId;
+    if (!resolvedBatchId) return;
+    setBatches(prev => prev.map(b => String(b.id) === String(resolvedBatchId) ? { ...b, status: 'closed' } : b));
+    await ChecklistController.forceFinishChecklist(resolvedBatchId);
   };
 
   // Marcar una serie del checklist como baja (salida de almacén)
   const handleMarkChecklistBaja = async (serial, bajaDate, reason, specificBatchId = null, requestedBy = null, dispatchedBy = null) => {
-    const targetBatchId = specificBatchId || activeBatchId;
+    const targetBatchId = specificBatchId || activeBatch?.id || activeBatchId;
     if (!targetBatchId || !serial) return;
 
     const sUpper = String(serial).trim().toUpperCase();
@@ -394,7 +449,7 @@ function App() {
 
     // Optimista local inmediato en pantalla
     setBatches(prev => prev.map(b => {
-      if (b.id !== targetBatchId) return b;
+      if (String(b.id) !== String(targetBatchId)) return b;
       const updatedExpected = (b.expectedSeries || []).map(p => {
         if (p.serial === sUpper) {
           return {
@@ -430,14 +485,14 @@ function App() {
 
   // Cancelar la baja de una serie de checklist (restaurar a disponible)
   const handleCancelChecklistBaja = async (serial, specificBatchId = null) => {
-    const targetBatchId = specificBatchId || activeBatchId;
+    const targetBatchId = specificBatchId || activeBatch?.id || activeBatchId;
     if (!targetBatchId || !serial) return;
 
     const sUpper = String(serial).trim().toUpperCase();
 
     // Optimista local inmediato en pantalla
     setBatches(prev => prev.map(b => {
-      if (b.id !== targetBatchId) return b;
+      if (String(b.id) !== String(targetBatchId)) return b;
       const updatedExpected = (b.expectedSeries || []).map(p => {
         if (p.serial === sUpper) {
           return {
@@ -463,8 +518,7 @@ function App() {
   };
 
   const handleFinishSession = () => {
-    setActiveBatchId(null);
-    setView('home');
+    navigate('/recepciones');
     fetchBatches();
   };
 
@@ -476,8 +530,7 @@ function App() {
   };
 
   const handleSelectMlBatch = (batchId) => {
-    setActiveMlBatchId(batchId);
-    setView('mercadoLibreScan');
+    navigate(`/mercado-libre/escaneo/${encodeURIComponent(batchId)}`);
   };
 
   const handleDeleteMlBatch = async (batchId) => {
@@ -527,8 +580,7 @@ function App() {
   };
 
   const handleFinishMlSession = () => {
-    setActiveMlBatchId(null);
-    setView('mercadoLibre');
+    navigate('/mercado-libre');
     fetchMlBatches();
   };
 
@@ -548,6 +600,11 @@ function App() {
       alert("Contraseña incorrecta. Acceso restringido al Modo Operador.");
     }
   };
+
+  // Redirección inmediata desde la raíz '/' según preferencia / móvil / modo operador
+  if (location.pathname === '/') {
+    return <Navigate to={getDefaultRoutePath()} replace />;
+  }
 
   // Si la vista es Modo Operador Móvil, renderizamos su pantalla táctil dedicada inmediatamente sin bloqueo
   if (view === 'operator') {
@@ -601,10 +658,8 @@ function App() {
       <Header 
         currentView={view} 
         setView={(v) => {
-          setView(v);
           localStorage.setItem('preferred_view', v);
-          if (v !== 'scan') setActiveBatchId(null);
-          if (v !== 'mercadoLibreScan') setActiveMlBatchId(null);
+          setView(v);
         }}
         activeBatchId={activeBatchId || activeMlBatchId}
         consultaCount={totalConsultas}
@@ -634,154 +689,220 @@ function App() {
             <p className="mt-4 text-gray-500 font-semibold">Cargando inventario y lotes de Supabase...</p>
           </div>
         ) : (
-          <>
+          <Routes>
+            {/* Raíz: redirige inteligentemente según preferencia / móvil / modo operador */}
+            <Route path="/" element={<Navigate to={getDefaultRoutePath()} replace />} />
+
             {/* Vista 1: Inventario Maestro de Almacén (7 Columnas) */}
-            {view === 'masterInventory' && (
-              <MasterInventoryView 
-                allPrinters={allPrinters}
-                onInventoryChange={() => {
-                  fetchBatches();
-                  handleLayoutChange();
-                }}
-                availableWarehouses={mapModel.warehouses.map(w => w.name)}
-                availableRows={availableRows}
-                onNavigateToChecklists={() => setView('home')}
-              />
-            )}
+            <Route
+              path="/inventario"
+              element={
+                <MasterInventoryView 
+                  allPrinters={allPrinters}
+                  onInventoryChange={() => {
+                    fetchBatches();
+                    handleLayoutChange();
+                  }}
+                  availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                  availableRows={availableRows}
+                  onNavigateToChecklists={() => setView('home')}
+                />
+              }
+            />
 
             {/* Vista 2: Pantalla de Recepciones / Checklists de Lotes */}
-            {view === 'home' && (
-              <HomeView 
-                batches={batches}
-                onCreateBatch={handleCreateBatch} 
-                onSelectBatch={handleSelectBatch}
-                onDeleteBatch={handleDeleteBatch}
-                onNavigateToModelSearch={() => setView('modelSearch')}
-                onNavigateToAssignment={() => setView('equipmentReading')}
-                onNavigateToReading={() => setView('equipmentReading')}
-                onNavigateToMasterInventory={() => setView('masterInventory')}
-                onNavigateToBajas={(batchId) => {
-                  setBajasPreselectedBatchId(batchId || null);
-                  setView('bajas');
-                }}
-                onStatusChange={fetchBatches}
-                onLayoutChange={handleLayoutChange}
-              />
-            )}
+            <Route
+              path="/recepciones"
+              element={
+                <HomeView 
+                  batches={batches}
+                  onCreateBatch={handleCreateBatch} 
+                  onSelectBatch={handleSelectBatch}
+                  onDeleteBatch={handleDeleteBatch}
+                  onNavigateToModelSearch={() => setView('modelSearch')}
+                  onNavigateToAssignment={() => setView('equipmentReading')}
+                  onNavigateToReading={() => setView('equipmentReading')}
+                  onNavigateToMasterInventory={() => setView('masterInventory')}
+                  onNavigateToBajas={(batchId) => {
+                    setBajasPreselectedBatchId(batchId || null);
+                    navigate(batchId ? `/bajas?lote=${encodeURIComponent(batchId)}` : '/bajas');
+                  }}
+                  onStatusChange={fetchBatches}
+                  onLayoutChange={handleLayoutChange}
+                />
+              }
+            />
 
-            {/* Vista 3: Sesión de Escaneo de Checklist */}
-            {view === 'scan' && activeBatch && (
-              <ScanSessionView 
-                batchDetails={activeBatch}
-                onCompleteTrailer={handleCompleteTrailer}
-                onLogUnexpected={handleLogUnexpected}
-                onReconcileSimilar={handleReconcileSimilar}
-                onFinishSession={handleFinishSession}
-                onForceFinish={handleForceFinishBatch}
-                onMarkBaja={handleMarkChecklistBaja}
-                onCancelBaja={handleCancelChecklistBaja}
-                onNavigateToBajas={() => {
-                  setBajasPreselectedBatchId(activeBatch.id);
-                  setView('bajas');
-                }}
-                availableRows={availableRows}
-                availableWarehouses={mapModel.warehouses.map(w => w.name)}
-                allPrinters={allPrinters}
-              />
-            )}
+            {/* Vista 3: Sesión de Escaneo de Checklist (soporta recarga directa por URL) */}
+            <Route
+              path="/recepciones/escaneo/:batchId"
+              element={
+                activeBatch ? (
+                  <ScanSessionView 
+                    batchDetails={activeBatch}
+                    onCompleteTrailer={handleCompleteTrailer}
+                    onLogUnexpected={handleLogUnexpected}
+                    onReconcileSimilar={handleReconcileSimilar}
+                    onFinishSession={handleFinishSession}
+                    onForceFinish={handleForceFinishBatch}
+                    onMarkBaja={handleMarkChecklistBaja}
+                    onCancelBaja={handleCancelChecklistBaja}
+                    onNavigateToBajas={() => {
+                      setBajasPreselectedBatchId(activeBatch.id);
+                      navigate(`/bajas?lote=${encodeURIComponent(activeBatch.id)}`);
+                    }}
+                    availableRows={availableRows}
+                    availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                    allPrinters={allPrinters}
+                  />
+                ) : loading ? (
+                  <div className="flex flex-col items-center justify-center h-64">
+                    <div className="w-12 h-12 border-4 border-gray-200 border-t-red-600 rounded-full animate-spin"></div>
+                    <p className="mt-3 text-gray-500 text-sm font-semibold">Cargando sesión de escaneo...</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
+                    <p className="text-slate-600 font-bold">No se encontró el lote solicitado.</p>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/recepciones')}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+                    >
+                      Volver a Recepciones
+                    </button>
+                  </div>
+                )
+              }
+            />
 
-            {/* Vista 4: Lectura y Acomodo de Equipos (Asignar ubicación a equipos sin ubicación) */}
-            {(view === 'equipmentReading' || view === 'assignment') && (
-              <EquipmentReadingView 
-                checklists={batches}
-                onAssignmentSaved={() => {
-                  fetchBatches();
-                  handleLayoutChange();
-                }}
-                availableWarehouses={mapModel.warehouses.map(w => w.name)}
-                availableRows={availableRows}
-                onBackToHome={() => setView('home')}
-              />
-            )}
+            {/* Vista 4: Lectura y Acomodo de Equipos */}
+            <Route
+              path="/acomodo"
+              element={
+                <EquipmentReadingView 
+                  checklists={batches}
+                  onAssignmentSaved={() => {
+                    fetchBatches();
+                    handleLayoutChange();
+                  }}
+                  availableWarehouses={mapModel.warehouses.map(w => w.name)}
+                  availableRows={availableRows}
+                  onBackToHome={() => setView('home')}
+                />
+              }
+            />
 
             {/* Vista 5: Buscador por Modelo (CONSULTA y BAJA) */}
-            {view === 'modelSearch' && (
-              <ModelSearchView 
-                checklists={batches}
-                onStatusChange={fetchBatches}
-                onRowChange={fetchBatches}
-                availableRows={availableRows}
-              />
-            )}
+            <Route
+              path="/modelos"
+              element={
+                <ModelSearchView 
+                  checklists={batches}
+                  onStatusChange={fetchBatches}
+                  onRowChange={fetchBatches}
+                  availableRows={availableRows}
+                />
+              }
+            />
 
             {/* Vista 6: Mapa de Almacén con Rectángulos y Rangos de Serie */}
-            {view === 'warehouseMap' && (
-              <WarehouseMapView 
-                checklists={batches}
-                onLayoutChange={handleLayoutChange}
-                onPrinterChange={fetchBatches}
-                highlightTarget={highlightTarget}
-                onClearHighlight={() => setHighlightTarget(null)}
-                onLocateEquipment={handleLocateEquipment}
-                onUnlocatedSelected={handleUnlocatedSelected}
-                onNavigateToReading={() => setView('equipmentReading')}
-              />
-            )}
+            <Route
+              path="/mapa"
+              element={
+                <WarehouseMapView 
+                  checklists={batches}
+                  onLayoutChange={handleLayoutChange}
+                  onPrinterChange={fetchBatches}
+                  highlightTarget={highlightTarget}
+                  onClearHighlight={() => setHighlightTarget(null)}
+                  onLocateEquipment={handleLocateEquipment}
+                  onUnlocatedSelected={handleUnlocatedSelected}
+                  onNavigateToReading={() => setView('equipmentReading')}
+                />
+              }
+            />
 
             {/* Vista 7: Mercado Libre - Lista de Lotes */}
-            {view === 'mercadoLibre' && (
-              <MercadoLibreView 
-                batches={mlBatches}
-                onCreateBatch={handleCreateMlBatch}
-                onSelectBatch={handleSelectMlBatch}
-                onDeleteBatch={handleDeleteMlBatch}
-                onRefresh={fetchMlBatches}
-              />
-            )}
+            <Route
+              path="/mercado-libre"
+              element={
+                <MercadoLibreView 
+                  batches={mlBatches}
+                  onCreateBatch={handleCreateMlBatch}
+                  onSelectBatch={handleSelectMlBatch}
+                  onDeleteBatch={handleDeleteMlBatch}
+                  onRefresh={fetchMlBatches}
+                />
+              }
+            />
 
             {/* Vista 8: Mercado Libre - Sesión de Escaneo */}
-            {view === 'mercadoLibreScan' && activeMlBatch && (
-              <MercadoLibreScanView 
-                batchDetails={activeMlBatch}
-                onRecordScan={handleRecordMlScan}
-                onRecordUnexpected={handleRecordMlUnexpected}
-                onFinishSession={handleFinishMlSession}
-                onForceFinish={handleForceFinishMlBatch}
-              />
-            )}
+            <Route
+              path="/mercado-libre/escaneo/:batchId"
+              element={
+                activeMlBatch ? (
+                  <MercadoLibreScanView 
+                    batchDetails={activeMlBatch}
+                    onRecordScan={handleRecordMlScan}
+                    onRecordUnexpected={handleRecordMlUnexpected}
+                    onFinishSession={handleFinishMlSession}
+                    onForceFinish={handleForceFinishMlBatch}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-64 gap-3 text-center">
+                    <div className="w-10 h-10 border-4 border-amber-200 border-t-amber-500 rounded-full animate-spin"></div>
+                    <p className="text-slate-500 text-xs font-semibold">Cargando lote de Mercado Libre...</p>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/mercado-libre')}
+                      className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold cursor-pointer"
+                    >
+                      Volver a Mercado Libre
+                    </button>
+                  </div>
+                )
+              }
+            />
 
             {/* Vista 9: Modo Bajas y Salidas de Inventario */}
-            {view === 'bajas' && (
-              <BajasSessionView 
-                batches={batches}
-                allPrinters={allPrinters}
-                allSystemPrinters={allSystemPrinters}
-                preselectedBatchId={bajasPreselectedBatchId}
-                onBajasCommitted={async () => {
-                  await fetchBatches(true);
-                  handleLayoutChange();
-                }}
-                onBack={() => setView('masterInventory')}
-              />
-            )}
+            <Route
+              path="/bajas"
+              element={
+                <BajasSessionView 
+                  batches={batches}
+                  allPrinters={allPrinters}
+                  allSystemPrinters={allSystemPrinters}
+                  preselectedBatchId={effectiveBajasBatchId}
+                  onBajasCommitted={async () => {
+                    await fetchBatches(true);
+                    handleLayoutChange();
+                  }}
+                  onBack={() => setView('masterInventory')}
+                />
+              }
+            />
 
             {/* Vista 10: Módulo de Consumibles y Refacciones */}
-            {view === 'consumibles' && (
-              <ConsumiblesView />
-            )}
+            <Route path="/consumibles" element={<ConsumiblesView />} />
 
             {/* Vista 11: Sesión de Escaneo de Checklist de Consumibles */}
-            {view === 'consumablesScan' && (
-              <ConsumiblesChecklistScanView 
-                batchId={activeBatchId}
-                onBack={() => {
-                  setView('home');
-                  fetchBatches();
-                }}
-                onBatchUpdated={fetchBatches}
-              />
-            )}
-          </>
+            <Route
+              path="/consumibles/escaneo/:batchId"
+              element={
+                <ConsumiblesChecklistScanView 
+                  batchId={activeBatchId}
+                  onBack={() => {
+                    navigate('/recepciones');
+                    fetchBatches();
+                  }}
+                  onBatchUpdated={fetchBatches}
+                />
+              }
+            />
+
+            {/* Cualquier ruta desconocida redirige al inicio */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         )}
       </main>
 
