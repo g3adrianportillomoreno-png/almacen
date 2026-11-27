@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate, matchPath } from 'react-router-dom';
 import './App.css';
 
@@ -122,8 +122,13 @@ function App() {
     return mapModel.getAllRowNames ? mapModel.getAllRowNames() : mapModel.getRowNames();
   }, [mapModel]);
 
+  // Candado anti-solapamiento para evitar que múltiples recargas simultáneas traben la pantalla
+  const isFetchingBatchesRef = useRef(false);
+
   // Carga centralizada de checklists usando el controlador
   const fetchBatches = useCallback(async (isSilent = false) => {
+    if (isFetchingBatchesRef.current) return;
+    isFetchingBatchesRef.current = true;
     try {
       if (!isSilent) setLoading(true);
       setErrorMessage(null);
@@ -131,8 +136,11 @@ function App() {
       setBatches(loadedBatches);
     } catch (error) {
       console.error("Error al cargar lotes:", error);
-      setErrorMessage("No se pudieron cargar los datos de Supabase. Revisa tu conexión.");
+      if (!isSilent) {
+        setErrorMessage("No se pudieron cargar los datos de Supabase. Revisa tu conexión.");
+      }
     } finally {
+      isFetchingBatchesRef.current = false;
       if (!isSilent) setLoading(false);
     }
   }, []);

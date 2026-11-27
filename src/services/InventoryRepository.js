@@ -266,7 +266,49 @@ export class InventoryRepository {
       // Guardar snapshot de respaldo offline para el celular de forma diferida para no bloquear el hilo principal
       setTimeout(() => {
         OfflineSyncService.saveChecklistsSnapshot(fullBatchesRaw);
-      }, 50);
+
+        // Rescate automático NO destructivo: si este celular tiene posiciones guardadas localmente
+        // que todavía aparecen vacías en Supabase, las encola para subirlas sin sobrescribir nada existente
+        try {
+          if (OfflineSyncService.isOnline() && metadataCache?.serials) {
+            const supaBySerial = new Map();
+            for (const row of allExpectedSeries) {
+              const s = String(row.serial_number || '').trim().toUpperCase();
+              if (s) supaBySerial.set(s, row);
+            }
+            let queuedRescue = 0;
+            for (const [serialKey, localMeta] of Object.entries(metadataCache.serials)) {
+              const localRow = String(localMeta?.warehouseRow || '').trim();
+              const localSpace = String(localMeta?.warehouseSpace || '').trim();
+              if (!localRow || localRow === 'Sin Asignar' || !localSpace) continue;
+
+              const supaRow = supaBySerial.get(serialKey);
+              if (!supaRow) continue;
+
+              const supaHasRow = Boolean(supaRow.warehouse_row && supaRow.warehouse_row !== 'Sin Asignar');
+              const supaHasSpace = Boolean(supaRow.warehouse_space && String(supaRow.warehouse_space).trim() !== '');
+
+              if (!supaHasRow || !supaHasSpace) {
+                OfflineSyncService.addToQueue('ASSIGN_LOCATION', {
+                  serialNumber: serialKey,
+                  warehouseName: localMeta.warehouseName || 'Almacén 1',
+                  warehouseRow: localRow,
+                  warehouseSpace: localSpace,
+                  internalNumber: localMeta.internalNumber ?? null,
+                  systemStatus: localMeta.systemStatus || 'Principal',
+                  scannedAt: localMeta.assignedAt || new Date().toISOString()
+                });
+                queuedRescue++;
+              }
+            }
+            if (queuedRescue > 0) {
+              console.log(`🔄 [Rescate Automático] Encoladas ${queuedRescue} posiciones locales pendientes de subir a Supabase.`);
+            }
+          }
+        } catch (rescueErr) {
+          console.warn('Nota rescate local:', rescueErr);
+        }
+      }, 150);
 
       return fullBatchesRaw.map((fullBatch, index) => {
         return ChecklistModel.fromDb(fullBatch, index, metadataCache);
@@ -1124,9 +1166,9 @@ export class InventoryRepository {
       return cache.serials[serial];
     }
 
-    // Intentar actualizar en Supabase
+    // Intentar actualizar en Supabase usando directamente las columnas reales de expected_series
     try {
-      const numVal = !isNaN(Number(finalInternal)) ? Number(finalInternal) : null;
+      const numVal = !isNaN(Number(finalInternal)) && finalInternal !== null && finalInternal !== '' ? Number(finalInternal) : null;
       const encodedStatus = `${existing.status || 'DISPONIBLE'}|${finalSystemStatus}`;
       const { error } = await supabase
         .from('expected_series')
@@ -1136,9 +1178,9 @@ export class InventoryRepository {
           warehouse_space: finalSpace,
           internal_number: numVal,
           printer_status: encodedStatus,
-          system_status: finalSystemStatus,
           is_scanned: true,
-          scanned_at: nowIso
+          scanned_at: nowIso,
+          assigned_at: nowIso
         })
         .eq('serial_number', serial);
 

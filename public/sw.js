@@ -1,8 +1,6 @@
-// Service Worker para PWA Almacén CDM
-const CACHE_NAME = 'cdm-almacen-v1';
+// Service Worker para PWA Almacén CDM (v2 - Sin interceptar Supabase ni causar errores al recargar)
+const CACHE_NAME = 'cdm-almacen-v2';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.webmanifest',
   '/icon.svg',
   '/icon-192.png',
@@ -10,7 +8,7 @@ const STATIC_ASSETS = [
   '/favicon.svg'
 ];
 
-// Instalación: Pre-cachear el shell básico
+// Instalación: Pre-cachear solo recursos estáticos ligeros y activar inmediatamente
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
@@ -22,7 +20,7 @@ self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-// Activación: Tomar control inmediato y limpiar cachés obsoletas
+// Activación: Limpiar cachés viejas (v1) y tomar control inmediato
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
@@ -37,39 +35,48 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// Fetch: Network First con fallback a caché para navegación estática
+// Fetch: NUNCA interceptar peticiones externas (Supabase, APIs, WebSockets)
 self.addEventListener('fetch', (event) => {
-  // Ignorar peticiones no HTTP/HTTPS o peticiones de Supabase/API externas para mantenerlas en vivo
-  if (!event.request.url.startsWith('http')) return;
-  
-  if (event.request.method !== 'GET') {
+  if (event.request.method !== 'GET') return;
+
+  let reqUrl;
+  try {
+    reqUrl = new URL(event.request.url);
+  } catch {
     return;
   }
 
-  // Para peticiones de navegación o recursos estáticos, intentar red primero
-  event.respondWith(
-    fetch(event.request)
-      .then((networkResponse) => {
-        // Si la respuesta es válida, clonar y actualizar en caché si es del mismo origen
-        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-          const responseToCache = networkResponse.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseToCache);
-          });
-        }
-        return networkResponse;
-      })
-      .catch(() => {
-        // Si no hay red, servir desde caché
-        return caches.match(event.request).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          // Si es una navegación HTML y falló la red, servir index.html
-          if (event.request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
+  // Ignorar cualquier dominio externo (ej. supabase.co) para evitar bloqueos y errores
+  if (reqUrl.origin !== self.location.origin) {
+    return;
+  }
+
+  // Para navegaciones HTML: siempre red primero, fallback a /index.html solo si está offline
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request).catch(async () => {
+        const cached = await caches.match('/index.html');
+        return cached || new Response('Sin conexión a internet. Recarga cuando vuelva la señal.', {
+          status: 503,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
         });
       })
-  );
+    );
+    return;
+  }
+
+  // Para iconos/manifest locales: red primero con respaldo en caché
+  if (STATIC_ASSETS.includes(reqUrl.pathname)) {
+    event.respondWith(
+      fetch(event.request)
+        .then((res) => {
+          if (res && res.status === 200) {
+            const clone = res.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return res;
+        })
+        .catch(() => caches.match(event.request).then((c) => c || Response.error()))
+    );
+  }
 });

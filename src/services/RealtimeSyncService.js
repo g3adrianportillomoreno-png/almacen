@@ -135,7 +135,9 @@ class RealtimeSyncServiceImpl {
   }
 
   /**
-   * Sondeo periódico inteligente de fondo (cada 3.5 segundos mientras la pantalla esté activa)
+   * Sondeo periódico inteligente de fondo (cada 30 segundos mientras la pantalla esté activa).
+   * Los cambios instantáneos ya viajan por WebSocket (Broadcast + postgres_changes),
+   * evitando saturar el celular o congelar la pantalla con descargas repetidas.
    */
   setupHeartbeatPolling() {
     if (this.pollingTimer) clearInterval(this.pollingTimer);
@@ -144,12 +146,11 @@ class RealtimeSyncServiceImpl {
       const isVisible = typeof document !== 'undefined' ? document.visibilityState === 'visible' : true;
       if (isVisible && typeof navigator !== 'undefined' && navigator.onLine) {
         const now = Date.now();
-        // Sondeo rápido si no se ha refrescado en los últimos 3 segundos
-        if (now - this.lastRefreshTimestamp > 3000) {
+        if (now - this.lastRefreshTimestamp > 28000) {
           this.triggerDebouncedSync({ type: 'HEARTBEAT_POLL' });
         }
       }
-    }, 3500);
+    }, 30000);
   }
 
   /**
@@ -180,7 +181,7 @@ class RealtimeSyncServiceImpl {
   }
 
   /**
-   * Ejecuta la actualización agrupando eventos rápidos (debounce de 250ms)
+   * Ejecuta la actualización agrupando eventos rápidos (debounce de 800ms)
    */
   triggerDebouncedSync(eventInfo = {}) {
     if (this.debounceTimer) clearTimeout(this.debounceTimer);
@@ -194,7 +195,7 @@ class RealtimeSyncServiceImpl {
           console.error('Error en listener de sincronización en tiempo real:', e);
         }
       });
-    }, 250);
+    }, 800);
   }
 
   /**

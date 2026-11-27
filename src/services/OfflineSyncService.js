@@ -337,7 +337,7 @@ class OfflineSyncServiceImpl {
           scannedAt
         } = payload;
 
-        const numVal = internalNumber !== null && internalNumber !== undefined && !isNaN(Number(internalNumber))
+        const numVal = internalNumber !== null && internalNumber !== undefined && internalNumber !== '' && !isNaN(Number(internalNumber))
           ? Number(internalNumber)
           : null;
 
@@ -351,9 +351,9 @@ class OfflineSyncServiceImpl {
             warehouse_space: warehouseSpace,
             internal_number: numVal,
             printer_status: encodedStatus,
-            system_status: systemStatus || 'Principal',
             is_scanned: true,
-            scanned_at: scannedAt || new Date().toISOString()
+            scanned_at: scannedAt || new Date().toISOString(),
+            assigned_at: scannedAt || new Date().toISOString()
           })
           .eq('serial_number', serialNumber);
 
